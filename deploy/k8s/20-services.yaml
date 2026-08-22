@@ -1,0 +1,258 @@
+# ============================================================
+# Les 7 services métier.
+# Images construites sur le VPS puis importées dans containerd
+# (imagePullPolicy: Never — pas de registry nécessaire).
+# Pour scaler : kubectl -n miad scale deploy/catalog-svc --replicas=3
+# (les services sont stateless ; HPA possible en ajoutant des probes CPU)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: catalog-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: catalog-svc } }
+  template:
+    metadata: { labels: { app: catalog-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/catalog-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8081 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: catalog-svc, namespace: miad }
+spec:
+  selector: { app: catalog-svc }
+  ports: [{ port: 80, targetPort: 8081 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vendor-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: vendor-svc } }
+  template:
+    metadata: { labels: { app: vendor-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/vendor-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8082 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8082 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8082 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vendor-svc, namespace: miad }
+spec:
+  selector: { app: vendor-svc }
+  ports: [{ port: 80, targetPort: 8082 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: order-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: order-svc } }
+  template:
+    metadata: { labels: { app: order-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/order-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8083 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8083 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8083 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: order-svc, namespace: miad }
+spec:
+  selector: { app: order-svc }
+  ports: [{ port: 80, targetPort: 8083 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: payment-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: payment-svc } }
+  template:
+    metadata: { labels: { app: payment-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/payment-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8084 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8084 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8084 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: payment-svc, namespace: miad }
+spec:
+  selector: { app: payment-svc }
+  ports: [{ port: 80, targetPort: 8084 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: shipping-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: shipping-svc } }
+  template:
+    metadata: { labels: { app: shipping-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/shipping-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8085 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8085 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8085 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: shipping-svc, namespace: miad }
+spec:
+  selector: { app: shipping-svc }
+  ports: [{ port: 80, targetPort: 8085 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: auth-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: auth-svc } }
+  template:
+    metadata: { labels: { app: auth-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/auth-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8086 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8086 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8086 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: auth-svc, namespace: miad }
+spec:
+  selector: { app: auth-svc }
+  ports: [{ port: 80, targetPort: 8086 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: notification-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: notification-svc } }
+  template:
+    metadata: { labels: { app: notification-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/notification-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8087 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8087 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8087 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: notification-svc, namespace: miad }
+spec:
+  selector: { app: notification-svc }
+  ports: [{ port: 80, targetPort: 8087 }]

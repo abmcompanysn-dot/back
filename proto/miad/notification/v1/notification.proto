@@ -1,0 +1,38 @@
+// ============================================================
+// notification-svc — push web + email transactionnel
+// CONSOMMATEUR PUR : écoute order.* et payment.* sur Kafka.
+// N'expose pas de RPC métier — uniquement santé/admin.
+// Si notification-svc tombe, les commandes continuent : il
+// rattrape son retard au redémarrage (offsets Kafka).
+// ============================================================
+syntax = "proto3";
+
+package miad.notification.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/notification/v1;notificationv1";
+
+import "google/api/annotations.proto";
+
+message NotificationLog {
+  int64 id = 1;
+  string channel = 2;   // "webpush" | "email"
+  string event = 3;     // "order.created", "payment.confirmed"…
+  string recipient = 4;
+  string status = 5;    // queued | sent | failed
+  string created_at = 6;
+}
+
+message DeliveryStatsResponse {
+  int64 queued = 1;
+  int64 sent = 2;
+  int64 failed = 3;
+  int64 kafka_lag = 4;
+}
+
+service NotificationService {
+  rpc DeliveryStats(google.protobuf.Empty) returns (DeliveryStatsResponse) {
+    option (google.api.http) = { get: "/notifications/stats" };
+  }
+}
+
+import "google/protobuf/empty.proto";

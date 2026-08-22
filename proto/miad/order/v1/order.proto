@@ -1,0 +1,98 @@
+// ============================================================
+// order-svc — cycle de vie des commandes multi-vendeurs
+// Publie : order.created, order.status_changed
+// Une commande acheteur est éclatée en sous-commandes par boutique.
+// ============================================================
+syntax = "proto3";
+
+package miad.order.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/order/v1;orderv1";
+
+import "google/api/annotations.proto";
+
+message OrderLine {
+  int64 product_id = 1;
+  int64 variation_id = 2; // 0 si produit simple
+  int64 vendor_id = 3;
+  string name = 4;
+  int32 quantity = 5;
+  int64 unit_price_xof = 6;
+}
+
+message Address {
+  string full_name = 1;
+  string phone = 2;
+  string line1 = 3;
+  string line2 = 4;
+  string city = 5;
+  string country = 6;
+}
+
+message Order {
+  int64 id = 1;
+  string reference = 2;      // ex: MIAD-2026-000123
+  int64 customer_id = 3;
+  int64 vendor_id = 4;       // sous-commande = 1 boutique
+  int64 parent_order_id = 5; // regroupement côté acheteur
+  string status = 6;         // pending_payment | paid | preparing | shipped | delivered | cancelled | payment_expired
+  repeated OrderLine lines = 7;
+  int64 subtotal_xof = 8;
+  int64 shipping_xof = 9;
+  int64 total_xof = 10;
+  string coupon_code = 11;
+  Address shipping_address = 12;
+  Address billing_address = 13;
+  string created_at = 14;
+  string updated_at = 15;
+}
+
+message CreateOrderRequest {
+  int64 customer_id = 1;
+  repeated OrderLine lines = 2; // peut couvrir plusieurs boutiques
+  Address shipping_address = 3;
+  Address billing_address = 4;
+  string coupon_code = 5;
+  string payment_method = 6; // "stripe" | "paydunya"
+  string shipping_country = 7;
+}
+
+message CreateOrderResponse {
+  int64 parent_order_id = 1;
+  repeated Order vendor_orders = 2; // une entrée par boutique
+  string payment_initiated_by = 3;  // "payment-svc" (via order.created)
+}
+
+message GetOrderRequest { int64 id = 1; }
+message ConfirmPaymentRequest {
+  int64 order_id = 1;
+  string provider = 2;   // "stripe" | "paydunya"
+  string provider_ref = 3;
+}
+
+message Coupon {
+  string code = 1;
+  string type = 2;        // "percent" | "fixed"
+  int64 amount = 3;
+  string expires_at = 4;
+  int32 max_uses = 5;
+  int32 used_count = 6;
+}
+
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse) {
+    option (google.api.http) = {
+      post: "/orders"
+      body: "*"
+    };
+  }
+  rpc GetOrder(GetOrderRequest) returns (Order) {
+    option (google.api.http) = { get: "/orders/{id}" };
+  }
+  rpc ConfirmPayment(ConfirmPaymentRequest) returns (Order) {
+    option (google.api.http) = {
+      post: "/orders/{id}/confirm"
+      body: "*"
+    };
+  }
+}

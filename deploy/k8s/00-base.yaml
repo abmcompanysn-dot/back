@@ -1,0 +1,61 @@
+# ============================================================
+# MIAD Market — base Kubernetes (k3s sur VPS)
+# Namespace + ConfigMap (valeurs non sensibles) + gabarit Secret.
+# Le VRAI Secret est créé par scripts/vps-bootstrap.sh depuis le
+# .env du VPS — jamais de valeurs réelles committées ici.
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: miad
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: miad-config
+  namespace: miad
+data:
+  # Adresses internes au cluster — mêmes noms que docker-compose,
+  # donc le même .env.example fonctionne dans les deux modes.
+  PGHOST: postgres
+  PGPORT: "5432"
+  PGUSER: miad
+  REDIS_ADDR: redis:6379
+  KAFKA_BROKERS: kafka:9092
+  PORT_CATALOG: "8081"
+  PORT_VENDOR: "8082"
+  PORT_ORDER: "8083"
+  PORT_PAYMENT: "8084"
+  PORT_SHIPPING: "8085"
+  PORT_AUTH: "8086"
+  PORT_NOTIFICATION: "8087"
+  CATALOG_SVC_URL: http://catalog-svc
+  ORDER_SVC_URL: http://order-svc
+  PAYMENT_TIMEOUT_MINUTES: "30"
+  OTP_TTL_MINUTES: "5"
+  JWT_TTL_HOURS: "72"
+---
+# GABARIT DOCUMENTÉ — écrasé par le bootstrap :
+#   kubectl -n miad create secret generic miad-secrets \
+#     --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: miad-secrets
+  namespace: miad
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: CHANGE-MOI-SUR-LE-VPS
+  DATABASE_URL_CATALOG: postgres://miad:CHANGE-MOI@postgres:5432/miad_catalog?sslmode=disable
+  DATABASE_URL_VENDOR: postgres://miad:CHANGE-MOI@postgres:5432/miad_vendor?sslmode=disable
+  DATABASE_URL_ORDER: postgres://miad:CHANGE-MOI@postgres:5432/miad_order?sslmode=disable
+  DATABASE_URL_PAYMENT: postgres://miad:CHANGE-MOI@postgres:5432/miad_payment?sslmode=disable
+  DATABASE_URL_SHIPPING: postgres://miad:CHANGE-MOI@postgres:5432/miad_shipping?sslmode=disable
+  DATABASE_URL_AUTH: postgres://miad:CHANGE-MOI@postgres:5432/miad_auth?sslmode=disable
+  DATABASE_URL_NOTIFICATION: postgres://miad:CHANGE-MOI@postgres:5432/miad_notification?sslmode=disable
+  JWT_SECRET: CHANGE-MOI-SUR-LE-VPS
+  REDIS_PASSWORD: ""
+  STRIPE_SECRET_KEY: ""
+  STRIPE_WEBHOOK_SECRET: ""
+  PAYDUNYA_API_KEY_PRIVATE: ""
+  SMS_PROVIDER_URL: ""

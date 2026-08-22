@@ -1,0 +1,51 @@
+// ============================================================
+// shipping-svc — zones & tarifs de livraison
+// Consommé en SYNCHRONE par order-svc via gRPC (pas de Kafka).
+// Les tarifs reprennent COUNTRY_TO_ZONE / ZONE_SHIPPING_RATES
+// de lib/shipping-utils.ts — stockés en base, plus codés en dur.
+// ============================================================
+syntax = "proto3";
+
+package miad.shipping.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/shipping/v1;shippingv1";
+
+import "google/api/annotations.proto";
+
+message ShippingZone {
+  int64 id = 1;
+  string zone = 2;        // "local" | "continent" | "international"
+  repeated string countries = 3; // codes ISO rattachés
+  int64 base_rate_xof = 4;
+  int64 per_item_xof = 5;
+  int32 min_days = 6;
+  int32 max_days = 7;
+}
+
+message QuoteRequest {
+  string country = 1;       // pays de livraison
+  int32 item_count = 2;
+  int64 subtotal_xof = 3;
+}
+
+message QuoteResponse {
+  string zone = 1;
+  int64 total_xof = 2;
+  int32 min_days = 3;
+  int32 max_days = 4;
+  string breakdown = 5; // explicite — jamais de coût silencieux
+}
+
+message ListZonesResponse { repeated ShippingZone zones = 1; }
+
+service ShippingService {
+  rpc ListZones(google.protobuf.Empty) returns (ListZonesResponse) {
+    option (google.api.http) = { get: "/shipping-rates" };
+  }
+  rpc Quote(QuoteRequest) returns (QuoteResponse) {
+    option (google.api.http) = { get: "/shipping-rates/quote" };
+  }
+}
+
+// import implicite pour google.protobuf.Empty
+import "google/protobuf/empty.proto";

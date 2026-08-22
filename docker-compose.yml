@@ -1,0 +1,151 @@
+# ============================================================
+# MIAD Market — backend sans WordPress
+# Stack complète pour VPS (2 vCPU / 4 Go minimum).
+#
+#   docker compose up -d --build
+#   bash scripts/system-check.sh
+#
+# Allègement possible : Kafka + Redis managés (Upstash) →
+# supprimer ces deux blocs et exporter KAFKA_BROKERS / REDIS_ADDR.
+# ============================================================
+
+x-service: &service-defaults
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file: .env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    kafka:
+      condition: service_started
+
+services:
+  # ---------- Infra ----------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: miad
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miad"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  kafka:
+    image: bitnami/kafka:3.7
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafkadata:/bitnami/kafka
+    ports:
+      - "127.0.0.1:9092:9092"
+
+  # ---------- Services métier (un binaire, une base chacun) ----------
+  catalog-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: catalog-svc } }
+    environment:
+      DATABASE_URL_CATALOG: ${DATABASE_URL_CATALOG}
+      PORT_CATALOG: "8081"
+    ports: ["127.0.0.1:8081:8081"]
+
+  vendor-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: vendor-svc } }
+    environment:
+      DATABASE_URL_VENDOR: ${DATABASE_URL_VENDOR}
+      PORT_VENDOR: "8082"
+    ports: ["127.0.0.1:8082:8082"]
+
+  order-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: order-svc } }
+    environment:
+      DATABASE_URL_ORDER: ${DATABASE_URL_ORDER}
+      PORT_ORDER: "8083"
+    ports: ["127.0.0.1:8083:8083"]
+
+  payment-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: payment-svc } }
+    environment:
+      DATABASE_URL_PAYMENT: ${DATABASE_URL_PAYMENT}
+      PORT_PAYMENT: "8084"
+    ports: ["127.0.0.1:8084:8084"]
+
+  shipping-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: shipping-svc } }
+    environment:
+      DATABASE_URL_SHIPPING: ${DATABASE_URL_SHIPPING}
+      PORT_SHIPPING: "8085"
+    ports: ["127.0.0.1:8085:8085"]
+
+  auth-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: auth-svc } }
+    environment:
+      DATABASE_URL_AUTH: ${DATABASE_URL_AUTH}
+      PORT_AUTH: "8086"
+    ports: ["127.0.0.1:8086:8086"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_started }
+
+  notification-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: notification-svc } }
+    environment:
+      DATABASE_URL_NOTIFICATION: ${DATABASE_URL_NOTIFICATION}
+      PORT_NOTIFICATION: "8087"
+    ports: ["127.0.0.1:8087:8087"]
+
+  # ---------- Passerelle externe ----------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - catalog-svc
+      - vendor-svc
+      - order-svc
+      - payment-svc
+      - shipping-svc
+      - auth-svc
+
+volumes:
+  pgdata:
+  kafkadata:
+  caddydata:
