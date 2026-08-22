@@ -36,6 +36,9 @@
 	handle /auth/*         { reverse_proxy auth-svc:8086 }
 	handle /customer*      { reverse_proxy auth-svc:8086 }
 
+	# Console d'administration (interface + API) — admin-svc
+	handle /admin*         { reverse_proxy admin-svc:8088 }
+
 	# Admin transverse : voir scripts/system-check.sh (agrège les 7)
 	# En prod, placer ici un petit agrégateur dédié si besoin.
 

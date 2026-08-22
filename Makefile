@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-SERVICES := catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc
+SERVICES := catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc admin-svc
 
 .PHONY: tidy proto build up down ps logs health import clean
 

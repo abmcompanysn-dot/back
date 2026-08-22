@@ -15,6 +15,7 @@ declare -A SVC=(
   [shipping-svc]=8085
   [auth-svc]=8086
   [notification-svc]=8087
+  [admin-svc]=8088
 )
 
 overall=0

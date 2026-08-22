@@ -14,7 +14,7 @@ set -euo pipefail
 
 REPO=https://github.com/abmcompanysn-dot/backend-miad.git
 APP=/opt/miad-backend
-SERVICES=(catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc)
+SERVICES=(catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc admin-svc)
 
 say() { printf "\n\033[0;32m==> %s\033[0m\n" "$*"; }
 
@@ -62,6 +62,7 @@ kubectl -n miad create secret generic miad-secrets \
 say "Application des manifests Kubernetes…"
 kubectl apply -f deploy/k8s/10-infra.yaml
 kubectl apply -f deploy/k8s/20-services.yaml
+kubectl apply -f deploy/k8s/25-admin.yaml
 # Le Caddyfile vient du dépôt : source unique avec docker-compose.
 kubectl -n miad create configmap caddyfile \
   --from-file=Caddyfile=deploy/Caddyfile --dry-run=client -o yaml | kubectl apply -f -

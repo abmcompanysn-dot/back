@@ -1,0 +1,39 @@
+// ============================================================
+// admin-svc — agrégation transverse + console embarquée.
+// Toutes les RPC exigent un JWT role=admin (vérifié avant tout).
+// ============================================================
+syntax = "proto3";
+
+package miad.admin.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/admin/v1;adminv1";
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+
+message AdminStats {
+  map<string, int64> counts = 1;  // products, vendors, orders, customers, payments
+  int64 revenue_xof = 2;
+  repeated string partial_errors = 3; // jamais de zéro silencieux
+}
+
+message SystemCheckRow {
+  string service = 1;
+  string status = 2;            // ok | degraded | unreachable
+  map<string, string> checks = 3;
+}
+
+message SystemCheckResponse {
+  string overall = 1;
+  repeated SystemCheckRow services = 2;
+  string time = 3;
+}
+
+service AdminService {
+  rpc Stats(google.protobuf.Empty) returns (AdminStats) {
+    option (google.api.http) = { get: "/admin/api/stats" };
+  }
+  rpc SystemCheck(google.protobuf.Empty) returns (SystemCheckResponse) {
+    option (google.api.http) = { get: "/admin/api/system-check" };
+  }
+}

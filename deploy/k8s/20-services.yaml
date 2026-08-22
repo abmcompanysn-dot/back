@@ -2,8 +2,7 @@
 # Les 7 services métier.
 # Images construites sur le VPS puis importées dans containerd
 # (imagePullPolicy: Never — pas de registry nécessaire).
-# Pour scaler : kubectl -n miad scale deploy/catalog-svc --replicas=3
-# (les services sont stateless ; HPA possible en ajoutant des probes CPU)
+# Scaler : kubectl -n miad scale deploy/catalog-svc --replicas=3
 # ============================================================
 apiVersion: apps/v1
 kind: Deployment

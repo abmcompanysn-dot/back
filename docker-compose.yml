@@ -127,6 +127,21 @@ services:
       PORT_NOTIFICATION: "8087"
     ports: ["127.0.0.1:8087:8087"]
 
+  # Console d'administration (interface embarquée + API agrégée)
+  admin-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: admin-svc } }
+    environment:
+      PORT_ADMIN: "8088"
+      CATALOG_SVC_URL: http://catalog-svc:8081
+      VENDOR_SVC_URL: http://vendor-svc:8082
+      ORDER_SVC_URL: http://order-svc:8083
+      PAYMENT_SVC_URL: http://payment-svc:8084
+      SHIPPING_SVC_URL: http://shipping-svc:8085
+      AUTH_SVC_URL: http://auth-svc:8086
+      NOTIFICATION_SVC_URL: http://notification-svc:8087
+    ports: ["127.0.0.1:8088:8088"]
+
   # ---------- Passerelle externe ----------
   caddy:
     image: caddy:2-alpine

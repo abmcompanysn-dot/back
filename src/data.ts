@@ -341,7 +341,7 @@ sans WordPress, en suivant exactement les sections 3 à 6 du document "Backend s
   paiement) et propose une gestion explicite de ce cas avant de continuer.`;
 
 export const STATS = [
-  { value: 7, suffix: "", label: "services Go indépendants" },
+  { value: 8, suffix: "", label: "services Go (dont admin-svc)" },
   { value: 19, suffix: "", label: "routes contractualisées ici" },
   { value: 80, suffix: "+", label: "routes Next.js à couvrir" },
   { value: 70, suffix: "+", label: "boutiques actives à migrer" },
@@ -474,6 +474,38 @@ export const TRANSFER: TransferOption[] = [
       },
     ],
     note: "Le bootstrap détecte les sources locales et déploie sans cloner. La CI/CD viendra plus tard.",
+  },
+];
+
+export const ADMIN_VIEWS: { name: string; desc: string; svc: string }[] = [
+  { name: "Vue d'ensemble", desc: "Compteurs agrégés (produits, boutiques, commandes, clients, CA) + dernières commandes + état des services en direct.", svc: "agrégation" },
+  { name: "Commandes", desc: "Toutes les commandes avec filtres de statut, pagination explicite, référence et boutique d'origine.", svc: "order-svc" },
+  { name: "Produits", desc: "Catalogue bilingue FR/EN (bascule de langue), recherche, modèle trid + lang visible, variations signalées.", svc: "catalog-svc" },
+  { name: "Boutiques", desc: "Cartes des boutiques vérifiées : pays, note, nombre de produits, logo/bannière R2.", svc: "vendor-svc" },
+  { name: "Clients", desc: "Comptes acheteurs inscrits par OTP ou Firebase, langue préférée, date d'inscription.", svc: "auth-svc" },
+  { name: "Paiements", desc: "Chaque paiement Stripe / PayDunya avec montant XOF, statut et référence fournisseur.", svc: "payment-svc" },
+  { name: "Livraison", desc: "Zones tarifaires + simulateur de devis interactif (pays + articles → détail du calcul).", svc: "shipping-svc" },
+  { name: "Système", desc: "Health-check agrégé : chaque service sondé avec ses dépendances (Postgres, Kafka, Redis, Stripe…).", svc: "transverse" },
+];
+
+export const AUTH_FLOWS: { name: string; endpoint: string; desc: string; tone: "ok" | "warn" | "infra" }[] = [
+  {
+    name: "Acheteur — email ou SMS",
+    endpoint: "POST /auth/otp/send → /auth/otp/verify",
+    desc: "Code à 6 chiffres stocké en Redis avec TTL borné. Seule une référence opaque circule : le code n'est jamais renvoyé dans la réponse.",
+    tone: "ok",
+  },
+  {
+    name: "Admin — email + mot de passe",
+    endpoint: "POST /auth/admin/login",
+    desc: "Sel + 10 000 itérations SHA-256, compte seedé depuis ADMIN_EMAIL/ADMIN_PASSWORD au premier démarrage. Émet un JWT role=admin.",
+    tone: "warn",
+  },
+  {
+    name: "Admin — Firebase (Google)",
+    endpoint: "POST /auth/firebase",
+    desc: "Le jeton Google est vérifié auprès de oauth2.googleapis.com (émetteur + audience), puis l'email doit exister dans la table admins.",
+    tone: "infra",
   },
 ];
 
