@@ -1078,7 +1078,7 @@ export default function App() {
             <div className="flex items-stretch gap-2 min-w-[720px]">
               {[
                 { t: "Ta machine", s: "scripts/git-publish.sh", tone: "text-ink border-line2" },
-                { t: "GitHub", s: "dépôt privé miad-backend", tone: "text-ok border-ok/40" },
+                { t: "GitHub", s: "backend-miad", tone: "text-ok border-ok/40" },
                 { t: "GitHub Actions", s: "deploy-vps.yml", tone: "text-warn border-warn/40" },
                 { t: "SSH", s: "secrets VPS_*", tone: "text-infra border-infra/40" },
                 { t: "VPS", s: "docker compose up -d --build", tone: "text-ok border-ok/40" },
@@ -1104,12 +1104,32 @@ export default function App() {
             <Reveal>
               <div className="panel overflow-hidden">
                 <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-bg2/60">
-                  <span className="font-mono text-[11px] text-mut">Étape 1 — créer & pousser le dépôt</span>
-                  <CopyButton text="bash scripts/git-publish.sh" />
+                  <span className="font-mono text-[11px] text-mut">Étape 1 — pousser vers le dépôt créé</span>
+                  <CopyButton text={"git init\ngit add -A\ngit commit -m \"premier commit\"\ngit branch -M main\ngit remote add origin https://github.com/abmcompanysn-dot/backend-miad.git\ngit push -u origin main"} />
                 </div>
                 <div className="code-block !border-0 !rounded-none p-4">
-                  <p><span className="text-ok">$</span> bash scripts/git-publish.sh</p>
-                  <p className="text-dim mt-1">→ git init · commit · gh repo create miad-backend --private · push</p>
+                  <p><span className="text-ok">$</span> git init</p>
+                  <p><span className="text-ok">$</span> git add -A <span className="text-dim"># tout le backend, pas seulement le README</span></p>
+                  <p><span className="text-ok">$</span> git commit -m "premier commit"</p>
+                  <p><span className="text-ok">$</span> git branch -M main</p>
+                  <p><span className="text-ok">$</span> git remote add origin https://github.com/abmcompanysn-dot/backend-miad.git</p>
+                  <p><span className="text-ok">$</span> git push -u origin main</p>
+                </div>
+                <div className="px-4 py-3 border-t border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+                  <p className="text-[12px] text-dim">
+                    Ou en une seule commande : <code className="font-mono text-ok">bash scripts/git-publish.sh</code>
+                  </p>
+                  <a
+                    href="https://github.com/abmcompanysn-dot/backend-miad"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="chip !text-ink hover:!border-ok/50 hover:!text-ok transition-colors"
+                  >
+                    abmcompanysn-dot/backend-miad
+                    <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 2h6v6M10 2 2 10" />
+                    </svg>
+                  </a>
                 </div>
               </div>
             </Reveal>

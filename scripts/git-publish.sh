@@ -1,52 +1,50 @@
 #!/usr/bin/env bash
 # ============================================================
-# Crée et pousse le dépôt MIAD Market en UNE commande.
+# Publie le backend MIAD Market sur le dépôt GitHub :
+#   https://github.com/abmcompanysn-dot/backend-miad
+#
 #   bash scripts/git-publish.sh
 #
-# Prérequis optionnels :
-#   - GitHub CLI (`gh`) pour créer le dépôt distant automatiquement
-#   - ou un remote déjà configuré (`git remote add origin …`)
+# Adapté du quickstart GitHub — mais pousse TOUT le projet
+# (le `git add README.md` du quickstart ne suffirait pas).
 # ============================================================
 set -euo pipefail
 
-REPO="miad-backend"
+REMOTE="https://github.com/abmcompanysn-dot/backend-miad.git"
 GREEN='\033[0;32m'; DIM='\033[2m'; NC='\033[0m'
-
 say()  { printf "%b\n" "${GREEN}→${NC} $*"; }
 note() { printf "%b\n" "${DIM}   $*${NC}"; }
 
-say "Initialisation Git (branche main)…"
-git init -b main >/dev/null 2>&1 || true
+# 1 — git init (le README existe déjà : pas besoin de le créer)
+[ -d .git ] || git init
 
-say "Ajout de tous les fichiers (le .gitignore protège les secrets)…"
+# 2 — tout le projet (le .gitignore protège .env et les binaires)
+say "Ajout de tous les fichiers…"
 git add -A
-git commit -m "feat: backend MIAD Market sans WordPress — socle microservices Go
 
-- 7 services Go, une base Postgres chacun
-- contrats .proto + grpc-gateway (REST/JSON identique au frontend)
-- Kafka, Redis, Caddy, docker-compose pour VPS
-- import WooCommerce, system-check agrégé, plan de migration 6 phases" >/dev/null 2>&1 || true
+# 3 — premier commit
+git commit -m "premier commit — backend MIAD Market sans WordPress
 
-if command -v gh >/dev/null 2>&1; then
-  say "Création du dépôt GitHub privé « $REPO » via gh…"
-  gh repo create "$REPO" --private --source=. --push --remote=origin 2>/dev/null \
-    || { note "dépôt peut-être déjà existant — tentative de push direct…"; git push -u origin main; }
+7 services Go (catalog, vendor, order, payment, shipping, auth, notification)
+contrats .proto + grpc-gateway · Kafka · Redis · docker-compose VPS
+import WooCommerce · system-check agrégé · plan de migration 6 phases" || true
+
+# 4 — branche main
+git branch -M main
+
+# 5 — remote vers le dépôt GitHub
+if git remote get-url origin >/dev/null 2>&1; then
+  say "Remote « origin » déjà présent — mise à jour…"
+  git remote set-url origin "$REMOTE"
 else
-  if git remote get-url origin >/dev/null 2>&1; then
-    say "Remote « origin » détecté — push…"
-    git push -u origin main
-  else
-    note "Pas de GitHub CLI ni de remote. Deux options :"
-    note "  1) installer gh : https://cli.github.com  puis relancer ce script"
-    note "  2) créer le dépôt sur github.com, puis :"
-    note "     git remote add origin git@github.com:TON_USER/$REPO.git"
-    note "     git push -u origin main"
-    exit 1
-  fi
+  git remote add origin "$REMOTE"
 fi
 
-say "Dépôt poussé avec succès."
-note "Étape suivante — brancher le déploiement automatique sur le VPS :"
-note "  GitHub → Settings → Secrets → Actions, ajouter :"
-note "    VPS_HOST, VPS_USER, VPS_SSH_KEY (clé privée), VPS_PATH"
-note "  Chaque push sur main déclenchera .github/workflows/deploy-vps.yml"
+# 6 — push
+say "Push vers $REMOTE…"
+git push -u origin main
+
+say "Dépôt publié : https://github.com/abmcompanysn-dot/backend-miad"
+note "Étape suivante — secrets GitHub pour le déploiement auto sur VPS :"
+note "  Settings → Secrets and variables → Actions → ajouter :"
+note "    VPS_HOST · VPS_USER · VPS_SSH_KEY · VPS_PATH"

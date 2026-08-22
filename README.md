@@ -49,10 +49,13 @@ Prérequis : VPS 2 vCPU / 4 Go min. (Kafka KRaft single-node ≈ 1 Go), Docker �
 # 1 — Docker sur un VPS vierge
 curl -fsSL https://get.docker.com | sh
 
-# 2 — Dépôt
-git init && git add -A && git commit -m "backend miad market — socle initial"
-git remote add origin git@github.com:MIAD/miad-backend.git && git push -u origin main
-# (ou cloner le dépôt existant : git clone … && cd miad-backend)
+# 2 — Publier sur le dépôt GitHub
+bash scripts/git-publish.sh
+# Équivalent manuel :
+#   git init && git add -A && git commit -m "premier commit" && git branch -M main
+#   git remote add origin https://github.com/abmcompanysn-dot/backend-miad.git
+#   git push -u origin main
+# Cloner ailleurs : git clone https://github.com/abmcompanysn-dot/backend-miad.git
 
 # 3 — Somme de dépendances Go (génère go.sum pour le build Docker)
 go mod tidy
