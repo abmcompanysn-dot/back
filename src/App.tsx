@@ -17,6 +17,9 @@ import {
   COMPOSE_STACK,
   PROMPT,
   STATS,
+  NOW_STEPS,
+  K8S_COMPARE,
+  K8S_PATH,
   type Service,
 } from "./data";
 import {
@@ -46,6 +49,7 @@ const SECTIONS = [
   { id: "prompt", n: "09", label: "Prompt" },
   { id: "vps", n: "10", label: "VPS" },
   { id: "git", n: "11", label: "Git & CI" },
+  { id: "maintenant", n: "12", label: "Maintenant" },
 ];
 
 function useScrollSpy() {
@@ -664,6 +668,125 @@ function MigrationTimeline() {
 }
 
 /* ============================================================
+   Checklist « je fais quoi maintenant » — persistance locale
+   ============================================================ */
+
+const CHECK_KEY = "miad-now-checklist";
+
+function NowChecklist() {
+  const [done, setDone] = useState<boolean[]>(() => {
+    try {
+      const raw = localStorage.getItem(CHECK_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as boolean[];
+        if (Array.isArray(parsed) && parsed.length === NOW_STEPS.length) return parsed;
+      }
+    } catch {
+      /* stockage indisponible : on repart à zéro */
+    }
+    return NOW_STEPS.map(() => false);
+  });
+
+  const toggle = (i: number) => {
+    setDone((prev) => {
+      const next = prev.map((v, j) => (j === i ? !v : v));
+      try {
+        localStorage.setItem(CHECK_KEY, JSON.stringify(next));
+      } catch {
+        /* silencieux */
+      }
+      return next;
+    });
+  };
+
+  const count = done.filter(Boolean).length;
+  const pct = Math.round((count / NOW_STEPS.length) * 100);
+
+  return (
+    <div className="panel p-5">
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <div>
+          <p className="label-mono">Feuille de route</p>
+          <h3 className="font-display font-bold text-[17px] mt-1">Je fais quoi maintenant ?</h3>
+        </div>
+        <span className="font-mono text-[12px] text-ok shrink-0">
+          {count}/{NOW_STEPS.length}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-line overflow-hidden mb-5">
+        <div
+          className="h-full rounded-full bg-ok transition-all duration-500 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      <ol className="space-y-2.5">
+        {NOW_STEPS.map((s, i) => {
+          const isDone = done[i];
+          return (
+            <li
+              key={s.title}
+              className={`rounded-lg border transition-colors ${
+                isDone ? "border-ok/35 bg-ok/5" : "border-line bg-bg2/60"
+              }`}
+            >
+              <button
+                onClick={() => toggle(i)}
+                className="w-full text-left flex items-start gap-3 p-3.5 cursor-pointer group"
+              >
+                <span
+                  className={`shrink-0 w-5 h-5 rounded-md grid place-items-center border transition-all mt-0.5 ${
+                    isDone
+                      ? "bg-ok border-ok text-bg"
+                      : "border-line2 text-transparent group-hover:border-ok/50"
+                  }`}
+                >
+                  <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 6.5 4.5 9 10 3" />
+                  </svg>
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="flex items-center justify-between gap-3 flex-wrap">
+                    <span className={`font-display font-bold text-[14px] ${isDone ? "text-mut line-through decoration-ok/50" : ""}`}>
+                      <span className="font-mono text-[11px] text-ok mr-2">{String(i + 1).padStart(2, "0")}</span>
+                      {s.title}
+                    </span>
+                    <span className="chip !text-[10px]">{s.where}</span>
+                  </span>
+                  <span className={`block text-[12.5px] leading-relaxed mt-1 ${isDone ? "text-dim" : "text-mut"}`}>
+                    {s.body}
+                  </span>
+                  {s.cmd && !isDone && (
+                    <span
+                      className="flex items-start justify-between gap-3 mt-2 code-block p-2.5 !text-[11.5px]"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <code className="text-ink/90 whitespace-pre-wrap break-all leading-relaxed">{s.cmd}</code>
+                      <span className="shrink-0">
+                        <CopyButton text={s.cmd} label="" />
+                      </span>
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+
+      <p className="text-[12px] text-dim mt-4 leading-relaxed">
+        Ta progression est enregistrée sur cet appareil — coche au fur et à mesure.
+        {count === NOW_STEPS.length && (
+          <span className="block text-ok mt-1.5 font-mono text-[12px]">
+            ✔ Stack en ligne. Prochaine étape : plan de migration, phase 02 (import WooCommerce).
+          </span>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/* ============================================================
    App
    ============================================================ */
 
@@ -1180,6 +1303,101 @@ export default function App() {
             </div>
           </Reveal>
         </div>
+      </section>
+
+      {/* ---------- 12 · Maintenant ---------- */}
+      <section id="maintenant" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="12"
+          kicker="Exécution"
+          title="Maintenant"
+          lead="Deux réponses concrètes : la feuille de route pour mettre la stack en ligne, et le verdict honnête entre Docker Compose et Kubernetes."
+        />
+
+        <div className="grid lg:grid-cols-[1.25fr_1fr] gap-5 items-start mb-5">
+          <Reveal>
+            <NowChecklist />
+          </Reveal>
+          <Reveal delay={120}>
+            <div className="panel p-5">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <p className="label-mono">Orchestration</p>
+                <span className="chip !text-ok !border-ok/40">verdict</span>
+              </div>
+              <h3 className="font-display font-bold text-[19px] leading-tight">
+                Compose maintenant.
+                <span className="block text-ok mt-1">Kubernetes plus tard.</span>
+              </h3>
+              <p className="text-[13.5px] text-mut leading-relaxed mt-3">
+                Sur un VPS, K8s ajoute un plan de contrôle qui consomme de la RAM et de la
+                complexité — pour des bénéfices (scaling multi-nœuds, rolling update) dont
+                70 boutiques n'ont pas besoin aujourd'hui. Le brief l'assume : démarrer en
+                Compose. Le repo est <span className="text-ink">déjà compatible K8s</span>{" "}
+                (services stateless, health-checks, une base par service) :{" "}
+                <code className="font-mono text-[11.5px] text-warn">deploy/k8s.yaml</code> est
+                fourni pour le jour de la bascule.
+              </p>
+              <div className="mt-4 pt-4 border-t border-line space-y-3">
+                {K8S_PATH.map((p) => (
+                  <div key={p.stage} className="flex gap-3">
+                    <StatusDot tone={p.tone} />
+                    <div>
+                      <p className="font-mono text-[12px] text-ink">{p.stage}</p>
+                      <p className="text-[12px] text-mut leading-relaxed mt-0.5">{p.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Reveal>
+        </div>
+
+        <Reveal>
+          <div className="panel overflow-hidden">
+            <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+              <span className="label-mono !text-ink">Compose vs Kubernetes — 7 critères</span>
+              <span className="chip">pour 1 VPS · 7 services · trafic actuel</span>
+            </div>
+            <div className="hidden md:grid md:grid-cols-[1.1fr_1fr_1fr_90px] px-4 py-2 border-b border-line font-mono text-[10.5px] uppercase tracking-widest text-dim">
+              <span>Critère</span>
+              <span>Docker Compose</span>
+              <span>Kubernetes</span>
+              <span className="text-right">Avantage</span>
+            </div>
+            {K8S_COMPARE.map((r, i) => (
+              <div
+                key={r.criterion}
+                className={`row-hover grid grid-cols-1 md:grid-cols-[1.1fr_1fr_1fr_90px] gap-1.5 md:gap-3 px-4 py-3 ${
+                  i > 0 ? "border-t border-line" : ""
+                }`}
+              >
+                <span className="text-[13px] text-ink font-medium">{r.criterion}</span>
+                <span className={`text-[12.5px] ${r.winner === "compose" ? "text-ok" : "text-mut"}`}>{r.compose}</span>
+                <span className={`text-[12.5px] ${r.winner === "k8s" ? "text-ok" : "text-mut"}`}>{r.k8s}</span>
+                <span className="md:text-right">
+                  <span
+                    className={`font-mono text-[10.5px] px-2 py-0.5 rounded-full border ${
+                      r.winner === "compose"
+                        ? "text-ok border-ok/40 bg-ok/10"
+                        : r.winner === "k8s"
+                          ? "text-infra border-infra/40 bg-infra/10"
+                          : "text-dim border-line2"
+                    }`}
+                  >
+                    {r.winner === "compose" ? "compose" : r.winner === "k8s" ? "k8s" : "égalité"}
+                  </span>
+                </span>
+              </div>
+            ))}
+            <div className="px-4 py-3.5 border-t border-line bg-bg2/60">
+              <p className="font-mono text-[11.5px] text-mut leading-relaxed">
+                <span className="text-ok">Bilan :</span> Compose gagne 4 critères, égalité sur 1,
+                K8s sur 2 (qui ne servent qu'à grande échelle). Commencer en Compose n'est pas un
+                pis-aller — c'est le choix adapté, réversible sans réécriture.
+              </p>
+            </div>
+          </div>
+        </Reveal>
       </section>
 
       {/* ---------- Pied ---------- */}

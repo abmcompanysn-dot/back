@@ -75,6 +75,16 @@ curl -s "localhost:8081/products?lang=fr&page=1" | jq
 
 Le frontend Next.js pointe ensuite `app/api/*` vers ce VPS (Caddy, port 80/443).
 
+### Compose ou Kubernetes ?
+
+**Compose maintenant, Kubernetes plus tard.** Sur un VPS, K8s ajoute un plan de
+contrôle coûteux en RAM et en complexité pour des bénéfices (scaling multi-nœuds,
+rolling update) dont le trafic actuel n'a pas besoin. Le repo est déjà compatible
+K8s : services stateless, health-checks, une base par service. Le jour de la
+bascule, appliquer `deploy/k8s.yaml` (7 Deployments + Services + Ingress) ;
+Postgres/Kafka/Redis se recommandent alors managés. Voir la section « Maintenant »
+de la console web pour le comparatif critère par critère.
+
 ## 4. Génération gRPC / grpc-gateway
 
 Les contrats `.proto` sont écrits ; les stubs Go se génèrent ensuite :

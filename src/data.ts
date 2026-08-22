@@ -346,3 +346,99 @@ export const STATS = [
   { value: 80, suffix: "+", label: "routes Next.js à couvrir" },
   { value: 70, suffix: "+", label: "boutiques actives à migrer" },
 ];
+
+/* ============================================================
+   Section 12 — « je fais quoi maintenant » + Compose vs K8s
+   ============================================================ */
+
+export interface NowStep {
+  title: string;
+  where: string; // où l'étape se déroule
+  body: string;
+  cmd?: string;
+  optional?: boolean;
+}
+
+export const NOW_STEPS: NowStep[] = [
+  {
+    title: "Récupère le code sur ta machine",
+    where: "Ta machine",
+    body: "Télécharge l'export du projet depuis ce sandbox (bouton d'export de ta plateforme), ou copie l'arborescence dans un dossier local « backend-miad ». C'est ce dossier qui deviendra le dépôt.",
+  },
+  {
+    title: "Publie sur ton dépôt GitHub",
+    where: "Ta machine",
+    body: "Le dépôt abmcompanysn-dot/backend-miad existe déjà. Une seule commande pousse tout le backend (pas juste le README) :",
+    cmd: "bash scripts/git-publish.sh",
+  },
+  {
+    title: "Provisionne le VPS",
+    where: "Ton hébergeur",
+    body: "VPS Ubuntu 22.04+ · 2 vCPU / 4 Go minimum (le nœud Kafka KRaft pèse ~1 Go). Note l'adresse IP, l'utilisateur et la clé SSH.",
+  },
+  {
+    title: "Installe Docker sur le VPS",
+    where: "SSH → VPS",
+    body: "Une commande officielle, puis vérification que le moteur répond :",
+    cmd: "curl -fsSL https://get.docker.com | sh && docker --version",
+  },
+  {
+    title: "Clone le dépôt et crée le .env",
+    where: "SSH → VPS",
+    body: "Le .env n'est JAMAIS dans le dépôt : il se crée à la main sur le VPS, puis on remplace les valeurs par défaut (mots de passe, JWT_SECRET, clés Stripe/PayDunya).",
+    cmd: "git clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend\ncd /opt/miad-backend\ncp .env.example .env && nano .env",
+  },
+  {
+    title: "Démarre toute la stack",
+    where: "SSH → VPS",
+    body: "Postgres crée ses 7 bases au premier boot, les 7 services compilent puis démarrent, Caddy expose la passerelle :",
+    cmd: "docker compose up -d --build",
+  },
+  {
+    title: "Vérifie — explicitement",
+    where: "SSH → VPS",
+    body: "Le point qui manquait sous WordPress : chaque service répond ou est signalé en défaut, dépendance par dépendance.",
+    cmd: "bash scripts/system-check.sh",
+  },
+  {
+    title: "Branche le déploiement automatique",
+    where: "GitHub",
+    body: "Sur le dépôt : Settings → Secrets and variables → Actions. Ajouter VPS_HOST, VPS_USER, VPS_SSH_KEY, VPS_PATH (/opt/miad-backend). Ensuite chaque git push redéploie seul.",
+    optional: true,
+  },
+];
+
+export interface CompareRow {
+  criterion: string;
+  compose: string;
+  k8s: string;
+  winner: "compose" | "k8s" | "tie";
+}
+
+export const K8S_COMPARE: CompareRow[] = [
+  { criterion: "Mise en route", compose: "un fichier, 5 minutes", k8s: "cluster + manifests, ~1 h", winner: "compose" },
+  { criterion: "RAM consommée par l'orchestrateur", compose: "≈ 0", k8s: "+500 Mo (k3s) à +2 Go (K8s)", winner: "compose" },
+  { criterion: "Redémarrage après crash", compose: "restart: unless-stopped", k8s: "liveness probes", winner: "tie" },
+  { criterion: "Mise à jour sans interruption", compose: "recréation (coupure courte)", k8s: "rolling update natif", winner: "k8s" },
+  { criterion: "Scaling horizontal multi-machines", compose: "manuel", k8s: "natif + autoscaling (HPA)", winner: "k8s" },
+  { criterion: "Débogage au quotidien", compose: "docker compose logs, 1 fichier", k8s: "kubectl + concepts à maîtriser", winner: "compose" },
+  { criterion: "Pour 70 boutiques / trafic actuel", compose: "largement suffisant", k8s: "surdimensionné", winner: "compose" },
+];
+
+export const K8S_PATH = [
+  {
+    stage: "Maintenant — Compose",
+    detail: "1 VPS, docker compose up. Le brief l'assume explicitement : « VPS + Docker Compose pour démarrer ».",
+    tone: "ok",
+  },
+  {
+    stage: "Signal de bascule",
+    detail: "Déploiements sans coupure exigés, trafic ×10, ou besoin de répartir sur 2+ machines.",
+    tone: "warn",
+  },
+  {
+    stage: "Ensuite — k3s",
+    detail: "Kubernetes allégé sur le même VPS : le repo est déjà compatible (services stateless, health-checks, une base par service). deploy/k8s.yaml est fourni.",
+    tone: "infra",
+  },
+] as const;
