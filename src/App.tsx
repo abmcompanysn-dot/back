@@ -22,6 +22,8 @@ import {
   K8S_PATH,
   VPS_ACCESS,
   TRANSFER,
+  ADMIN_VIEWS,
+  AUTH_FLOWS,
   type Service,
 } from "./data";
 import {
@@ -52,6 +54,7 @@ const SECTIONS = [
   { id: "vps", n: "10", label: "VPS" },
   { id: "git", n: "11", label: "Git & CI" },
   { id: "maintenant", n: "12", label: "Maintenant" },
+  { id: "admin", n: "13", label: "Admin" },
 ];
 
 function useScrollSpy() {
@@ -1568,6 +1571,160 @@ export default function App() {
         </Reveal>
       </section>
 
+      {/* ---------- 13 · Admin ---------- */}
+      <section id="admin" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="13"
+          kicker="Conception"
+          title="Console d'administration"
+          lead="Un 8ᵉ service (admin-svc) embarque l'interface complète — servie par le backend lui-même sur /admin, zéro build frontend. Chaque requête API exige un JWT role=admin, vérifié deux fois (admin-svc puis le service propriétaire)."
+        />
+
+        <div className="grid lg:grid-cols-[1.45fr_1fr] gap-4 mb-4">
+          {/* Aperçu vivant du tableau de bord */}
+          <Reveal>
+            <div className="panel overflow-hidden">
+              <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line bg-bg2/60">
+                <span className="w-2.5 h-2.5 rounded-full bg-alert/70" />
+                <span className="w-2.5 h-2.5 rounded-full bg-warn/70" />
+                <span className="w-2.5 h-2.5 rounded-full bg-ok/70" />
+                <span className="font-mono text-[10.5px] text-mut ml-2">https://miadmarket.com/admin</span>
+                <span className="chip ml-auto !text-[10px] !text-ok !border-ok/40">GET /admin</span>
+              </div>
+              <div className="grid grid-cols-[92px_1fr] min-h-[300px]">
+                <div className="border-r border-line bg-bg2/40 p-2.5 flex flex-col gap-1.5">
+                  {["Vue d'ensemble", "Commandes", "Produits", "Boutiques", "Clients", "Paiements", "Livraison", "Système"].map((v, i) => (
+                    <span
+                      key={v}
+                      className={`block font-mono text-[9.5px] px-2 py-1.5 rounded-md transition-colors cursor-default ${
+                        i === 0 ? "bg-ok/12 text-ok border border-ok/30" : "text-dim hover:text-ink hover:bg-raise border border-transparent"
+                      }`}
+                    >
+                      {v}
+                    </span>
+                  ))}
+                </div>
+                <div className="p-4">
+                  <div className="grid grid-cols-4 gap-2 mb-4">
+                    {[
+                      { l: "Produits", v: "1 284" },
+                      { l: "Boutiques", v: "73" },
+                      { l: "Commandes", v: "9 412" },
+                      { l: "CA confirmé", v: "8,4 M XOF" },
+                    ].map((t, i) => (
+                      <div key={t.l} className="bg-bg2/70 border border-line rounded-lg p-2.5">
+                        <p className="font-display font-extrabold text-[15px] leading-none">{t.v}</p>
+                        <p className="font-mono text-[8.5px] text-dim uppercase tracking-wider mt-1.5">{t.l}</p>
+                        <div className="h-[3px] rounded-full bg-line mt-2 overflow-hidden">
+                          <div className="h-full bg-ok bar-grow" style={{ width: `${48 + i * 14}%`, animationDelay: `${i * 130}ms` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5">
+                    {[
+                      { ref: "MIAD-20260214-113207-1", st: "paid", tone: "ok", amt: "24 500" },
+                      { ref: "MIAD-20260214-113241-1", st: "pending_payment", tone: "warn", amt: "9 000" },
+                      { ref: "MIAD-20260214-113312-2", st: "shipped", tone: "infra", amt: "61 250" },
+                    ].map((o, i) => (
+                      <div key={o.ref} className="flex items-center gap-3 bg-bg2/50 border border-line rounded-md px-3 py-2">
+                        <span className={`w-1.5 h-1.5 rounded-full ${i === 1 ? "bg-warn node-pulse" : "bg-ok/70"}`} />
+                        <span className="font-mono text-[10px] text-ink/80 flex-1 truncate">{o.ref}</span>
+                        <span className={`font-mono text-[9px] px-2 py-0.5 rounded-full border ${
+                          o.tone === "ok" ? "text-ok border-ok/40 bg-ok/8" : o.tone === "warn" ? "text-warn border-warn/40 bg-warn/8" : "text-infra border-infra/40 bg-infra/8"
+                        }`}>{o.st}</span>
+                        <span className="font-mono text-[10px] text-mut">{o.amt} XOF</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="px-4 py-3 border-t border-line bg-bg2/60 flex items-center gap-3 flex-wrap">
+                <span className="label-mono">Embarquée dans admin-svc (embed Go)</span>
+                <span className="chip !text-[10px]">vanilla JS · zéro dépendance</span>
+                <span className="chip !text-[10px]">JWT role=admin exigé</span>
+              </div>
+            </div>
+          </Reveal>
+
+          {/* Auth + câblages réels */}
+          <div className="space-y-4">
+            <Reveal delay={80}>
+              <div className="panel p-5">
+                <p className="label-mono mb-3.5 !text-warn">Trois façons de s'authentifier</p>
+                <div className="space-y-3">
+                  {AUTH_FLOWS.map((f) => (
+                    <div key={f.name} className={`border rounded-lg p-3.5 bg-bg2/60 ${
+                      f.tone === "ok" ? "border-ok/30" : f.tone === "warn" ? "border-warn/30" : "border-infra/30"
+                    }`}>
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <p className="font-display font-bold text-[13.5px]">{f.name}</p>
+                        <span className={`chip !text-[9.5px] ${
+                          f.tone === "ok" ? "!text-ok !border-ok/40" : f.tone === "warn" ? "!text-warn !border-warn/40" : "!text-infra !border-infra/40"
+                        }`}>auth-svc</span>
+                      </div>
+                      <p className={`font-mono text-[10.5px] mt-1.5 ${
+                        f.tone === "ok" ? "text-ok/80" : f.tone === "warn" ? "text-warn/80" : "text-infra/80"
+                      }`}>{f.endpoint}</p>
+                      <p className="text-[12px] text-mut leading-relaxed mt-2">{f.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Reveal>
+            <Reveal delay={160}>
+              <div className="panel p-5">
+                <p className="label-mono mb-3 !text-ok">Paiements — câblés pour de vrai</p>
+                <ul className="space-y-2.5">
+                  {[
+                    ["Stripe Checkout Session", "api.stripe.com/v1/checkout/sessions — URL de paiement carte renvoyée au frontend"],
+                    ["PayDunya invoices", "app.paydunya.com/api/v1 — Wave & Orange Money en XOF, redirect_url fournie"],
+                    ["Signatures vérifiées", "Stripe-Signature (HMAC) + token PayDunya contrôlés avant toute mutation"],
+                    ["Kafka de bout en bout", "order.created → init paiement → payment.confirmed → commande paid"],
+                  ].map(([k, v]) => (
+                    <li key={k} className="flex gap-3 text-[12.5px] leading-relaxed">
+                      <span className="text-ok shrink-0 mt-[3px]">▸</span>
+                      <span><span className="text-ink">{k}</span> <span className="text-mut">— {v}</span></span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Reveal>
+          </div>
+        </div>
+
+        {/* Les 8 vues */}
+        <Reveal>
+          <div className="panel overflow-hidden">
+            <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+              <span className="label-mono !text-ink">Les 8 vues de la console</span>
+              <span className="chip !text-[10px]">chaque vue interroge son service propriétaire via l'API admin</span>
+            </div>
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 divide-line">
+              {ADMIN_VIEWS.map((v, i) => (
+                <div key={v.name} className={`row-hover px-4 py-3.5 flex gap-4 ${i > 0 ? "md:border-t md:border-line" : ""} ${i % 2 === 1 ? "md:border-l md:border-line" : ""}`}>
+                  <span className="font-mono text-[11px] text-ok pt-0.5 shrink-0">{String(i + 1).padStart(2, "0")}</span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <p className="font-display font-bold text-[14px]">{v.name}</p>
+                      <span className="chip !text-[9.5px]">{v.svc}</span>
+                    </div>
+                    <p className="text-[12.5px] text-mut leading-relaxed mt-1">{v.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-4 py-3.5 border-t border-line bg-bg2/60">
+              <p className="font-mono text-[11.5px] text-mut leading-relaxed">
+                <span className="text-ok">Première connexion :</span> le compte admin est seedé au démarrage depuis{" "}
+                <span className="text-warn">ADMIN_EMAIL</span> / <span className="text-warn">ADMIN_PASSWORD</span> du .env —
+                à définir <span className="text-ink">avant le premier boot</span> sur le VPS.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
       {/* ---------- Pied ---------- */}
       <footer className="border-t border-line bg-bg2/50">
         <div className="max-w-[1200px] mx-auto px-5 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -1580,7 +1737,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <StatusDot tone="ok" />
             <span className="font-mono text-[11px] text-mut">
-              Kubernetes (k3s) acté · manifests deploy/k8s/ · bootstrap prêt · phase 01/06
+              8 services · console admin /admin · Firebase + OTP · k3s acté · phase 01/06
             </span>
           </div>
         </div>

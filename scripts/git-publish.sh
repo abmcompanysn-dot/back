@@ -22,12 +22,16 @@ note() { printf "%b\n" "${DIM}   $*${NC}"; }
 say "Ajout de tous les fichiers…"
 git add -A
 
-# 3 — premier commit
-git commit -m "premier commit — backend MIAD Market sans WordPress
+# 3 — commit (réutilisable : ne fait rien s'il n'y a pas de changement)
+if git diff --cached --quiet; then
+  say "Rien de nouveau à commiter."
+else
+  git commit -m "backend MIAD Market — 8 services Go + console admin
 
-7 services Go (catalog, vendor, order, payment, shipping, auth, notification)
-contrats .proto + grpc-gateway · Kafka · Redis · docker-compose VPS
-import WooCommerce · system-check agrégé · plan de migration 6 phases" || true
+catalog · vendor · order · payment · shipping · auth · notification · admin
+contrats .proto + grpc-gateway · Kafka · Redis · k3s + docker-compose
+OTP + mot de passe admin + Firebase · Stripe/PayDunya · import WooCommerce"
+fi
 
 # 4 — branche main
 git branch -M main

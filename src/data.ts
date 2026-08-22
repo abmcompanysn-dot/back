@@ -342,7 +342,7 @@ sans WordPress, en suivant exactement les sections 3 à 6 du document "Backend s
 
 export const STATS = [
   { value: 8, suffix: "", label: "services Go (dont admin-svc)" },
-  { value: 19, suffix: "", label: "routes contractualisées ici" },
+  { value: 32, suffix: "", label: "routes contractualisées ici" },
   { value: 80, suffix: "+", label: "routes Next.js à couvrir" },
   { value: 70, suffix: "+", label: "boutiques actives à migrer" },
 ];
