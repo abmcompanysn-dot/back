@@ -45,6 +45,7 @@ const SECTIONS = [
   { id: "migration", n: "07", label: "Migration" },
   { id: "prompt", n: "09", label: "Prompt" },
   { id: "vps", n: "10", label: "VPS" },
+  { id: "git", n: "11", label: "Git & CI" },
 ];
 
 function useScrollSpy() {
@@ -1061,6 +1062,106 @@ export default function App() {
         </div>
       </section>
 
+      {/* ---------- 11 · Git & CI ---------- */}
+      <section id="git" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="11"
+          kicker="Exécution"
+          title="Publier sur Git & déployer en continu"
+          lead="Une commande crée et pousse le dépôt ; ensuite chaque push sur main redéploie automatiquement les 7 services sur le VPS via GitHub Actions."
+        />
+
+        {/* Pipeline */}
+        <Reveal>
+          <div className="panel p-5 mb-4 overflow-x-auto">
+            <p className="label-mono mb-4">Chaîne de déploiement</p>
+            <div className="flex items-stretch gap-2 min-w-[720px]">
+              {[
+                { t: "Ta machine", s: "scripts/git-publish.sh", tone: "text-ink border-line2" },
+                { t: "GitHub", s: "dépôt privé miad-backend", tone: "text-ok border-ok/40" },
+                { t: "GitHub Actions", s: "deploy-vps.yml", tone: "text-warn border-warn/40" },
+                { t: "SSH", s: "secrets VPS_*", tone: "text-infra border-infra/40" },
+                { t: "VPS", s: "docker compose up -d --build", tone: "text-ok border-ok/40" },
+              ].map((p, i, arr) => (
+                <div key={p.t} className="flex items-center flex-1">
+                  <div className={`flex-1 border rounded-lg px-3 py-3 text-center ${p.tone} bg-bg2/60`}>
+                    <p className="font-mono text-[12px] font-bold whitespace-nowrap">{p.t}</p>
+                    <p className="font-mono text-[10px] text-dim mt-1 whitespace-nowrap">{p.s}</p>
+                  </div>
+                  {i < arr.length - 1 && (
+                    <svg viewBox="0 0 28 12" className="w-7 h-3 shrink-0 text-dim" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                      <path d="M2 6h20M18 2l5 4-5 4" />
+                    </svg>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </Reveal>
+
+        <div className="grid lg:grid-cols-[1.2fr_1fr] gap-4">
+          <div className="space-y-4">
+            <Reveal>
+              <div className="panel overflow-hidden">
+                <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-bg2/60">
+                  <span className="font-mono text-[11px] text-mut">Étape 1 — créer & pousser le dépôt</span>
+                  <CopyButton text="bash scripts/git-publish.sh" />
+                </div>
+                <div className="code-block !border-0 !rounded-none p-4">
+                  <p><span className="text-ok">$</span> bash scripts/git-publish.sh</p>
+                  <p className="text-dim mt-1">→ git init · commit · gh repo create miad-backend --private · push</p>
+                </div>
+              </div>
+            </Reveal>
+            <Reveal delay={80}>
+              <div className="panel p-5">
+                <p className="label-mono mb-3 !text-warn">Étape 2 — secrets GitHub (une seule fois)</p>
+                <p className="text-[13px] text-mut leading-relaxed mb-3">
+                  Sur le dépôt : <span className="font-mono text-[11.5px] text-ink">Settings → Secrets and variables → Actions</span>,
+                  ajouter les quatre valeurs que lira le workflow :
+                </p>
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {[
+                    ["VPS_HOST", "adresse IP du VPS"],
+                    ["VPS_USER", "utilisateur SSH (root…)"],
+                    ["VPS_SSH_KEY", "clé privée complète"],
+                    ["VPS_PATH", "ex. /opt/miad-backend"],
+                  ].map(([k, v]) => (
+                    <div key={k} className="flex items-center justify-between gap-2 bg-bg2/70 border border-line rounded-md px-3 py-2">
+                      <span className="font-mono text-[11.5px] text-warn">{k}</span>
+                      <span className="text-[11px] text-dim text-right">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Reveal>
+          </div>
+          <Reveal delay={120}>
+            <div className="panel p-5 h-full flex flex-col gap-4">
+              <div>
+                <p className="label-mono mb-2">Ce que fait chaque push</p>
+                <p className="text-[13px] text-mut leading-relaxed">
+                  Le workflow SSH dans le VPS, tire la branche <span className="font-mono text-[11.5px] text-ok">main</span>,
+                  vérifie que le <span className="font-mono text-[11.5px] text-warn">.env</span> est présent,
+                  relance <span className="font-mono text-[11.5px] text-ink">docker compose up -d --build</span> puis exécute{" "}
+                  <span className="font-mono text-[11.5px] text-ok">scripts/system-check.sh</span> : un déploiement
+                  ne passe jamais en silence, il est confirmé ou il échoue explicitement.
+                </p>
+              </div>
+              <div className="pt-4 border-t border-line">
+                <p className="label-mono mb-2">Point de vigilance</p>
+                <p className="text-[12.5px] text-mut leading-relaxed">
+                  Le <span className="font-mono text-[11.5px] text-warn">.env</span> (mots de passe, clés Stripe/PayDunya,
+                  JWT_SECRET) n'entre <span className="text-ink">jamais</span> dans le dépôt — il est créé manuellement sur le
+                  VPS et listé dans <span className="font-mono text-[11.5px] text-ink">.gitignore</span>. Sans lui, le workflow
+                  refuse de déployer.
+                </p>
+              </div>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
       {/* ---------- Pied ---------- */}
       <footer className="border-t border-line bg-bg2/50">
         <div className="max-w-[1200px] mx-auto px-5 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -1073,7 +1174,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <StatusDot tone="ok" />
             <span className="font-mono text-[11px] text-mut">
-              socle initial · 7 services · phase 01/06
+              socle initial · 7 services · CI/CD prêt · phase 01/06
             </span>
           </div>
         </div>

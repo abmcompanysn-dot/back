@@ -1,0 +1,51 @@
+# ============================================================
+# Déploiement automatique sur le VPS à chaque push sur main.
+# Le VPS tire le dépôt et relance docker compose.
+#
+# Secrets GitHub requis (Settings → Secrets → Actions) :
+#   VPS_HOST   ex. 51.15.0.42
+#   VPS_USER   ex. root
+#   VPS_SSH_KEY  clé privée complète
+#   VPS_PATH   ex. /opt/miad-backend
+# ============================================================
+name: deploy-vps
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Déployer sur le VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            mkdir -p ${{ secrets.VPS_PATH }}
+            cd ${{ secrets.VPS_PATH }}
+
+            # Premier passage : cloner ; ensuite : tirer
+            if [ ! -d .git ]; then
+              git clone https://github.com/${{ github.repository }}.git .
+            else
+              git pull origin main
+            fi
+
+            # .env doit déjà exister sur le VPS (jamais dans le dépôt)
+            test -f .env || { echo "❌ .env absent sur le VPS"; exit 1; }
+
+            # Reconstruire + relancer les 7 services + infra
+            docker compose up -d --build
+
+            # Vérification explicite — jamais de déploiement muet
+            sleep 5
+            bash scripts/system-check.sh

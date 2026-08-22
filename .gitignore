@@ -1,5 +1,33 @@
+# ---- Secrets & config locale — JAMAIS dans le dépôt
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---- Go
+/bin/
+/services/*/[!.]*
+*.exe
+*.test
+vendor/
+
+# ---- Node (console web)
 node_modules/
-.next/
 dist/
-build/
 *.log
+npm-debug.log*
+
+# ---- Docker volumes locaux
+pg/
+kafka/
+caddy_data/
+
+# ---- OS & éditeurs
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.next/
+build/
