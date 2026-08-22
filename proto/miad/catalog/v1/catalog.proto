@@ -1,0 +1,122 @@
+// ============================================================
+// catalog-svc — contrats produits / catégories / avis / recherche
+// Source de vérité du contrat inter-service ET du contrat REST
+// exposé par grpc-gateway au frontend Next.js.
+// Modèle de traduction : trid + lang (paire de lignes liées),
+// jamais de colonnes name_fr/name_en côte à côte (héritage WPML).
+// ============================================================
+syntax = "proto3";
+
+package miad.catalog.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/catalog/v1;catalogv1";
+
+import "google/api/annotations.proto";
+
+message ProductVariation {
+  int64 id = 1;
+  int64 product_id = 2;
+  string sku = 3;
+  map<string, string> attributes = 4; // ex: {"couleur":"vert","taille":"M"}
+  int64 price_xof = 5;
+  int32 stock = 6;
+  string image_url = 7; // R2
+}
+
+message Product {
+  int64 id = 1;
+  string trid = 2;            // id de groupe de traduction
+  string lang = 3;            // "fr" | "en"
+  string linked_lang = 4;     // langue de la ligne liée
+  int64 vendor_id = 5;
+  int64 category_id = 6;
+  string name = 7;
+  string slug = 8;
+  string description = 9;
+  int64 price_xof = 10;
+  string currency = 11;       // "XOF"
+  string status = 12;         // draft | active | out_of_stock
+  repeated string images = 13; // URLs R2
+  bool is_variable = 14;
+  repeated ProductVariation variations = 15;
+  double rating_avg = 16;
+  int32 rating_count = 17;
+  string created_at = 18;     // RFC3339
+}
+
+message Category {
+  int64 id = 1;
+  string trid = 2;
+  string lang = 3;
+  int64 parent_id = 4;
+  string name = 5;
+  string slug = 6;
+  string image_url = 7;
+  repeated Category children = 8;
+}
+
+message Review {
+  int64 id = 1;
+  int64 product_id = 2;
+  int64 customer_id = 3;
+  int64 order_id = 4; // vérifié via gRPC vers order-svc (anti-faux avis)
+  int32 rating = 5;
+  string comment = 6;
+  bool verified_purchase = 7;
+  string created_at = 8;
+}
+
+message ListProductsRequest {
+  int64 category_id = 1;
+  int64 vendor_id = 2;
+  string lang = 3;   // "fr" (défaut) | "en"
+  string q = 4;      // recherche mot-clé
+  int32 page = 5;    // commence à 1 — jamais de filtrage silencieux (leçon WPML)
+  int32 page_size = 6; // défaut 20, max 100
+}
+
+message ListProductsResponse {
+  repeated Product items = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+  int64 total = 4;
+  bool has_more = 5; // contrat de pagination EXPLICITE et stable
+}
+
+message GetProductRequest { int64 id = 1; string lang = 2; }
+message SimilarRequest { int64 id = 1; int32 limit = 2; }
+message ListCategoriesRequest { string lang = 1; }
+message ListCategoriesResponse { repeated Category roots = 1; }
+message SuggestionsRequest { string q = 1; string lang = 2; int32 limit = 3; }
+message SuggestionsResponse { repeated string suggestions = 1; }
+message CreateProductRequest {
+  int64 vendor_id = 1;
+  Product product_fr = 2;
+  Product product_en = 3; // même trid, langues liées
+  repeated ProductVariation variations = 4;
+}
+message CreateProductResponse { string trid = 1; repeated int64 ids = 2; }
+
+service CatalogService {
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse) {
+    option (google.api.http) = { get: "/products" };
+  }
+  rpc GetProduct(GetProductRequest) returns (Product) {
+    option (google.api.http) = { get: "/products/{id}" };
+  }
+  rpc SimilarProducts(SimilarRequest) returns (ListProductsResponse) {
+    option (google.api.http) = { get: "/products/{id}/similar" };
+  }
+  rpc ListCategories(ListCategoriesRequest) returns (ListCategoriesResponse) {
+    option (google.api.http) = { get: "/categories" };
+  }
+  rpc Suggestions(SuggestionsRequest) returns (SuggestionsResponse) {
+    option (google.api.http) = { get: "/search/suggestions" };
+  }
+  rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse) {
+    option (google.api.http) = {
+      post: "/vendor/products"
+      body: "*"
+    };
+  }
+}

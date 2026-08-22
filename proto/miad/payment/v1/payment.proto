@@ -1,0 +1,60 @@
+// ============================================================
+// payment-svc — Stripe (carte) + PayDunya (Wave, Orange Money)
+// Consomme : order.created   Publie : payment.confirmed, payment.failed
+// payments.order_id SANS clé étrangère SQL (services séparés).
+// ============================================================
+syntax = "proto3";
+
+package miad.payment.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/payment/v1;paymentv1";
+
+import "google/api/annotations.proto";
+
+message Payment {
+  int64 id = 1;
+  int64 order_id = 2;      // référence logique, pas de FK SQL
+  string provider = 3;     // "stripe" | "paydunya"
+  string provider_ref = 4; // chg_/pi_ Stripe ou token PayDunya
+  int64 amount_xof = 5;
+  string currency = 6;     // "XOF"
+  string status = 7;       // initiated | confirmed | failed | refunded
+  string method = 8;       // card | wave | orange_money
+  string created_at = 9;
+  string confirmed_at = 10;
+}
+
+message InitPaymentRequest {
+  int64 order_id = 1;
+  string provider = 2;
+  string return_url = 3;
+}
+
+message InitPaymentResponse {
+  Payment payment = 1;
+  string redirect_url = 2;    // Stripe Checkout / PayDunya
+  string client_secret = 3;   // Stripe uniquement
+}
+
+message WebhookStripeRequest { bytes raw_body = 1; string signature = 2; }
+message WebhookResponse { string received = 1; }
+
+message GetPaymentRequest { int64 order_id = 1; }
+
+service PaymentService {
+  rpc InitPayment(InitPaymentRequest) returns (InitPaymentResponse) {
+    option (google.api.http) = {
+      post: "/payments/init"
+      body: "*"
+    };
+  }
+  rpc WebhookStripe(WebhookStripeRequest) returns (WebhookResponse) {
+    option (google.api.http) = {
+      post: "/payments/webhook/stripe"
+      body: "*"
+    };
+  }
+  rpc GetPayment(GetPaymentRequest) returns (Payment) {
+    option (google.api.http) = { get: "/payments/order/{order_id}" };
+  }
+}

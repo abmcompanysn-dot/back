@@ -1,847 +1,1083 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  COUNTERS,
-  DEV_DEPS,
-  ISSUES,
-  NAV,
-  PROD_DEPS,
-  PROJECT,
-  RECOS,
-  STRENGTHS,
-  SUBSCORES,
-  TERMINAL_LINES,
-  TICKER,
-  TREE,
-  type Tone,
-} from "./report/data";
+  SERVICES,
+  NODE_W,
+  NODE_H,
+  INCIDENTS,
+  GOALS,
+  CONSTRAINTS,
+  STACK,
+  LEDGER,
+  TABLES,
+  ENDPOINTS,
+  FEATURES,
+  PHASES,
+  OUT_OF_SCOPE,
+  DEPLOY_STEPS,
+  COMPOSE_STACK,
+  PROMPT,
+  STATS,
+  type Service,
+} from "./data";
 import {
-  Badge,
-  Counter,
-  Gauge,
-  Ic,
   Reveal,
-  ScoreBar,
+  Counter,
+  CopyButton,
   SectionHead,
-  Terminal,
-} from "./report/ui";
+  StatusDot,
+  MethodChip,
+  CmdBlock,
+  Glyph,
+} from "./ui";
 
-/* ================= scroll-spy + progress ================= */
-function useScrollSpy(ids: readonly string[]) {
-  const [active, setActive] = useState(ids[0] ?? "");
-  const [progress, setProgress] = useState(0);
+/* ============================================================
+   Navigation
+   ============================================================ */
 
+const SECTIONS = [
+  { id: "board", n: "00", label: "Console" },
+  { id: "incidents", n: "01", label: "Pourquoi partir" },
+  { id: "objectifs", n: "02", label: "Objectifs" },
+  { id: "stack", n: "03", label: "Stack" },
+  { id: "data", n: "04", label: "Données" },
+  { id: "api", n: "05", label: "API" },
+  { id: "features", n: "06", label: "Fonctionnalités" },
+  { id: "migration", n: "07", label: "Migration" },
+  { id: "prompt", n: "09", label: "Prompt" },
+  { id: "vps", n: "10", label: "VPS" },
+];
+
+function useScrollSpy() {
+  const [active, setActive] = useState("board");
   useEffect(() => {
-    const sections = ids
-      .map((id) => document.getElementById(id))
-      .filter((el): el is HTMLElement => el !== null);
-    const io = new IntersectionObserver(
+    const obs = new IntersectionObserver(
       (entries) => {
-        for (const e of entries) {
-          if (e.isIntersecting) setActive(e.target.id);
-        }
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]) setActive(visible[0].target.id);
       },
-      { rootMargin: "-38% 0px -55% 0px" }
+      { rootMargin: "-30% 0px -55% 0px" }
     );
-    sections.forEach((s) => io.observe(s));
-    return () => io.disconnect();
-  }, [ids]);
-
-  useEffect(() => {
-    let raf = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const h = document.documentElement;
-        const max = h.scrollHeight - h.clientHeight;
-        setProgress(max > 0 ? (h.scrollTop / max) * 100 : 0);
-      });
-    };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      cancelAnimationFrame(raf);
-    };
+    SECTIONS.forEach((s) => {
+      const el = document.getElementById(s.id);
+      if (el) obs.observe(el);
+    });
+    return () => obs.disconnect();
   }, []);
-
-  return { active, progress };
+  return active;
 }
 
-const NAV_IDS = NAV.map((n) => n.id);
-
-const TONE_DOT: Record<Tone, string> = {
-  ok: "bg-moss",
-  warn: "bg-amber",
-  alert: "bg-coral",
-  info: "bg-sky",
-  neutral: "bg-dim",
-};
-
-const FILE_ICON: Record<string, (p: { className?: string }) => React.ReactNode> = {
-  folder: Ic.folder,
-  html: Ic.code,
-  json: Ic.doc,
-  ts: Ic.code,
-  js: Ic.code,
-  css: Ic.code,
-  lock: Ic.lock,
-};
-
-/* ================= app ================= */
-export default function App() {
-  const { active, progress } = useScrollSpy(NAV_IDS);
-
+function TopBar() {
+  const active = useScrollSpy();
   return (
-    <div className="relative min-h-screen bg-ink font-body text-paper">
-      {/* ambient layers */}
-      <div className="bg-dotgrid pointer-events-none fixed inset-0 z-0 opacity-60" />
-      <div className="pointer-events-none fixed -top-40 right-[-10%] z-0 h-[520px] w-[520px] rounded-full bg-teal/10 blur-[130px] glow-drift" />
-      <div className="pointer-events-none fixed bottom-[-15%] left-[-8%] z-0 h-[480px] w-[480px] rounded-full bg-amber/10 blur-[130px] glow-drift-slow" />
-      <div className="noise-overlay" />
-
-      {/* progress */}
-      <div className="fixed inset-x-0 top-0 z-50 h-[3px] bg-line/40">
-        <div
-          className="h-full bg-gradient-to-r from-teal via-sky to-amber transition-[width] duration-150 ease-out"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-
-      {/* ---------- sidebar (desktop) ---------- */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-[272px] flex-col border-r border-line bg-ink2/85 backdrop-blur-sm lg:flex">
-        <div className="border-b border-line px-6 py-6">
-          <div className="flex items-center gap-2.5">
-            <span className="clip-corner flex h-9 w-9 items-center justify-center bg-amber text-ink">
-              <Ic.eye className="h-4.5 w-4.5" />
+    <header className="sticky top-0 z-50 border-b border-line bg-bg/85 backdrop-blur-md">
+      <div className="max-w-[1200px] mx-auto px-5 h-[54px] flex items-center gap-5">
+        <a href="#board" className="flex items-center gap-3 shrink-0">
+          <span className="w-7 h-7 rounded-md bg-ok/15 border border-ok/40 grid place-items-center">
+            <svg viewBox="0 0 16 16" className="w-4 h-4 text-ok" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+              <path d="M2 11.5 5.5 8 8 10l4-5M12 5h2v2" />
+            </svg>
+          </span>
+          <span className="font-display font-extrabold tracking-tight text-[15px] leading-none">
+            MIAD MARKET
+            <span className="block font-mono font-normal text-[9px] tracking-[0.22em] text-mut mt-1">
+              BACKEND SANS WORDPRESS
             </span>
-            <div>
-              <p className="font-display text-[15px] font-bold leading-tight tracking-tight">
-                Audit Dossier
-              </p>
-              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-dim">
-                {PROJECT.ref}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <nav className="flex-1 overflow-y-auto px-4 py-6">
-          <p className="px-2 pb-3 font-mono text-[10px] uppercase tracking-[0.24em] text-dim">
-            Sections du rapport
-          </p>
-          <ul className="space-y-1">
-            {NAV.map((n) => {
-              const isActive = active === n.id;
-              return (
-                <li key={n.id}>
-                  <a
-                    href={`#${n.id}`}
-                    className={`group flex items-center gap-3 border-l-2 px-3 py-2.5 transition-all duration-200 ${
-                      isActive
-                        ? "border-amber bg-panel text-paper"
-                        : "border-transparent text-mist hover:border-line2 hover:bg-panel/60 hover:text-paper"
-                    }`}
-                  >
-                    <span
-                      className={`font-mono text-[10.5px] tabular-nums transition-colors ${
-                        isActive ? "text-amber" : "text-dim group-hover:text-mist"
-                      }`}
-                    >
-                      {n.num}
-                    </span>
-                    <span className="font-display text-[13.5px] font-medium tracking-wide">
-                      {n.label}
-                    </span>
-                    {isActive && (
-                      <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber" />
-                    )}
-                  </a>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-
-        <div className="border-t border-line px-6 py-5">
-          <div className="flex items-center gap-2.5 text-amber">
-            <Ic.lock className="h-4 w-4" />
-            <p className="font-mono text-[10.5px] uppercase tracking-[0.18em]">
-              Mode lecture seule
-            </p>
-          </div>
-          <p className="mt-2 text-[12px] leading-snug text-dim">
-            Aucune ligne du projet n'a été modifiée pendant cette analyse.
-          </p>
-        </div>
-      </aside>
-
-      {/* ---------- topbar (mobile) ---------- */}
-      <div className="sticky top-0 z-40 border-b border-line bg-ink2/90 backdrop-blur-sm lg:hidden">
-        <div className="flex items-center gap-2.5 px-4 pt-3">
-          <span className="clip-corner flex h-7 w-7 items-center justify-center bg-amber text-ink">
-            <Ic.eye className="h-3.5 w-3.5" />
           </span>
-          <p className="font-display text-sm font-bold">Audit Dossier</p>
-          <span className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-amber">
-            <Ic.lock className="h-3 w-3" /> lecture seule
-          </span>
-        </div>
-        <nav className="flex gap-1 overflow-x-auto px-3 py-2.5 [scrollbar-width:none]">
-          {NAV.map((n) => (
+        </a>
+        <nav className="hidden lg:flex items-center gap-1 ml-auto overflow-x-auto">
+          {SECTIONS.map((s) => (
             <a
-              key={n.id}
-              href={`#${n.id}`}
-              className={`whitespace-nowrap border px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
-                active === n.id
-                  ? "border-amber/60 bg-amber/10 text-amber"
-                  : "border-line text-mist hover:text-paper"
+              key={s.id}
+              href={`#${s.id}`}
+              className={`px-2.5 py-1.5 rounded-md font-mono text-[11px] whitespace-nowrap transition-colors ${
+                active === s.id
+                  ? "bg-ok/12 text-ok border border-ok/30"
+                  : "text-mut hover:text-ink border border-transparent"
               }`}
             >
-              {n.num} · {n.label}
+              <span className="opacity-60 mr-1">{s.n}</span>
+              {s.label}
             </a>
           ))}
         </nav>
+        <div className="ml-auto lg:ml-0 flex items-center gap-2 shrink-0">
+          <StatusDot tone="ok" />
+          <span className="font-mono text-[10.5px] text-mut hidden sm:inline">
+            socle initial prêt
+          </span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* ============================================================
+   Ticker Kafka
+   ============================================================ */
+
+const TOPICS = [
+  "order.created",
+  "payment.confirmed",
+  "payment.failed",
+  "product.created",
+  "product.updated",
+  "vendor.registered",
+  "order.status_changed",
+  "customer.registered",
+];
+
+function Ticker() {
+  const items = [...TOPICS, ...TOPICS];
+  return (
+    <div className="border-y border-line bg-bg2/60 overflow-hidden">
+      <div className="ticker-track flex items-center gap-8 py-2 w-max">
+        {items.map((t, i) => (
+          <span key={i} className="flex items-center gap-8">
+            <span className="font-mono text-[11px] text-warn/80">{t}</span>
+            <svg viewBox="0 0 12 12" className="w-2.5 h-2.5 text-dim" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <path d="M2 6h7M6.5 3 9.5 6l-3 3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Diagramme de services interactif
+   ============================================================ */
+
+function MeshDiagram() {
+  const [sel, setSel] = useState<Service>(SERVICES[1]);
+  const [hov, setHov] = useState<string | null>(null);
+  const rowServices = SERVICES.filter((s) => s.y === 130);
+  const notification = SERVICES.find((s) => s.id === "notification") as Service;
+
+  const stroke = (s: Service) =>
+    sel.id === s.id ? "#4fd68b" : hov === s.id ? "#33463b" : "#24322a";
+
+  return (
+    <div className="panel p-5 flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="label-mono">Carte du système</p>
+          <h3 className="font-display font-bold text-[17px] mt-1">
+            7 services, un bus, zéro base partagée
+          </h3>
+        </div>
+        <div className="hidden md:flex flex-col gap-1.5 font-mono text-[10px] text-mut text-right">
+          <span className="flex items-center gap-2 justify-end">
+            <span className="w-5 h-0 border-t border-dashed border-warn" /> événement Kafka
+          </span>
+          <span className="flex items-center gap-2 justify-end">
+            <span className="w-5 h-0 border-t border-dashed border-infra" /> gRPC synchrone
+          </span>
+          <span className="flex items-center gap-2 justify-end">
+            <span className="w-5 h-0 border-t border-dotted border-dim" /> infra existante
+          </span>
+        </div>
       </div>
 
-      {/* ---------- main ---------- */}
-      <main className="relative z-10 lg:pl-[272px]">
-        <div className="mx-auto max-w-5xl px-5 sm:px-10 lg:px-14">
-          {/* ============ COVER ============ */}
-          <header className="scanline relative overflow-hidden border-b border-line pt-14 pb-0 sm:pt-20">
-            <Reveal>
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-[11px] uppercase tracking-[0.22em] text-dim">
-                <span>Rapport nº <span className="text-amber">{PROJECT.ref}</span></span>
-                <span className="hidden h-3 w-px bg-line2 sm:block" />
-                <span>{PROJECT.date}</span>
-                <span className="hidden h-3 w-px bg-line2 sm:block" />
-                <span className="text-teal">analyse statique complète</span>
-              </div>
-            </Reveal>
+      <svg viewBox="0 0 760 430" className="w-full h-auto select-none" role="img" aria-label="Architecture microservices MIAD Market">
+        {/* passerelle → services */}
+        {rowServices.map((s) => (
+          <line
+            key={`gw-${s.id}`}
+            x1={380}
+            y1={64}
+            x2={s.x + NODE_W / 2}
+            y2={s.y}
+            stroke="#33463b"
+            strokeWidth="1"
+            opacity="0.55"
+          />
+        ))}
 
-            <div className="mt-8 grid gap-12 lg:grid-cols-[1.45fr_1fr] lg:gap-8">
-              <div>
-                <Reveal delay={80}>
-                  <h1 className="font-display text-[clamp(2.6rem,6vw,4.4rem)] font-bold leading-[0.98] tracking-tight text-paper">
-                    Compte rendu
-                    <br />
-                    d'audit <span className="text-amber">intégral</span>
-                  </h1>
-                </Reveal>
-                <Reveal delay={180}>
-                  <p className="mt-6 max-w-xl text-[15.5px] leading-relaxed text-mist">
-                    Analyse complète du projet{" "}
-                    <span className="font-mono text-[13.5px] text-sky">
-                      {PROJECT.name}
-                    </span>{" "}
-                    — structure, stack, dépendances, code et outillage — réalisée
-                    selon un contrat strict :{" "}
-                    <strong className="font-semibold text-paper">
-                      observer, mesurer, ne rien toucher.
-                    </strong>
-                  </p>
-                </Reveal>
-                <Reveal delay={280}>
-                  <div className="mt-8 flex flex-wrap items-center gap-3">
-                    <Badge tone="warn">
-                      <Ic.lock className="h-3 w-3" /> {PROJECT.mode}
-                    </Badge>
-                    <Badge tone="info">
-                      <Ic.file className="h-3 w-3" /> {PROJECT.filesAnalyzed} fichiers
-                    </Badge>
-                    <Badge tone="alert">
-                      <Ic.warn className="h-3 w-3" /> {ISSUES.length} constats
-                    </Badge>
-                    <Badge tone="ok">
-                      <Ic.check className="h-3 w-3" /> {RECOS.length} recommandations
-                    </Badge>
-                  </div>
-                </Reveal>
-
-                <Reveal delay={360}>
-                  <div className="relative mt-10 inline-block">
-                    <div className="stamp rotate-[-7deg] px-6 py-3 text-center">
-                      <p className="font-display text-lg font-bold uppercase tracking-[0.3em] text-amber">
-                        Lecture seule
-                      </p>
-                      <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-amber/70">
-                        0 octet modifié · contrat respecté
-                      </p>
-                    </div>
-                  </div>
-                </Reveal>
-              </div>
-
-              <Reveal delay={240} className="flex items-start justify-center lg:justify-end lg:pt-2">
-                <div className="clip-corner border border-line bg-panel/70 p-8 backdrop-blur-sm">
-                  <Gauge
-                    value={PROJECT.score}
-                    label="Score global"
-                    caption={PROJECT.verdict}
-                  />
-                </div>
-              </Reveal>
-            </div>
-
-            {/* ticker */}
-            <div className="relative mt-12 overflow-hidden border-t border-line py-3">
-              <div className="ticker-track flex w-max items-center gap-8 whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.22em] text-dim">
-                {[...TICKER, ...TICKER].map((t, i) => (
-                  <span key={i} className="flex items-center gap-8">
-                    <span className="transition-colors hover:text-amber">{t}</span>
-                    <span className="text-line2">·</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          </header>
-
-          {/* ============ 01 SYNTHÈSE ============ */}
-          <section id="synthese" className="scroll-mt-28 py-16 sm:py-20">
-            <SectionHead
-              num="01"
-              kicker="Vue d'ensemble"
-              title="Synthèse exécutive"
-              intro="Le projet est un espace de travail React + Vite + TypeScript flambant neuf… dont l'application reste à écrire. Tout l'outillage répond présent ; le code métier, lui, n'existe pas encore."
+        {/* publications Kafka */}
+        {["auth", "catalog", "vendor", "order", "payment"].map((id, i) => {
+          const s = SERVICES.find((x) => x.id === id) as Service;
+          const x = s.x + NODE_W / 2 + (id === "payment" ? 14 : 0);
+          return (
+            <line
+              key={`pub-${id}`}
+              x1={x}
+              y1={176}
+              x2={x - (id === "payment" ? 24 : 0)}
+              y2={250}
+              stroke="#f2b44c"
+              strokeWidth="1.3"
+              className="edge-flow"
+              opacity={0.5 + (i % 2) * 0.2}
             />
+          );
+        })}
 
-            <div className="grid grid-cols-2 gap-px overflow-hidden border border-line bg-line sm:grid-cols-3">
-              {COUNTERS.map((c, i) => (
-                <Reveal key={c.label} delay={i * 70} className="bg-panel">
-                  <div className="group h-full px-5 py-6 transition-colors duration-300 hover:bg-panel2 sm:px-7 sm:py-8">
-                    <p className="font-display text-4xl font-bold tabular-nums tracking-tight sm:text-5xl">
-                      <Counter
-                        to={c.value}
-                        suffix={c.suffix}
-                        className={
-                          c.tone === "ok"
-                            ? "text-moss"
-                            : c.tone === "warn"
-                            ? "text-amber"
-                            : "text-paper"
-                        }
-                      />
-                    </p>
-                    <p className="mt-2 text-[13px] leading-snug text-mist">{c.label}</p>
-                    <span
-                      className={`mt-4 block h-[3px] w-8 transition-all duration-300 group-hover:w-14 ${TONE_DOT[c.tone as Tone]}`}
-                    />
-                  </div>
-                </Reveal>
-              ))}
+        {/* consumptions Kafka */}
+        <path d="M 545 250 C 545 215 556 205 560 180" fill="none" stroke="#f2b44c" strokeWidth="1.4" className="edge-flow-slow" />
+        <path d="M 540 284 C 560 322 588 342 630 362" fill="none" stroke="#f2b44c" strokeWidth="1.4" className="edge-flow-slow" />
+
+        {/* gRPC synchrone order ↔ shipping */}
+        <line x1={496} y1={153} x2={640} y2={153} stroke="#5fc8de" strokeWidth="1.3" className="edge-flow-slow" />
+        <text x={568} y={145} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="8.5" fill="#5fc8de">
+          gRPC au checkout
+        </text>
+
+        {/* infra existante */}
+        <path d="M 50 176 C 18 250 130 330 252 362" fill="none" stroke="#62796e" strokeWidth="1" strokeDasharray="2 5" opacity="0.5" />
+        <path d="M 196 176 C 210 270 330 330 425 358" fill="none" stroke="#62796e" strokeWidth="1" strokeDasharray="2 5" opacity="0.5" />
+        <line x1={620} y1={162} x2={642} y2={198} stroke="#62796e" strokeWidth="1" strokeDasharray="2 5" opacity="0.7" />
+
+        {/* Vectorize */}
+        <line x1={196} y1={130} x2={196} y2={106} stroke="#62796e" strokeWidth="1" strokeDasharray="2 5" opacity="0.7" />
+        <rect x={148} y={82} width={96} height={24} rx={6} fill="#101814" stroke="#24322a" />
+        <text x={196} y={98} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="9" fill="#8fa59a">
+          Vectorize
+        </text>
+
+        {/* passerelle */}
+        <rect x={310} y={24} width={140} height={40} rx={8} fill="#18231c" stroke="#33463b" />
+        <text x={380} y={42} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="11" fontWeight="700" fill="#e9f2ec">
+          CADDY
+        </text>
+        <text x={380} y={55} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="8" fill="#8fa59a">
+          passerelle REST/JSON
+        </text>
+
+        {/* Stripe / PayDunya */}
+        <rect x={628} y={198} width={120} height={26} rx={6} fill="#101814" stroke="#24322a" />
+        <text x={688} y={215} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="9" fill="#8fa59a">
+          Stripe · PayDunya
+        </text>
+
+        {/* barre Kafka */}
+        <rect x={90} y={250} width={480} height={34} rx={7} fill="#1a1710" stroke="#f2b44c" strokeOpacity={0.35} />
+        <text x={104} y={266} fontFamily="JetBrains Mono" fontSize="10.5" fontWeight="700" fill="#f2b44c">
+          KAFKA
+        </text>
+        <text x={104} y={277} fontFamily="JetBrains Mono" fontSize="7.5" fill="#8fa59a">
+          order.created · payment.confirmed · product.updated · vendor.registered · customer.registered
+        </text>
+
+        {/* infra du bas */}
+        {[
+          { x: 40, w: 160, t: "PostgreSQL 16", s: "7 bases dédiées" },
+          { x: 240, w: 120, t: "Redis 7", s: "cache + sessions" },
+          { x: 400, w: 160, t: "R2 + CDN", s: "existant — inchangé" },
+        ].map((b) => (
+          <g key={b.t}>
+            <rect x={b.x} y={360} width={b.w} height={44} rx={8} fill="#101814" stroke="#24322a" />
+            <text x={b.x + 14} y={379} fontFamily="JetBrains Mono" fontSize="10" fontWeight="700" fill="#5fc8de">
+              {b.t}
+            </text>
+            <text x={b.x + 14} y={393} fontFamily="JetBrains Mono" fontSize="8" fill="#62796e">
+              {b.s}
+            </text>
+          </g>
+        ))}
+
+        {/* paquets animés */}
+        {[
+          { d: "M 444 176 L 444 250", dur: "1.9s", begin: "0s" },
+          { d: "M 545 250 C 545 215 556 205 560 180", dur: "2.3s", begin: "0.7s" },
+          { d: "M 540 284 C 560 322 588 342 630 362", dur: "2.6s", begin: "1.3s" },
+          { d: "M 72 176 L 72 250", dur: "2.1s", begin: "1s" },
+        ].map((p, i) => (
+          <circle key={i} r="2.6" fill="#f2b44c">
+            <animateMotion dur={p.dur} begin={p.begin} repeatCount="indefinite" path={p.d} />
+          </circle>
+        ))}
+
+        {/* nœuds services */}
+        {rowServices.map((s) => (
+          <g
+            key={s.id}
+            onClick={() => setSel(s)}
+            onMouseEnter={() => setHov(s.id)}
+            onMouseLeave={() => setHov(null)}
+            className="cursor-pointer"
+          >
+            <rect
+              x={s.x}
+              y={s.y}
+              width={NODE_W}
+              height={NODE_H}
+              rx={8}
+              fill={sel.id === s.id ? "#1d2a22" : "#141d18"}
+              stroke={stroke(s)}
+              strokeWidth={sel.id === s.id ? 1.6 : 1}
+            />
+            <text x={s.x + NODE_W / 2} y={s.y + 20} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="10.5" fontWeight="700" fill="#e9f2ec">
+              {s.name}
+            </text>
+            <text x={s.x + NODE_W / 2} y={s.y + 35} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="8.5" fill="#62796e">
+              :{s.port}
+            </text>
+          </g>
+        ))}
+
+        {/* notification-svc */}
+        <g
+          onClick={() => setSel(notification)}
+          onMouseEnter={() => setHov(notification.id)}
+          onMouseLeave={() => setHov(null)}
+          className="cursor-pointer"
+        >
+          <rect
+            x={notification.x}
+            y={notification.y}
+            width={150}
+            height={44}
+            rx={8}
+            fill={sel.id === notification.id ? "#1d2a22" : "#141d18"}
+            stroke={stroke(notification)}
+            strokeWidth={sel.id === notification.id ? 1.6 : 1}
+          />
+          <text x={notification.x + 75} y={notification.y + 19} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="10.5" fontWeight="700" fill="#e9f2ec">
+            notification-svc
+          </text>
+          <text x={notification.x + 75} y={notification.y + 34} textAnchor="middle" fontFamily="JetBrains Mono" fontSize="8.5" fill="#62796e">
+            consommateur pur · :8087
+          </text>
+        </g>
+      </svg>
+
+      {/* fiche du service sélectionné */}
+      <div className="grid md:grid-cols-[1.2fr_1fr] gap-4">
+        <div className="bg-bg2/70 border border-line rounded-lg p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="font-mono text-[13px] font-bold text-ok">{sel.name}</p>
+            <div className="flex gap-2">
+              <span className="chip">:{sel.port}</span>
+              <span className="chip !text-infra !border-infra/30">{sel.db}</span>
             </div>
-
-            <Reveal delay={120} className="mt-10">
-              <div className="border border-line bg-panel/60 p-6 sm:p-8">
-                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-dim">
-                  Notation par domaine
-                </p>
-                <div className="mt-6 grid gap-x-10 gap-y-7 lg:grid-cols-2">
-                  {SUBSCORES.map((s, i) => (
-                    <ScoreBar key={s.label} {...s} delay={i * 140} />
-                  ))}
-                </div>
-              </div>
-            </Reveal>
-          </section>
-
-          {/* ============ 02 STACK ============ */}
-          <section id="stack" className="scroll-mt-28 border-t border-line py-16 sm:py-20">
-            <SectionHead
-              num="02"
-              kicker="Infrastructure"
-              title="Stack technique"
-              intro="Un socle 2025+ cohérent : bundler rapide, typage strict, CSS utilitaire de dernière génération. Aucune pièce exotique, aucune dette d'outillage."
-            />
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              {[
-                {
-                  icon: Ic.chip,
-                  name: "Vite 6.3.5",
-                  desc: "Bundler et serveur de développement — config minimale de 16 lignes, plugins React et Tailwind, serveur fixé sur 0.0.0.0:3000.",
-                  tag: "build",
-                  tone: "ok" as Tone,
-                },
-                {
-                  icon: Ic.code,
-                  name: "React 18.2",
-                  desc: "Bibliothèque d'interface, montée via createRoot dans main.tsx. Montage fonctionnel mais sans StrictMode.",
-                  tag: "ui",
-                  tone: "info" as Tone,
-                },
-                {
-                  icon: Ic.doc,
-                  name: "TypeScript 5.7",
-                  desc: "Mode strict activé, target ES2020, résolution « bundler ». Vérifiable par le script « npm run typecheck ».",
-                  tag: "typage",
-                  tone: "ok" as Tone,
-                },
-                {
-                  icon: Ic.box,
-                  name: "Tailwind CSS 4.1.7",
-                  desc: "Intégré via le plugin Vite officiel — une seule ligne de CSS suffit (@import \"tailwindcss\"). Aucun thème personnalisé défini.",
-                  tag: "style",
-                  tone: "info" as Tone,
-                },
-              ].map((s, i) => (
-                <Reveal key={s.name} delay={i * 90}>
-                  <div className="group h-full border border-line bg-panel p-6 transition-all duration-300 hover:-translate-y-1 hover:border-line2 hover:bg-panel2">
-                    <div className="flex items-center justify-between">
-                      <span className="flex h-10 w-10 items-center justify-center border border-line2 text-teal transition-colors group-hover:border-teal/50 group-hover:text-paper">
-                        <s.icon className="h-5 w-5" />
-                      </span>
-                      <Badge tone={s.tone}>{s.tag}</Badge>
-                    </div>
-                    <h3 className="mt-4 font-display text-lg font-bold text-paper">
-                      {s.name}
-                    </h3>
-                    <p className="mt-2 text-[13.5px] leading-relaxed text-mist">{s.desc}</p>
-                  </div>
-                </Reveal>
-              ))}
-            </div>
-
-            <Reveal delay={160} className="mt-6">
-              <div className="flex flex-wrap items-center gap-x-8 gap-y-2 border border-dashed border-line2 px-6 py-4 font-mono text-[12px] text-mist">
-                <span className="uppercase tracking-[0.2em] text-dim">Scripts npm</span>
-                <span><span className="text-teal">dev</span> — serveur local</span>
-                <span><span className="text-teal">build</span> — bundle de production</span>
-                <span><span className="text-teal">typecheck</span> — contrôle TS</span>
-                <span className="text-coral">test — absent</span>
-                <span className="text-coral">lint — absent</span>
-              </div>
-            </Reveal>
-          </section>
-
-          {/* ============ 03 FICHIERS ============ */}
-          <section id="fichiers" className="scroll-mt-28 border-t border-line py-16 sm:py-20">
-            <SectionHead
-              num="03"
-              kicker="Anatomie"
-              title="Fichiers & arborescence"
-              intro="Huit fichiers, cent quatre-vingt-trois lignes : le projet tient sur une page. Chaque entrée ci-dessous a été ouverte, lue et annotée manuellement."
-            />
-
-            <Reveal>
-              <div className="overflow-hidden border border-line bg-panel/60">
-                {TREE.map((f, i) => {
-                  const IconCmp = FILE_ICON[f.kind] ?? Ic.file;
-                  return (
-                    <div
-                      key={f.name + i}
-                      className={`row-slide group flex flex-col gap-1 border-b border-line/60 px-4 py-3.5 last:border-b-0 hover:bg-panel2 sm:flex-row sm:items-center sm:gap-4 sm:px-6 ${
-                        f.kind === "folder" ? "bg-ink2/60" : ""
-                      }`}
-                      style={{ paddingLeft: `${(f.kind === "folder" ? 16 : 24) + f.depth * 26}px` }}
-                    >
-                      <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <span
-                          className={`shrink-0 ${
-                            f.kind === "folder"
-                              ? "text-amber"
-                              : f.status === "alert"
-                              ? "text-coral"
-                              : f.status === "warn"
-                              ? "text-amber"
-                              : "text-sky"
-                          }`}
-                        >
-                          <IconCmp className="h-4.5 w-4.5" />
-                        </span>
-                        <div className="min-w-0">
-                          <p
-                            className={`truncate font-mono text-[13.5px] ${
-                              f.kind === "folder"
-                                ? "font-semibold text-paper"
-                                : "text-paper/90"
-                            }`}
-                          >
-                            {f.name}
-                          </p>
-                          <p className="truncate text-[12.5px] text-mist">{f.role}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 pl-8 sm:pl-0">
-                        {f.lines !== undefined && (
-                          <span className="font-mono text-[11px] tabular-nums text-dim">
-                            {f.lines} L
-                          </span>
-                        )}
-                        {f.note && (
-                          <span
-                            className={`hidden max-w-[260px] truncate font-mono text-[11px] lg:block ${
-                              f.status === "alert" ? "text-coral/85" : "text-amber/85"
-                            }`}
-                            title={f.note}
-                          >
-                            › {f.note}
-                          </span>
-                        )}
-                        <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${TONE_DOT[f.status]}`}
-                          title={f.status}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </Reveal>
-
-            <Reveal delay={120} className="mt-5">
-              <p className="flex items-start gap-2.5 text-[13px] leading-relaxed text-dim">
-                <Ic.warn className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
-                Lecture : le point coloré indique l'état du fichier —{" "}
-                <span className="text-moss">sain</span>,{" "}
-                <span className="text-sky">informationnel</span>,{" "}
-                <span className="text-amber">à surveiller</span>,{" "}
-                <span className="text-coral">bloquant</span>.
-              </p>
-            </Reveal>
-          </section>
-
-          {/* ============ 04 DÉPENDANCES ============ */}
-          <section id="dependances" className="scroll-mt-28 border-t border-line py-16 sm:py-20">
-            <SectionHead
-              num="04"
-              kicker="Manifeste"
-              title="Dépendances : le grand écart"
-              intro={`Sur ${PROJECT.prodDeps} dépendances de production déclarées, une seule est réellement importée par le code. Le manifeste décrit une application riche (drag & drop, graphiques, backend Supabase, routage…) que le code ne contient pas.`}
-            />
-
-            <Reveal>
-              <p className="mb-4 font-mono text-[11px] uppercase tracking-[0.24em] text-dim">
-                Production — 13 paquets
-              </p>
-              <div className="overflow-hidden border border-line bg-panel/60">
-                {PROD_DEPS.map((d) => (
-                  <div
-                    key={d.name}
-                    className="row-slide group grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 border-b border-line/60 px-4 py-3 last:border-b-0 hover:bg-panel2 sm:grid-cols-[220px_1fr_110px_150px] sm:px-6"
-                  >
-                    <p className="font-mono text-[13px] text-paper">{d.name}</p>
-                    <p className="col-span-2 text-[12.5px] text-mist sm:col-span-1">
-                      {d.role}
-                      {d.note && (
-                        <span className="block text-[11.5px] text-dim sm:hidden">
-                          {d.note}
-                        </span>
-                      )}
-                    </p>
-                    <p className="hidden font-mono text-[12px] text-sky sm:block">{d.version}</p>
-                    <div className="col-start-2 sm:col-start-4 sm:justify-self-end">
-                      {d.used ? (
-                        <Badge tone="ok">
-                          <Ic.check className="h-3 w-3" /> importée
-                        </Badge>
-                      ) : (
-                        <Badge tone="warn">
-                          <Ic.warn className="h-3 w-3" /> 0 import
-                        </Badge>
-                      )}
-                    </div>
-                    {d.note && (
-                      <p className="hidden text-[11.5px] text-dim sm:col-span-4 sm:block sm:pl-1">
-                        ↳ {d.note}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Reveal>
-
-            <Reveal delay={140} className="mt-10">
-              <p className="mb-4 font-mono text-[11px] uppercase tracking-[0.24em] text-dim">
-                Développement — 9 paquets
-              </p>
-              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                {DEV_DEPS.map((d) => (
-                  <div
-                    key={d.name}
-                    className="group border border-line bg-panel px-4 py-3.5 transition-colors hover:border-line2 hover:bg-panel2"
-                  >
-                    <div className="flex items-baseline justify-between gap-3">
-                      <p className="truncate font-mono text-[12.5px] text-paper">{d.name}</p>
-                      <p className="shrink-0 font-mono text-[11px] text-teal">{d.version}</p>
-                    </div>
-                    <p className="mt-1 text-[12px] text-mist">{d.role}</p>
-                  </div>
-                ))}
-              </div>
-            </Reveal>
-
-            <Reveal delay={200} className="mt-8">
-              <div className="clip-corner-bl border border-amber/35 bg-amber/[0.06] px-6 py-5">
-                <p className="flex items-start gap-3 text-[14px] leading-relaxed text-paper/90">
-                  <Ic.flag className="mt-0.5 h-4.5 w-4.5 shrink-0 text-amber" />
-                  <span>
-                    <strong className="font-semibold text-amber">Signal faible à noter :</strong>{" "}
-                    des typages (<span className="font-mono text-[12.5px]">@types/uuid</span>,{" "}
-                    <span className="font-mono text-[12.5px]">@types/canvas-confetti</span>) ont
-                    été installés pour des bibliothèques jamais importées — la preuve que ces
-                    dépendances étaient prévues, puis abandonnées en cours de route.
-                  </span>
-                </p>
-              </div>
-            </Reveal>
-          </section>
-
-          {/* ============ 05 CONSTATS ============ */}
-          <section id="constats" className="scroll-mt-28 border-t border-line py-16 sm:py-20">
-            <SectionHead
-              num="05"
-              kicker="Diagnostic"
-              title="Constats détaillés"
-              intro="Cinq motifs de satisfaction, huit points de vigilance classés par sévérité. Chaque constat renvoie au fichier source exact — vérifiable en trente secondes."
-            />
-
-            <div className="grid gap-10 lg:grid-cols-[1fr_1.25fr]">
-              {/* strengths */}
-              <Reveal>
-                <div className="flex items-center gap-3">
-                  <span className="flex h-8 w-8 items-center justify-center border border-moss/40 bg-moss/10 text-moss">
-                    <Ic.check className="h-4 w-4" />
-                  </span>
-                  <h3 className="font-display text-lg font-bold text-paper">
-                    Points forts <span className="text-moss">×{STRENGTHS.length}</span>
-                  </h3>
-                </div>
-                <ul className="mt-5 space-y-3">
-                  {STRENGTHS.map((s, i) => (
-                    <li
-                      key={s.title}
-                      className="group border border-line border-l-2 border-l-moss/70 bg-panel px-5 py-4 transition-all duration-300 hover:translate-x-1 hover:bg-panel2"
-                    >
-                      <p className="font-display text-[14.5px] font-semibold text-paper">
-                        <span className="mr-2 font-mono text-[11px] text-moss tabular-nums">
-                          {String(i + 1).padStart(2, "0")}
-                        </span>
-                        {s.title}
-                      </p>
-                      <p className="mt-1.5 text-[13px] leading-relaxed text-mist">{s.detail}</p>
-                    </li>
-                  ))}
-                </ul>
-              </Reveal>
-
-              {/* issues */}
-              <Reveal delay={120}>
-                <div className="flex items-center gap-3">
-                  <span className="flex h-8 w-8 items-center justify-center border border-coral/40 bg-coral/10 text-coral">
-                    <Ic.warn className="h-4 w-4" />
-                  </span>
-                  <h3 className="font-display text-lg font-bold text-paper">
-                    Vigilances <span className="text-coral">×{ISSUES.length}</span>
-                  </h3>
-                </div>
-                <ul className="mt-5 space-y-3">
-                  {ISSUES.map((iss, i) => (
-                    <li
-                      key={iss.title}
-                      className="group border border-line bg-panel px-5 py-4 transition-all duration-300 hover:translate-x-1 hover:border-line2 hover:bg-panel2"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge
-                          tone={
-                            iss.sev === "haute"
-                              ? "alert"
-                              : iss.sev === "moyenne"
-                              ? "warn"
-                              : "info"
-                          }
-                        >
-                          {iss.sev}
-                        </Badge>
-                        <p className="font-display text-[14.5px] font-semibold text-paper">
-                          {iss.title}
-                        </p>
-                        <span className="ml-auto font-mono text-[11px] text-dim transition-colors group-hover:text-sky">
-                          {iss.file}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-[13px] leading-relaxed text-mist">{iss.detail}</p>
-                    </li>
-                  ))}
-                </ul>
-              </Reveal>
-            </div>
-          </section>
-
-          {/* ============ 06 TERMINAL ============ */}
-          <section id="terminal" className="scroll-mt-28 border-t border-line py-16 sm:py-20">
-            <SectionHead
-              num="06"
-              kicker="Trace brute"
-              title="Journal d'analyse"
-              intro="La séance d'audit condensée en douze lignes, rejouée ci-dessous caractère par caractère."
-            />
-            <Reveal>
-              <Terminal lines={TERMINAL_LINES} />
-            </Reveal>
-          </section>
-
-          {/* ============ 07 RECOMMANDATIONS ============ */}
-          <section id="recommandations" className="scroll-mt-28 border-t border-line py-16 sm:py-20">
-            <SectionHead
-              num="07"
-              kicker="Plan d'action"
-              title="Recommandations priorisées"
-              intro="Cinq chantiers classés par priorité. Conformément au mandat, aucune de ces actions n'a été appliquée : elles sont proposées, pas exécutées."
-            />
-
-            <Reveal className="mb-8">
-              <div className="flex items-center gap-3 border border-line bg-ink2/70 px-5 py-4">
-                <Ic.lock className="h-5 w-5 shrink-0 text-amber" />
-                <p className="font-mono text-[12px] uppercase tracking-[0.16em] text-mist">
-                  Modifications appliquées à ce jour : <span className="text-paper">0</span>
-                </p>
-                <span className="ml-auto hidden sm:block">
-                  <Badge tone="warn">mandat : lecture seule</Badge>
-                </span>
-              </div>
-            </Reveal>
-
-            <ol className="space-y-4">
-              {RECOS.map((r, i) => (
-                <Reveal key={r.title} delay={i * 90}>
-                  <li className="group grid gap-5 border border-line bg-panel p-6 transition-all duration-300 hover:border-line2 hover:bg-panel2 sm:grid-cols-[64px_1fr] sm:p-7">
-                    <div className="flex sm:flex-col sm:items-center sm:gap-2">
-                      <span
-                        className={`clip-corner flex h-11 w-11 items-center justify-center font-display text-[15px] font-bold ${
-                          r.priority === "P1"
-                            ? "bg-amber text-ink"
-                            : r.priority === "P2"
-                            ? "bg-sky/20 text-sky ring-1 ring-sky/40"
-                            : "bg-panel2 text-mist ring-1 ring-line2"
-                        }`}
-                      >
-                        {r.priority}
-                      </span>
-                    </div>
-                    <div>
-                      <h3 className="font-display text-[17px] font-bold text-paper transition-colors group-hover:text-amber">
-                        {r.title}
-                      </h3>
-                      <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                        <div>
-                          <p className="font-mono text-[10.5px] uppercase tracking-[0.22em] text-dim">
-                            Pourquoi
-                          </p>
-                          <p className="mt-1.5 text-[13.5px] leading-relaxed text-mist">{r.why}</p>
-                        </div>
-                        <div>
-                          <p className="font-mono text-[10.5px] uppercase tracking-[0.22em] text-dim">
-                            Action proposée
-                          </p>
-                          <p className="mt-1.5 flex items-start gap-2 text-[13.5px] leading-relaxed text-paper/85">
-                            <Ic.arrow className="mt-1 h-3.5 w-3.5 shrink-0 text-teal" />
-                            {r.action}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </li>
-                </Reveal>
-              ))}
-            </ol>
-          </section>
-
-          {/* ============ 08 VERDICT ============ */}
-          <section id="verdict" className="scroll-mt-28 border-t border-line py-16 sm:py-24">
-            <SectionHead num="08" kicker="Conclusion" title="Verdict & méthode" />
-
-            <div className="grid gap-10 lg:grid-cols-[1.2fr_1fr]">
-              <Reveal>
-                <blockquote className="border-l-2 border-amber pl-6">
-                  <p className="font-display text-2xl font-bold leading-snug tracking-tight text-paper sm:text-[28px]">
-                    « Un chantier proprement préparé, dont il reste à construire
-                    la maison. »
-                  </p>
-                </blockquote>
-                <p className="mt-6 max-w-xl text-[14.5px] leading-relaxed text-mist">
-                  Note globale <strong className="font-semibold text-paper">{PROJECT.score}/100</strong> —{" "}
-                  {PROJECT.verdict.toLowerCase()}. L'infrastructure, le typage et la
-                  reproductibilité sont au niveau ; l'absence totale de code applicatif,
-                  de tests et d'outillage qualité explique la retenue de la note. Rien
-                  n'est cassé : tout est en attente.
-                </p>
-
-                <div className="mt-8">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-dim">
-                    Méthodologie
-                  </p>
-                  <ul className="mt-4 space-y-3">
-                    {[
-                      "Lecture intégrale des 8 fichiers du dépôt, ligne à ligne (183 lignes).",
-                      "Contrôle de cohérence entre index.html, main.tsx, vite.config.js et tsconfig.json.",
-                      "Inventaire du manifeste : 22 paquets croisés contre les imports réels de src/.",
-                      "Recherche d'usages (classes fa-*, appels Supabase, Router, tests, CI) — aucun trouvé.",
-                      "Scoring par domaine pondéré ; aucune écriture sur le dépôt pendant la mission.",
-                    ].map((m, i) => (
-                      <li key={i} className="flex items-start gap-3 text-[13.5px] leading-relaxed text-mist">
-                        <span className="mt-0.5 font-mono text-[11px] font-semibold text-teal tabular-nums">
-                          {String(i + 1).padStart(2, "0")}
-                        </span>
-                        {m}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </Reveal>
-
-              <Reveal delay={150}>
-                <div className="clip-corner border border-line bg-panel p-7">
-                  <div className="flex items-center justify-between border-b border-line pb-4">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-dim">
-                      Feuille de séance
-                    </p>
-                    <Ic.scale className="h-4.5 w-4.5 text-amber" />
-                  </div>
-                  <dl className="mt-5 space-y-4">
-                    {[
-                      ["Projet audité", PROJECT.name],
-                      ["Référence", PROJECT.ref],
-                      ["Période", PROJECT.date],
-                      ["Périmètre", "dépôt complet, statique"],
-                      ["Fichiers ouverts", `${PROJECT.filesAnalyzed} / ${PROJECT.filesAnalyzed}`],
-                      ["Lignes analysées", `${PROJECT.totalLines}`],
-                      ["Modifications", "0 (lecture seule)"],
-                      ["Verdict", `${PROJECT.score}/100`],
-                    ].map(([k, v]) => (
-                      <div key={k} className="flex items-baseline justify-between gap-4">
-                        <dt className="text-[13px] text-mist">{k}</dt>
-                        <dd className="border-b border-dotted border-line2 pb-0.5 font-mono text-[12.5px] text-paper">
-                          {v}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                  <div className="mt-7 border-t border-line pt-5">
-                    <p className="font-display text-lg font-bold text-paper">L'Auditeur</p>
-                    <p className="mt-1 text-[12.5px] leading-relaxed text-dim">
-                      Analyse automatisée assistée — chaque chiffre de ce rapport
-                      provient d'une lecture directe des fichiers du projet.
-                    </p>
-                  </div>
-                </div>
-              </Reveal>
-            </div>
-          </section>
-
-          {/* footer */}
-          <footer className="border-t border-line py-10">
-            <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
-              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-dim">
-                {PROJECT.ref} · {PROJECT.name} · {PROJECT.date}
-              </p>
-              <p className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.16em] text-mist">
-                <Ic.lock className="h-3.5 w-3.5 text-amber" />
-                rapport généré sans toucher au code source
-              </p>
-            </div>
-          </footer>
+          </div>
+          <p className="text-[13px] text-mut leading-relaxed mt-2">{sel.role}</p>
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {sel.tables.map((t) => (
+              <span key={t} className="chip !text-ink">{t}</span>
+            ))}
+          </div>
         </div>
-      </main>
+        <div className="bg-bg2/70 border border-line rounded-lg p-4 space-y-3">
+          <div>
+            <p className="label-mono mb-1.5">Publie</p>
+            {sel.publishes.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {sel.publishes.map((t) => (
+                  <span key={t} className="chip !text-warn !border-warn/30">{t}</span>
+                ))}
+              </div>
+            ) : (
+              <p className="font-mono text-[11px] text-dim">— rien (appelé en synchrone ou consommateur)</p>
+            )}
+          </div>
+          <div>
+            <p className="label-mono mb-1.5">Consomme</p>
+            {sel.consumes.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {sel.consumes.map((t) => (
+                  <span key={t} className="chip !text-warn !border-warn/30">{t}</span>
+                ))}
+              </div>
+            ) : (
+              <p className="font-mono text-[11px] text-dim">— aucun topic</p>
+            )}
+          </div>
+          <div>
+            <p className="label-mono mb-1.5">Extrait du contrat</p>
+            <div className="space-y-1">
+              {sel.sample.map((e) => (
+                <p key={e} className="font-mono text-[11px] text-ink/85">{e}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   System-check en direct (simulation fidèle au script réel)
+   ============================================================ */
+
+interface CheckRow {
+  id: string;
+  port: string;
+  status: "scan" | "ok";
+  checks: { label: string; base: number; kind: "ms" | "state" }[];
+}
+
+const BASE_ROWS: Omit<CheckRow, "status">[] = [
+  { id: "catalog-svc", port: "8081", checks: [{ label: "postgres", base: 3, kind: "ms" }, { label: "kafka pub", base: 0, kind: "state" }] },
+  { id: "vendor-svc", port: "8082", checks: [{ label: "postgres", base: 2, kind: "ms" }, { label: "kafka pub", base: 0, kind: "state" }] },
+  { id: "order-svc", port: "8083", checks: [{ label: "postgres", base: 4, kind: "ms" }, { label: "kafka pub", base: 0, kind: "state" }, { label: "reaper", base: 0, kind: "state" }] },
+  { id: "payment-svc", port: "8084", checks: [{ label: "postgres", base: 3, kind: "ms" }, { label: "kafka conso", base: 0, kind: "state" }, { label: "stripe", base: 0, kind: "state" }] },
+  { id: "shipping-svc", port: "8085", checks: [{ label: "postgres", base: 2, kind: "ms" }] },
+  { id: "auth-svc", port: "8086", checks: [{ label: "postgres", base: 3, kind: "ms" }, { label: "redis", base: 1, kind: "ms" }, { label: "jwt", base: 0, kind: "state" }] },
+  { id: "notification-svc", port: "8087", checks: [{ label: "postgres", base: 2, kind: "ms" }, { label: "kafka conso", base: 0, kind: "state" }] },
+];
+
+function jitter(base: number, kind: "ms" | "state") {
+  return kind === "ms" ? Math.max(1, base + Math.round(Math.random() * 4)) : 0;
+}
+
+function SystemCheck() {
+  const [rows, setRows] = useState<CheckRow[]>(() =>
+    BASE_ROWS.map((r) => ({ ...r, status: "scan", checks: r.checks.map((c) => ({ ...c })) }))
+  );
+  const timers = useRef<number[]>([]);
+
+  const run = () => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    setRows(BASE_ROWS.map((r) => ({ ...r, status: "scan", checks: r.checks.map((c) => ({ ...c })) })));
+    BASE_ROWS.forEach((r, i) => {
+      const t = window.setTimeout(() => {
+        setRows((prev) =>
+          prev.map((p) =>
+            p.id === r.id
+              ? { ...p, status: "ok", checks: p.checks.map((c) => ({ ...c, base: jitter(c.base, c.kind) })) }
+              : p
+          )
+        );
+      }, 420 + i * 190);
+      timers.current.push(t);
+    });
+  };
+
+  useEffect(() => {
+    run();
+    const iv = window.setInterval(() => {
+      setRows((prev) =>
+        prev.map((r) =>
+          r.status === "ok"
+            ? { ...r, checks: r.checks.map((c) => ({ ...c, base: jitter(c.base, c.kind) })) }
+            : r
+        )
+      );
+    }, 2600);
+    return () => {
+      clearInterval(iv);
+      timers.current.forEach(clearTimeout);
+    };
+  }, []);
+
+  const allOk = rows.every((r) => r.status === "ok");
+
+  return (
+    <div className="panel p-5 flex flex-col">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <p className="label-mono">scripts/system-check.sh</p>
+          <h3 className="font-display font-bold text-[17px] mt-1">
+            /admin/system-check
+          </h3>
+        </div>
+        <button
+          onClick={run}
+          className="chip cursor-pointer hover:!border-ok/50 hover:!text-ok transition-colors"
+        >
+          <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+            <path d="M10.5 6a4.5 4.5 0 1 1-1.3-3.2M10.5 1.5v2.3H8.2" />
+          </svg>
+          Relancer
+        </button>
+      </div>
+
+      <div className="code-block p-3.5 flex-1">
+        <p className="text-dim mb-2">
+          <span className="text-ok">$</span> bash scripts/system-check.sh
+        </p>
+        <div className="space-y-1.5">
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-center gap-2.5 flex-wrap">
+              <span className={r.status === "ok" ? "text-ok" : "text-warn cursor-blink"}>
+                {r.status === "ok" ? "✔" : "▸"}
+              </span>
+              <span className="text-ink/90 w-[122px]">{r.id}</span>
+              <span className="text-dim">:{r.port}</span>
+              {r.status === "ok" ? (
+                <span className="flex gap-1.5 flex-wrap">
+                  {r.checks.map((c) => (
+                    <span key={c.label} className="text-mut">
+                      {c.label}
+                      <span className="text-ok">
+                        {c.kind === "ms" ? ` ${c.base}ms` : " ok"}
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              ) : (
+                <span className="text-dim">sonde en cours…</span>
+              )}
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 pt-3 border-t border-line text-[11px]">
+          {allOk ? (
+            <span className="text-ok">TOUS LES SERVICES SONT OK — agrégé depuis les 7 ports</span>
+          ) : (
+            <span className="text-warn">balayage des 7 services en cours…</span>
+          )}
+        </p>
+      </div>
+      <p className="text-[12px] text-dim mt-3 leading-relaxed">
+        Simulation fidèle du script du dépôt : chaque service expose{" "}
+        <code className="font-mono text-mut">/system-check</code> avec le détail par
+        dépendance (Postgres, Kafka, Redis, Stripe…). Sous WordPress, cet état n'existait
+        nulle part.
+      </p>
+    </div>
+  );
+}
+
+/* ============================================================
+   Sections
+   ============================================================ */
+
+function IncidentCard({ inc, i }: { inc: (typeof INCIDENTS)[number]; i: number }) {
+  const tone = inc.tone === "alert" ? "text-alert border-alert/40 bg-alert/10" : "text-warn border-warn/40 bg-warn/10";
+  return (
+    <Reveal delay={i * 90}>
+      <article className="panel panel-hover p-5 h-full flex flex-col">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <span className="font-mono text-[11px] text-dim">{inc.date}</span>
+          <span className={`font-mono text-[10.5px] px-2 py-0.5 rounded-full border ${tone}`}>{inc.tag}</span>
+        </div>
+        <h3 className="font-display font-bold text-[17px] mb-2">{inc.title}</h3>
+        <p className="text-[13.5px] text-mut leading-relaxed flex-1">{inc.body}</p>
+        <div className="mt-4 pt-3 border-t border-line">
+          <p className="label-mono mb-1.5">Réponse du nouveau backend</p>
+          <p className="text-[13px] text-ok/90 leading-relaxed">{inc.fix}</p>
+        </div>
+      </article>
+    </Reveal>
+  );
+}
+
+function EndpointBrowser() {
+  const tabs = ["catalog-svc", "vendor-svc", "order-svc", "payment-svc", "shipping-svc", "auth-svc", "transverse"];
+  const [tab, setTab] = useState("catalog-svc");
+  const list = ENDPOINTS.filter((e) => e.svc === tab);
+
+  return (
+    <div className="panel overflow-hidden">
+      <div className="flex items-center gap-1.5 p-3 border-b border-line overflow-x-auto">
+        {tabs.map((t) => {
+          const count = ENDPOINTS.filter((e) => e.svc === t).length;
+          return (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-3 py-1.5 rounded-md font-mono text-[11.5px] whitespace-nowrap transition-colors cursor-pointer ${
+                tab === t
+                  ? "bg-ok/12 text-ok border border-ok/30"
+                  : "text-mut border border-transparent hover:text-ink"
+              }`}
+            >
+              {t} <span className="opacity-50">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="divide-y divide-line">
+        {list.map((e) => (
+          <div key={e.method + e.path} className="row-hover flex items-start gap-4 px-4 py-3">
+            <MethodChip method={e.method} />
+            <div className="min-w-0">
+              <p className="font-mono text-[13px] text-ink">{e.path}</p>
+              <p className="text-[12.5px] text-mut mt-0.5 leading-relaxed">{e.desc}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="px-4 py-3 border-t border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-[12px] text-dim">
+          Même contrat JSON que les routes Next.js actuelles — seule l'URL cible change.
+        </p>
+        <span className="chip">~80 routes au total dans app/api/**</span>
+      </div>
+    </div>
+  );
+}
+
+function MigrationTimeline() {
+  const [open, setOpen] = useState(0);
+  return (
+    <div className="relative">
+      <span className="absolute left-[27px] top-3 bottom-3 w-px bg-line2 hidden sm:block" />
+      <div className="space-y-3">
+        {PHASES.map((p, i) => {
+          const active = open === i;
+          return (
+            <Reveal key={p.n} delay={i * 60}>
+              <button
+                onClick={() => setOpen(active ? -1 : i)}
+                className={`w-full text-left panel panel-hover p-4 sm:p-5 flex gap-4 sm:gap-5 items-start cursor-pointer transition-colors ${
+                  active ? "!border-ok/40" : ""
+                }`}
+              >
+                <span
+                  className={`relative z-10 shrink-0 w-9 h-9 rounded-lg grid place-items-center font-mono text-[12px] font-bold border ${
+                    active ? "bg-ok/15 border-ok/50 text-ok" : "bg-bg2 border-line2 text-mut"
+                  }`}
+                >
+                  {p.n}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="flex items-center justify-between gap-3">
+                    <span className="font-display font-bold text-[16px]">{p.title}</span>
+                    <svg
+                      viewBox="0 0 12 12"
+                      className={`w-3.5 h-3.5 text-mut transition-transform ${active ? "rotate-45" : ""}`}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M6 2v8M2 6h8" />
+                    </svg>
+                  </span>
+                  <span
+                    className={`grid transition-all duration-300 ${active ? "grid-rows-[1fr] opacity-100 mt-2" : "grid-rows-[0fr] opacity-0"}`}
+                  >
+                    <span className="overflow-hidden block">
+                      <span className="block text-[13.5px] text-mut leading-relaxed">{p.body}</span>
+                      <span className="block mt-3 font-mono text-[11.5px] text-warn/90 border-l-2 border-warn/50 pl-3">
+                        {p.gate}
+                      </span>
+                    </span>
+                  </span>
+                </span>
+              </button>
+            </Reveal>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   App
+   ============================================================ */
+
+export default function App() {
+  return (
+    <div className="min-h-screen">
+      <TopBar />
+      <Ticker />
+
+      {/* ---------- 00 · Console d'ouverture ---------- */}
+      <section id="board" className="max-w-[1200px] mx-auto px-5 pt-12 pb-16 scroll-mt-20">
+        <div className="grid lg:grid-cols-[1.15fr_1fr] gap-10 items-end mb-10">
+          <Reveal>
+            <p className="label-mono mb-4">Brief technique · marketplace e-commerce africaine</p>
+            <h1 className="h-display text-[clamp(2.3rem,6vw,4.2rem)] uppercase">
+              Backend
+              <span className="text-ok"> sans</span>
+              <br />
+              WordPress<span className="text-ok">.</span>
+            </h1>
+          </Reveal>
+          <Reveal delay={120}>
+            <div className="grid grid-cols-1 gap-2.5 text-[13px]">
+              <div className="flex items-center justify-between gap-4 panel px-4 py-3">
+                <span className="text-mut">Aujourd'hui</span>
+                <span className="font-mono text-[12px] text-alert/90 text-right">WordPress · WooCommerce · Dokan · WPML</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 panel px-4 py-3">
+                <span className="text-mut">Cible</span>
+                <span className="font-mono text-[12px] text-ok text-right">Go · gRPC · Kafka · Postgres — sur VPS</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 panel px-4 py-3">
+                <span className="text-mut">Frontend</span>
+                <span className="font-mono text-[12px] text-ink text-right">Next.js 15 — inchangé</span>
+              </div>
+            </div>
+          </Reveal>
+        </div>
+
+        <div className="grid lg:grid-cols-[1.35fr_1fr] gap-5 items-stretch">
+          <Reveal className="h-full">
+            <MeshDiagram />
+          </Reveal>
+          <Reveal delay={120} className="h-full">
+            <SystemCheck />
+          </Reveal>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
+          {STATS.map((s, i) => (
+            <Reveal key={s.label} delay={i * 70}>
+              <div className="panel px-4 py-4">
+                <Counter
+                  value={s.value}
+                  suffix={s.suffix}
+                  className="font-display font-extrabold text-[26px] text-ink"
+                />
+                <p className="text-[12px] text-mut mt-1 leading-snug">{s.label}</p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+      </section>
+
+      {/* ---------- 01 · Pourquoi partir ---------- */}
+      <section id="incidents" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="01"
+          kicker="Cadrage"
+          title="Pourquoi partir"
+          lead="Pas une préférence théorique — trois incidents réels sur ce projet, tous causés par la façon dont WordPress/SiteGround gère les requêtes API. Point commun : le backend actuel échoue sans le dire."
+        />
+        <div className="grid md:grid-cols-3 gap-4">
+          {INCIDENTS.map((inc, i) => (
+            <IncidentCard key={inc.title} inc={inc} i={i} />
+          ))}
+        </div>
+      </section>
+
+      {/* ---------- 02 · Objectifs & contraintes ---------- */}
+      <section id="objectifs" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead num="02" kicker="Cadrage" title="Objectifs & contraintes" />
+        <div className="grid md:grid-cols-2 gap-4">
+          <Reveal>
+            <div className="panel p-5 h-full">
+              <p className="label-mono mb-4 !text-ok">Objectifs</p>
+              <ul className="space-y-3">
+                {GOALS.map((g) => (
+                  <li key={g} className="flex gap-3 text-[13.5px] leading-relaxed">
+                    <svg viewBox="0 0 12 12" className="w-4 h-4 text-ok shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M2 6.5 4.5 9 10 3" />
+                    </svg>
+                    <span className="text-ink/90">{g}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </Reveal>
+          <Reveal delay={100}>
+            <div className="panel p-5 h-full !border-warn/30">
+              <p className="label-mono mb-4 !text-warn">Contraintes dures</p>
+              <ul className="space-y-3">
+                {CONSTRAINTS.map((c) => (
+                  <li key={c} className="flex gap-3 text-[13.5px] leading-relaxed">
+                    <svg viewBox="0 0 12 12" className="w-4 h-4 text-warn shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                      <rect x="2.5" y="5" width="7" height="5" rx="1" />
+                      <path d="M4 5V3.8a2 2 0 0 1 4 0V5" />
+                    </svg>
+                    <span className="text-ink/90">{c}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-5 pt-4 border-t border-line">
+                <p className="font-mono text-[11.5px] text-mut leading-relaxed">
+                  <span className="text-warn">Contrainte de migration :</span> le catalogue,
+                  les boutiques et les commandes existent déjà — le nouveau backend les{" "}
+                  <span className="text-ink">importe</span> (export CSV/API WooCommerce
+                  ponctuel), il ne les recrée pas. Voir section 07.
+                </p>
+              </div>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* ---------- 03 · Stack ---------- */}
+      <section id="stack" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="03"
+          kicker="Cadrage"
+          title="Stack proposée"
+          lead="Microservices Go : chaque domaine métier est un service indépendant, communication interne en gRPC, événements asynchrones via Kafka, cache Redis, CDN devant les assets. Choix assumé : plus de pièces mobiles qu'un simple Worker, mais un modèle standard, scalable service par service."
+        />
+        <div className="grid lg:grid-cols-[1.4fr_1fr] gap-4">
+          <Reveal>
+            <div className="panel overflow-hidden">
+              {STACK.map((s, i) => (
+                <div
+                  key={s.layer}
+                  className={`row-hover flex items-center gap-4 px-4 py-3 ${i > 0 ? "border-t border-line" : ""}`}
+                >
+                  <span className="w-[150px] shrink-0 text-[12.5px] text-mut">{s.layer}</span>
+                  <span className="font-mono text-[13px] text-ok w-[170px] shrink-0">{s.choice}</span>
+                  <span className="text-[12.5px] text-mut leading-snug hidden sm:block">{s.why}</span>
+                </div>
+              ))}
+              <div className="px-4 py-3.5 border-t border-line bg-bg2/60">
+                <p className="font-mono text-[11.5px] text-mut leading-relaxed">
+                  <span className="text-warn">Compromis assumé :</span> Kafka et Postgres ont
+                  besoin de vrai calcul — VPS + Docker Compose pour démarrer, Kafka et Redis
+                  pouvant rester managés (Upstash) pour réduire l'opérationnel.
+                </p>
+              </div>
+            </div>
+          </Reveal>
+          <div className="space-y-4">
+            <Reveal delay={80}>
+              <div className="panel p-5">
+                <p className="label-mono mb-3 !text-ok">Ce qui reste identique</p>
+                <ul className="space-y-2.5">
+                  {LEDGER.kept.map(([k, v]) => (
+                    <li key={k} className="text-[13px] leading-snug">
+                      <span className="text-ink">{k}</span>
+                      <span className="text-dim"> — {v}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Reveal>
+            <Reveal delay={160}>
+              <div className="panel p-5 !border-alert/25">
+                <p className="label-mono mb-3 !text-alert">Ce qui est retiré</p>
+                <ul className="space-y-2.5">
+                  {LEDGER.dropped.map(([k, v]) => (
+                    <li key={k} className="text-[13px] leading-snug">
+                      <span className="text-ink/80 line-through decoration-alert/60">{k}</span>
+                      <span className="text-dim"> — {v}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Reveal>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------- 04 · Modèle de données ---------- */}
+      <section id="data" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="04"
+          kicker="Conception"
+          title="Modèle de données"
+          lead="Chaque table appartient à un seul service, sur sa propre base Postgres. Un service qui a besoin d'une donnée d'un autre l'appelle en gRPC (temps réel) ou la reconstruit depuis un événement Kafka (vue en cache, éventuellement consistante)."
+        />
+        <div className="grid md:grid-cols-2 gap-3 mb-6">
+          {TABLES.map((t, i) => (
+            <Reveal key={t.name} delay={(i % 4) * 60}>
+              <div className="panel panel-hover px-4 py-3.5 h-full">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-mono text-[13px] font-bold text-ink">{t.name}</p>
+                  <span className="chip !text-infra !border-infra/30">{t.svc}</span>
+                </div>
+                <p className="text-[12.5px] text-mut mt-1.5 leading-relaxed">{t.content}</p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+        <div className="grid lg:grid-cols-2 gap-4">
+          <Reveal>
+            <div className="panel p-5">
+              <p className="label-mono mb-4">Point d'attention — traduction</p>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 code-block p-3 text-[11.5px]">
+                  <p className="text-dim">products</p>
+                  <p><span className="text-infra">id</span> 201 · <span className="text-warn">trid</span> t-77 · <span className="text-ok">lang</span> fr</p>
+                  <p className="text-ink/85">« Sac en cuir de Katiola »</p>
+                </div>
+                <svg viewBox="0 0 40 20" className="w-10 h-5 text-warn shrink-0" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                  <path d="M4 10h28M26 4l8 6-8 6" />
+                </svg>
+                <div className="flex-1 code-block p-3 text-[11.5px]">
+                  <p className="text-dim">products</p>
+                  <p><span className="text-infra">id</span> 202 · <span className="text-warn">trid</span> t-77 · <span className="text-ok">lang</span> en</p>
+                  <p className="text-ink/85">"Katiola leather bag"</p>
+                </div>
+              </div>
+              <p className="text-[13px] text-mut leading-relaxed mt-4">
+                Le modèle WPML (une ligne par langue, liées par un <span className="font-mono text-warn">trid</span> partagé)
+                est conservé <span className="text-ink">tel quel</span> — pas de colonnes name_fr/name_en côte à côte —
+                pour que l'import depuis WooCommerce soit une copie directe, sans transformation.
+              </p>
+            </div>
+          </Reveal>
+          <Reveal delay={100}>
+            <div className="panel p-5 !border-warn/25">
+              <p className="label-mono mb-4 !text-warn">Point d'attention — cohérence</p>
+              <p className="text-[13.5px] text-mut leading-relaxed">
+                order-svc ne connaît pas le détail du paiement, payment-svc ne connaît pas le
+                détail de la commande : cohérence éventuelle via Kafka, pas de transaction SQL
+                entre les deux. Le cas d'échec partiel est géré explicitement :
+              </p>
+              <div className="code-block p-3.5 mt-4 text-[11.5px]">
+                <p className="text-mut">commande créée → payment.confirmed jamais reçu ?</p>
+                <p className="text-warn">statut pending_payment</p>
+                <p className="text-ok">reaper order-svc → payment_expired après 30 min</p>
+                <p className="text-mut mt-1">notification-svc en panne → rattrapage via offsets Kafka</p>
+              </div>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* ---------- 05 · Surface API ---------- */}
+      <section id="api" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="05"
+          kicker="Conception"
+          title="Surface API"
+          lead="La passerelle grpc-gateway répond au même contrat JSON : app/api/* n'a quasiment rien à changer — seule l'URL cible bouge (WOO_URL → passerelle). Chaque groupe correspond à un fichier .proto par service."
+        />
+        <Reveal>
+          <EndpointBrowser />
+        </Reveal>
+      </section>
+
+      {/* ---------- 06 · Fonctionnalités ---------- */}
+      <section id="features" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="06"
+          kicker="Conception"
+          title="Fonctionnalités à ne pas perdre"
+          lead="100 % du périmètre existant doit survivre à la bascule — aucune régression visible côté acheteur ou vendeur."
+        />
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {FEATURES.map((f, i) => (
+            <Reveal key={f.title} delay={(i % 3) * 70}>
+              <div className="panel panel-hover p-5 h-full">
+                <div className="flex items-center gap-3 mb-2.5">
+                  <span className="w-9 h-9 rounded-lg bg-ok/10 border border-ok/25 grid place-items-center">
+                    <Glyph name={["store", "globe", "layers", "truck", "card", "search", "board", "shield", "bell"][i]} />
+                  </span>
+                  <h3 className="font-display font-bold text-[15px] leading-tight">{f.title}</h3>
+                </div>
+                <p className="text-[13px] text-mut leading-relaxed">{f.body}</p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+      </section>
+
+      {/* ---------- 07 · Migration ---------- */}
+      <section id="migration" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="07"
+          kicker="Exécution"
+          title="Plan de migration en 6 phases"
+          lead="Progressive, jamais un big-bang — le site actuel reste la source de vérité jusqu'à la bascule finale confirmée. Chaque phase a sa gate explicite."
+        />
+        <MigrationTimeline />
+      </section>
+
+      {/* ---------- 08 · Hors périmètre ---------- */}
+      <section className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line">
+        <SectionHead num="08" kicker="Exécution" title="Hors périmètre" />
+        <div className="grid sm:grid-cols-2 gap-3">
+          {OUT_OF_SCOPE.map((o, i) => (
+            <Reveal key={o} delay={(i % 2) * 70}>
+              <div className="panel px-4 py-3.5 flex items-start gap-3">
+                <svg viewBox="0 0 12 12" className="w-4 h-4 text-dim shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <circle cx="6" cy="6" r="4.5" />
+                  <path d="M3.5 3.5 8.5 8.5" />
+                </svg>
+                <p className="text-[13.5px] text-mut leading-relaxed">{o}</p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+      </section>
+
+      {/* ---------- 09 · Prompt ---------- */}
+      <section id="prompt" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="09"
+          kicker="Exécution"
+          title="Le prompt à utiliser"
+          lead="À copier tel quel comme premier message à un agent de code disposant d'un accès au dépôt."
+        />
+        <Reveal>
+          <div className="panel overflow-hidden">
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-bg2/60">
+              <span className="font-mono text-[11px] text-mut">brief-agent.md — premier message</span>
+              <CopyButton text={PROMPT} />
+            </div>
+            <pre className="code-block !border-0 !rounded-none p-5 whitespace-pre-wrap text-[12px] leading-relaxed text-ink/85 max-h-[440px] overflow-y-auto">
+              {PROMPT}
+            </pre>
+          </div>
+        </Reveal>
+      </section>
+
+      {/* ---------- 10 · Déploiement VPS ---------- */}
+      <section id="vps" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="10"
+          kicker="Exécution"
+          title="Déploiement VPS"
+          lead="Tout tient dans un docker compose up : 7 binaires Go, Postgres qui crée ses 7 bases au premier boot, Kafka KRaft single-node, Redis, et Caddy en passerelle — l'URL que pointera app/api/*."
+        />
+        <div className="grid md:grid-cols-2 gap-3 mb-5">
+          {DEPLOY_STEPS.map((s, i) => (
+            <Reveal key={s.cmd} delay={(i % 2) * 70}>
+              <CmdBlock n={i + 1} cmd={s.cmd} note={s.note} />
+            </Reveal>
+          ))}
+        </div>
+        <div className="grid lg:grid-cols-[1.3fr_1fr] gap-4">
+          <Reveal>
+            <div className="panel overflow-hidden">
+              <p className="label-mono px-4 py-3 border-b border-line">Ce que monte docker compose</p>
+              {COMPOSE_STACK.map((c, i) => (
+                <div key={c.c} className={`row-hover flex items-center gap-4 px-4 py-3 ${i > 0 ? "border-t border-line" : ""}`}>
+                  <span className="font-mono text-[12.5px] text-infra w-[150px] shrink-0">{c.c}</span>
+                  <span className="text-[12.5px] text-mut flex-1 leading-snug">{c.role}</span>
+                  <span className="font-mono text-[11px] text-dim hidden sm:block">{c.expose}</span>
+                </div>
+              ))}
+            </div>
+          </Reveal>
+          <Reveal delay={100}>
+            <div className="panel p-5 h-full flex flex-col gap-4">
+              <div>
+                <p className="label-mono mb-2">Dimensionnement</p>
+                <p className="text-[13px] text-mut leading-relaxed">
+                  VPS <span className="text-ink">2 vCPU / 4 Go</span> minimum — le nœud Kafka
+                  KRaft single-node pèse environ 1 Go. Pour alléger : Kafka et Redis managés
+                  (Upstash), il suffit d'exporter{" "}
+                  <code className="font-mono text-[11.5px] text-warn">KAFKA_BROKERS</code> et{" "}
+                  <code className="font-mono text-[11.5px] text-warn">REDIS_ADDR</code> et de
+                  retirer ces deux conteneurs.
+                </p>
+              </div>
+              <div className="pt-4 border-t border-line">
+                <p className="label-mono mb-2">Ce qui est câblé / signalé</p>
+                <p className="text-[12.5px] text-mut leading-relaxed">
+                  Le socle compile les contrats, les schémas, la pagination explicite, le
+                  reaper de paiement et le health-check agrégé. Restent signalés dans le code,
+                  jamais tus : le rebranchement <span className="text-ink">Vectorize</span>, la
+                  signature des webhooks <span className="text-ink">Stripe/PayDunya</span> avec
+                  les clés réelles, l'envoi <span className="text-ink">SMS/email</span> et la
+                  synchronisation des montants exacts de{" "}
+                  <span className="font-mono text-[11.5px] text-warn">shipping-utils.ts</span>.
+                </p>
+              </div>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* ---------- Pied ---------- */}
+      <footer className="border-t border-line bg-bg2/50">
+        <div className="max-w-[1200px] mx-auto px-5 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <p className="font-display font-bold text-[14px]">MIAD MARKET — backend sans WordPress</p>
+            <p className="font-mono text-[11px] text-dim mt-1">
+              document de travail · à mettre à jour si le périmètre WooCommerce/Dokan évolue avant la migration
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <StatusDot tone="ok" />
+            <span className="font-mono text-[11px] text-mut">
+              socle initial · 7 services · phase 01/06
+            </span>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

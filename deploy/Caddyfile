@@ -1,0 +1,47 @@
+# ============================================================
+# Passerelle externe — remplace l'URL WooCommerce côté frontend.
+# Les routes Next.js app/api/* pointent ici ; le contrat JSON
+# reste identique (généré à terme par grpc-gateway).
+# ============================================================
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	# Catalogue — catalog-svc
+	handle_path /catalog/* {
+		reverse_proxy catalog-svc:8081
+	}
+	handle /products*      { reverse_proxy catalog-svc:8081 }
+	handle /categories*    { reverse_proxy catalog-svc:8081 }
+	handle /search/*       { reverse_proxy catalog-svc:8081 }
+
+	# Boutiques & vendeurs — vendor-svc
+	handle /stores*        { reverse_proxy vendor-svc:8082 }
+	handle /vendor/*       { reverse_proxy vendor-svc:8082 }
+
+	# Commandes — order-svc
+	handle /orders*        { reverse_proxy order-svc:8083 }
+
+	# Paiement (webhooks Stripe/PayDunya inclus) — payment-svc
+	handle /payments/*     { reverse_proxy payment-svc:8084 }
+
+	# Livraison — shipping-svc
+	handle /shipping-rates { reverse_proxy shipping-svc:8085 }
+
+	# Compte & auth — auth-svc
+	handle /auth/*         { reverse_proxy auth-svc:8086 }
+	handle /customer*      { reverse_proxy auth-svc:8086 }
+
+	# Admin transverse : voir scripts/system-check.sh (agrège les 7)
+	# En prod, placer ici un petit agrégateur dédié si besoin.
+
+	handle {
+		respond 404 {
+			body "{\"error\":{\"code\":\"not_found\",\"message\":\"route inconnue sur la passerelle\"}}"
+		}
+	}
+}

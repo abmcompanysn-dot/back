@@ -1,0 +1,80 @@
+// ============================================================
+// vendor-svc — boutiques (ex-Dokan) : profils, tableaux de bord
+// Publie : vendor.registered, vendor.updated
+// ============================================================
+syntax = "proto3";
+
+package miad.vendor.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/vendor/v1;vendorv1";
+
+import "google/api/annotations.proto";
+
+message Vendor {
+  int64 id = 1;
+  string name = 2;
+  string slug = 3;
+  string logo_url = 4;    // R2
+  string banner_url = 5;  // R2
+  string country = 6;     // ISO 3166-1 alpha-2
+  string city = 7;
+  string phone = 8;
+  string email = 9;
+  bool verified = 10;
+  double rating_avg = 11;
+  int32 product_count = 12; // dénormalisé depuis événement catalog
+  string created_at = 13;
+}
+
+message ListStoresRequest {
+  string country = 1;
+  string q = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message ListStoresResponse {
+  repeated Vendor items = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+  int64 total = 4;
+  bool has_more = 5;
+}
+
+message UpdateProfileRequest {
+  int64 vendor_id = 1;
+  string name = 2;
+  string logo_url = 3;
+  string banner_url = 4;
+  string phone = 5;
+  string city = 6;
+}
+
+message VendorOrdersRequest {
+  int64 vendor_id = 1;
+  string status = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+// Réponse déléguée à order-svc en interne ; forme JSON identique
+// à GET /vendor/orders côté frontend.
+message VendorOrdersResponse {
+  string forwarded_from = 1; // "order-svc"
+  bytes payload_json = 2;
+}
+
+service VendorService {
+  rpc ListStores(ListStoresRequest) returns (ListStoresResponse) {
+    option (google.api.http) = { get: "/stores" };
+  }
+  rpc UpdateProfile(UpdateProfileRequest) returns (Vendor) {
+    option (google.api.http) = {
+      put: "/vendor/profile"
+      body: "*"
+    };
+  }
+  rpc VendorOrders(VendorOrdersRequest) returns (VendorOrdersResponse) {
+    option (google.api.http) = { get: "/vendor/orders" };
+  }
+}

@@ -1,0 +1,75 @@
+// ============================================================
+// auth-svc — OTP (SMS/email), sessions Redis + JWT
+// Publie : customer.registered
+// ============================================================
+syntax = "proto3";
+
+package miad.auth.v1;
+
+option go_package = "github.com/miadmarket/miad-backend/gen/miad/auth/v1;authv1";
+
+import "google/api/annotations.proto";
+
+message SendOtpRequest {
+  string identifier = 1;  // email ou téléphone
+  string channel = 2;     // "sms" | "email"
+}
+
+message SendOtpResponse {
+  string otp_ref = 1;     // référence opaque — le code n'est JAMAIS renvoyé
+  int32 ttl_minutes = 2;
+}
+
+message VerifyOtpRequest {
+  string otp_ref = 1;
+  string code = 2;
+}
+
+message Session {
+  string jwt = 1;
+  string expires_at = 2;
+}
+
+message VerifyOtpResponse {
+  Session session = 1;
+  bool is_new_customer = 2; // déclenche customer.registered
+}
+
+message Customer {
+  int64 id = 1;
+  string email = 2;
+  string phone = 3;
+  string full_name = 4;
+  repeated Address addresses = 5;
+  string preferred_lang = 6;
+  string created_at = 7;
+}
+
+message Address {
+  string label = 1;
+  string full_name = 2;
+  string phone = 3;
+  string line1 = 4;
+  string city = 5;
+  string country = 6;
+}
+
+message GetCustomerRequest { int64 id = 1; }
+
+service AuthService {
+  rpc SendOtp(SendOtpRequest) returns (SendOtpResponse) {
+    option (google.api.http) = {
+      post: "/auth/otp/send"
+      body: "*"
+    };
+  }
+  rpc VerifyOtp(VerifyOtpRequest) returns (VerifyOtpResponse) {
+    option (google.api.http) = {
+      post: "/auth/otp/verify"
+      body: "*"
+    };
+  }
+  rpc GetCustomer(GetCustomerRequest) returns (Customer) {
+    option (google.api.http) = { get: "/customer/{id}" };
+  }
+}
