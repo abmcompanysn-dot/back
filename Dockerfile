@@ -1,7 +1,9 @@
 # ============================================================
 # Dockerfile unique paramétrable — un binaire par service.
-# Usage (orchestré par docker-compose.yml) :
-#   docker build --build-arg SERVICE=catalog-svc -t catalog-svc .
+# Autonome : fait son propre `go mod tidy` (génère go.sum +
+# complète les dépendances indirectes), donc il build même si
+# go.sum n'est pas committé.
+# Usage : docker build --build-arg SERVICE=catalog-svc -t miad/catalog-svc:latest .
 # ============================================================
 FROM golang:1.23-alpine AS build
 
@@ -9,9 +11,9 @@ ARG SERVICE
 RUN test -n "$SERVICE" || (echo "ARG SERVICE obligatoire" && exit 1)
 
 WORKDIR /src
-COPY go.mod go.sum* ./
-RUN go mod download || true
+# Copie tout le module puis résout les dépendances (réseau dispo au build)
 COPY . .
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
     -o /bin/svc ./services/${SERVICE}
 
