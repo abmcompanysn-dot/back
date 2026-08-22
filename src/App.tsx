@@ -21,6 +21,7 @@ import {
   K8S_COMPARE,
   K8S_PATH,
   VPS_ACCESS,
+  TRANSFER,
   type Service,
 } from "./data";
 import {
@@ -767,6 +768,58 @@ function SshPanel() {
   );
 }
 
+/* ---------- Transfert du code vers le VPS ---------- */
+
+function TransferPanel() {
+  const [tab, setTab] = useState(TRANSFER[0].id);
+  const active = TRANSFER.find((t) => t.id === tab) ?? TRANSFER[0];
+
+  return (
+    <div className="panel overflow-hidden mb-5">
+      <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+        <span className="label-mono !text-ink">Faire arriver le code sur le VPS</span>
+        <div className="flex gap-1.5">
+          {TRANSFER.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-3 py-1 rounded-md font-mono text-[11px] cursor-pointer transition-colors border ${
+                tab === t.id
+                  ? "bg-ok/12 text-ok border-ok/35"
+                  : "text-mut border-transparent hover:text-ink"
+              }`}
+            >
+              {t.badge}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="p-4 space-y-4">
+        <p className="font-display font-bold text-[15px]">{active.title}</p>
+        {active.steps.map((s, i) => (
+          <div key={i}>
+            <p className="text-[12.5px] text-mut leading-relaxed mb-2">
+              <span className="font-mono text-[11px] text-ok mr-1.5">{String(i + 1).padStart(2, "0")}</span>
+              {s.label}
+            </p>
+            <div className="code-block p-3.5 flex items-start justify-between gap-3">
+              <code className="text-[12px] text-ink/90 whitespace-pre-wrap break-all leading-relaxed">
+                {s.cmd}
+              </code>
+              <span className="shrink-0">
+                <CopyButton text={s.cmd} label="" />
+              </span>
+            </div>
+          </div>
+        ))}
+        <p className="font-mono text-[11px] text-dim leading-relaxed pt-1">
+          {active.note}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function NowChecklist() {
   const [done, setDone] = useState<boolean[]>(() => {
     try {
@@ -1420,6 +1473,10 @@ export default function App() {
 
         <Reveal>
           <SshPanel />
+        </Reveal>
+
+        <Reveal delay={60}>
+          <TransferPanel />
         </Reveal>
 
         <div className="grid lg:grid-cols-[1.25fr_1fr] gap-5 items-start mb-5">

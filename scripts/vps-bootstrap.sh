@@ -26,13 +26,22 @@ fi
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 kubectl() { k3s kubectl "$@"; }
 
-# ---------- 2. Dépôt ----------
-say "Récupération du dépôt…"
-if [ ! -d "$APP/.git" ]; then
-  git clone "$REPO" "$APP"
+# ---------- 2. Code source — GitHub OU dossier local ----------
+say "Récupération du code source…"
+if [ -f "$APP/Makefile" ] && [ -d "$APP/services" ]; then
+  say "Sources déjà présentes dans $APP — mode local (pas de clone)."
+else
+  [ -d "$APP" ] && rm -rf "$APP"
+  git clone "$REPO" "$APP" || {
+    echo "❌ Clone impossible — le dépôt GitHub est probablement vide."
+    echo "   Deux solutions :"
+    echo "   1) pousser le code sur GitHub depuis ton PC (voir console, section Maintenant)"
+    echo "   2) déposer les sources dans $APP (ZIP exporté du sandbox + scp) puis relancer"
+    exit 1
+  }
 fi
 cd "$APP"
-git pull --ff-only || true
+[ -d .git ] && { git pull --ff-only || true; }
 
 # ---------- 3. .env — jamais dans le dépôt ----------
 if [ ! -f .env ]; then

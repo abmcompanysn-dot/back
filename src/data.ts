@@ -434,6 +434,49 @@ export const K8S_COMPARE: CompareRow[] = [
   { criterion: "Pour 70 boutiques / trafic actuel", compose: "largement suffisant", k8s: "surdimensionné", winner: "compose" },
 ];
 
+export interface TransferOption {
+  id: string;
+  badge: string;
+  title: string;
+  steps: { label: string; cmd: string }[];
+  note: string;
+}
+
+export const TRANSFER: TransferOption[] = [
+  {
+    id: "github",
+    badge: "recommandé",
+    title: "Via GitHub (active la CI/CD)",
+    steps: [
+      {
+        label: "Sur ton PC — exporte le projet depuis le sandbox (bouton Download / Export / ZIP de l'interface), décompresse-le, puis :",
+        cmd: "cd backend-miad\ngit init\ngit add -A\ngit commit -m \"premier commit\"\ngit branch -M main\ngit remote add origin https://github.com/abmcompanysn-dot/backend-miad.git\ngit push -u origin main",
+      },
+      {
+        label: "Sur le VPS — le clone fonctionne maintenant :",
+        cmd: "rm -rf /opt/miad-backend\ngit clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend\nbash /opt/miad-backend/scripts/vps-bootstrap.sh",
+      },
+    ],
+    note: "Chaque futur git push pourra redéployer automatiquement via GitHub Actions.",
+  },
+  {
+    id: "scp",
+    badge: "direct",
+    title: "Sans GitHub — transfert direct",
+    steps: [
+      {
+        label: "Sur ton PC — après avoir exporté le ZIP du sandbox :",
+        cmd: "scp backend-miad.zip miad@100.79.191.101:/opt/",
+      },
+      {
+        label: "Sur le VPS — décompresse puis déploie :",
+        cmd: "cd /opt\nunzip backend-miad.zip -d miad-backend\ncd miad-backend\nbash scripts/vps-bootstrap.sh",
+      },
+    ],
+    note: "Le bootstrap détecte les sources locales et déploie sans cloner. La CI/CD viendra plus tard.",
+  },
+];
+
 export const K8S_PATH = [
   {
     stage: "Choix retenu — k3s",
