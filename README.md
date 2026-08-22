@@ -77,7 +77,7 @@ Choix acté : **k3s** (Kubernetes en un binaire, sans plan de contrôle lourd).
 # Sur le VPS, UNE seule commande fait tout :
 # installe k3s → namespace + Secret depuis .env → manifests →
 # build des 8 images → import containerd → rollouts → health-check
-git clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend
+git clone https://github.com/abmcompanysn-dot/back.git /opt/miad-backend
 bash /opt/miad-backend/scripts/vps-bootstrap.sh
 
 # Vérifier à tout moment

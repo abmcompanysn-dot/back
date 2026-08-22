@@ -371,12 +371,12 @@ export const NOW_STEPS: NowStep[] = [
   {
     title: "Récupère le code sur ta machine",
     where: "Ta machine",
-    body: "Télécharge l'export du projet depuis ce sandbox (bouton d'export de ta plateforme), ou copie l'arborescence dans un dossier local « backend-miad ». C'est ce dossier qui deviendra le dépôt.",
+    body: "Télécharge l'export du projet depuis ce sandbox (bouton d'export de ta plateforme), ou copie l'arborescence dans un dossier local « back ». C'est ce dossier qui deviendra le dépôt.",
   },
   {
     title: "Publie sur ton dépôt GitHub",
     where: "Ta machine",
-    body: "Le dépôt abmcompanysn-dot/backend-miad existe déjà. Une seule commande pousse tout le backend (pas juste le README) :",
+    body: "Le dépôt abmcompanysn-dot/back existe déjà. Une seule commande pousse tout le backend (pas juste le README) :",
     cmd: "bash scripts/git-publish.sh",
   },
   {
@@ -390,7 +390,7 @@ export const NOW_STEPS: NowStep[] = [
     title: "Clone le dépôt sur le VPS",
     where: "SSH → VPS",
     body: "Le bootstrap a besoin du code (manifests, Caddyfile, scripts) présent sur la machine :",
-    cmd: "git clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend",
+    cmd: "git clone https://github.com/abmcompanysn-dot/back.git /opt/miad-backend",
   },
   {
     title: "Bootstrap Kubernetes — UNE commande",
@@ -450,11 +450,11 @@ export const TRANSFER: TransferOption[] = [
     steps: [
       {
         label: "Sur ton PC — exporte le projet depuis le sandbox (bouton Download / Export / ZIP de l'interface), décompresse-le, puis :",
-        cmd: "cd backend-miad\ngit init\ngit add -A\ngit commit -m \"premier commit\"\ngit branch -M main\ngit remote add origin https://github.com/abmcompanysn-dot/backend-miad.git\ngit push -u origin main",
+        cmd: "cd back\ngit init\ngit add -A\ngit commit -m \"premier commit\"\ngit branch -M main\ngit remote add origin https://github.com/abmcompanysn-dot/back.git\ngit push -u origin main",
       },
       {
         label: "Sur le VPS — le clone fonctionne maintenant :",
-        cmd: "rm -rf /opt/miad-backend\ngit clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend\nbash /opt/miad-backend/scripts/vps-bootstrap.sh",
+        cmd: "rm -rf /opt/miad-backend\ngit clone https://github.com/abmcompanysn-dot/back.git /opt/miad-backend\nbash /opt/miad-backend/scripts/vps-bootstrap.sh",
       },
     ],
     note: "Chaque futur git push pourra redéployer automatiquement via GitHub Actions.",
@@ -466,11 +466,11 @@ export const TRANSFER: TransferOption[] = [
     steps: [
       {
         label: "Sur ton PC — après avoir exporté le ZIP du sandbox :",
-        cmd: "scp backend-miad.zip miad@100.79.191.101:/opt/",
+        cmd: "scp back.zip miad@100.79.191.101:/opt/",
       },
       {
         label: "Sur le VPS — décompresse puis déploie :",
-        cmd: "cd /opt\nunzip backend-miad.zip -d miad-backend\ncd miad-backend\nbash scripts/vps-bootstrap.sh",
+        cmd: "cd /opt\nunzip back.zip -d miad-backend\ncd miad-backend\nbash scripts/vps-bootstrap.sh",
       },
     ],
     note: "Le bootstrap détecte les sources locales et déploie sans cloner. La CI/CD viendra plus tard.",

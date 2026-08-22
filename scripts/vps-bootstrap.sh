@@ -12,7 +12,7 @@
 # ============================================================
 set -euo pipefail
 
-REPO=https://github.com/abmcompanysn-dot/backend-miad.git
+REPO=https://github.com/abmcompanysn-dot/back.git
 APP=/opt/miad-backend
 SERVICES=(catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc admin-svc)
 
