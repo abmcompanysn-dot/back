@@ -1,6 +1,6 @@
 # ============================================================
 # Déploiement automatique sur le VPS à chaque push sur main.
-# Le VPS tire le dépôt et relance docker compose.
+# Le VPS tire le dépôt et relance le bootstrap k3s (rebuild + rollout + check).
 #
 # Secrets GitHub requis (Settings → Secrets → Actions) :
 #   VPS_HOST   ex. 51.15.0.42
@@ -43,9 +43,5 @@ jobs:
             # .env doit déjà exister sur le VPS (jamais dans le dépôt)
             test -f .env || { echo "❌ .env absent sur le VPS"; exit 1; }
 
-            # Reconstruire + relancer les 7 services + infra
-            docker compose up -d --build
-
-            # Vérification explicite — jamais de déploiement muet
-            sleep 5
-            bash scripts/system-check.sh
+            # Mode Kubernetes (k3s) : le bootstrap rebuild + réapplique + vérifie
+            bash scripts/vps-bootstrap.sh

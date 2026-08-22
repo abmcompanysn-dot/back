@@ -357,7 +357,15 @@ export interface NowStep {
   body: string;
   cmd?: string;
   optional?: boolean;
+  alert?: boolean;
 }
+
+export const VPS_ACCESS = {
+  user: "miad",
+  host: "100.79.191.101",
+  tailscale:
+    "100.79.191.101 est dans la plage 100.64.0.0/10 : c'est une adresse Tailscale. Elle n'est joignable que depuis ton tailnet — les runners GitHub Actions (internet) ne peuvent pas SSH ici directement. Options : exposer une IP publique, installer Tailscale sur le runner (action officielle), ou déployer en SSH manuel.",
+};
 
 export const NOW_STEPS: NowStep[] = [
   {
@@ -372,38 +380,39 @@ export const NOW_STEPS: NowStep[] = [
     cmd: "bash scripts/git-publish.sh",
   },
   {
-    title: "Provisionne le VPS",
-    where: "Ton hébergeur",
-    body: "VPS Ubuntu 22.04+ · 2 vCPU / 4 Go minimum (le nœud Kafka KRaft pèse ~1 Go). Note l'adresse IP, l'utilisateur et la clé SSH.",
+    title: "Change le mot de passe SSH — puis connecte-toi",
+    where: "SSH → VPS",
+    body: "Le mot de passe actuel a été partagé dans une conversation : il est compromis d'office. Une fois connecté, change-le (passwd) et pose une clé SSH (ssh-copy-id). Ensuite :",
+    cmd: "ssh miad@100.79.191.101",
+    alert: true,
   },
   {
-    title: "Installe Docker sur le VPS",
+    title: "Clone le dépôt sur le VPS",
     where: "SSH → VPS",
-    body: "Une commande officielle, puis vérification que le moteur répond :",
-    cmd: "curl -fsSL https://get.docker.com | sh && docker --version",
+    body: "Le bootstrap a besoin du code (manifests, Caddyfile, scripts) présent sur la machine :",
+    cmd: "git clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend",
   },
   {
-    title: "Clone le dépôt et crée le .env",
+    title: "Bootstrap Kubernetes — UNE commande",
     where: "SSH → VPS",
-    body: "Le .env n'est JAMAIS dans le dépôt : il se crée à la main sur le VPS, puis on remplace les valeurs par défaut (mots de passe, JWT_SECRET, clés Stripe/PayDunya).",
-    cmd: "git clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend\ncd /opt/miad-backend\ncp .env.example .env && nano .env",
-  },
-  {
-    title: "Démarre toute la stack",
-    where: "SSH → VPS",
-    body: "Postgres crée ses 7 bases au premier boot, les 7 services compilent puis démarrent, Caddy expose la passerelle :",
-    cmd: "docker compose up -d --build",
+    body: "Installe k3s, crée le namespace + le Secret depuis .env (édite-le au premier passage), applique les manifests, build les 7 images Go, les importe dans containerd, attend les rollouts et vérifie tout :",
+    cmd: "bash /opt/miad-backend/scripts/vps-bootstrap.sh",
   },
   {
     title: "Vérifie — explicitement",
     where: "SSH → VPS",
-    body: "Le point qui manquait sous WordPress : chaque service répond ou est signalé en défaut, dépendance par dépendance.",
-    cmd: "bash scripts/system-check.sh",
+    body: "Déjà exécuté par le bootstrap, relançable à tout moment. Chaque pod répond ou est signalé en défaut, dépendance par dépendance :",
+    cmd: "kubectl -n miad get pods && bash /opt/miad-backend/scripts/system-check-k8s.sh",
   },
   {
-    title: "Branche le déploiement automatique",
+    title: "Branche le frontend Next.js",
+    where: "Frontend",
+    body: "Dans les routes app/api/*, remplace l'URL WooCommerce par celle de la passerelle Caddy : http://100.79.191.101 depuis ton tailnet, ou le domaine public pointé vers le VPS. Le contrat JSON ne change pas.",
+  },
+  {
+    title: "Déploiement continu (optionnel)",
     where: "GitHub",
-    body: "Sur le dépôt : Settings → Secrets and variables → Actions. Ajouter VPS_HOST, VPS_USER, VPS_SSH_KEY, VPS_PATH (/opt/miad-backend). Ensuite chaque git push redéploie seul.",
+    body: "À chaque push : le workflow SSH dans le VPS et relance le bootstrap. Attention à l'IP Tailscale : ajoute l'action Tailscale au runner, une IP publique, ou redéploie manuellement (git pull + bootstrap).",
     optional: true,
   },
 ];
@@ -427,18 +436,18 @@ export const K8S_COMPARE: CompareRow[] = [
 
 export const K8S_PATH = [
   {
-    stage: "Maintenant — Compose",
-    detail: "1 VPS, docker compose up. Le brief l'assume explicitement : « VPS + Docker Compose pour démarrer ».",
+    stage: "Choix retenu — k3s",
+    detail: "Kubernetes allégé sur le VPS : un seul binaire, Traefik et stockage local-path inclus. Manifests prêts dans deploy/k8s/ (4 fichiers, namespace miad).",
     tone: "ok",
   },
   {
-    stage: "Signal de bascule",
-    detail: "Déploiements sans coupure exigés, trafic ×10, ou besoin de répartir sur 2+ machines.",
-    tone: "warn",
+    stage: "Pourquoi k3s plutôt que K8s vanilla",
+    detail: "Mêmes objets (Deployments, Services, Ingress, probes), sans le plan de contrôle à 2 Go de RAM. Migration vers un cluster standard = kubectl apply des mêmes fichiers.",
+    tone: "infra",
   },
   {
-    stage: "Ensuite — k3s",
-    detail: "Kubernetes allégé sur le même VPS : le repo est déjà compatible (services stateless, health-checks, une base par service). deploy/k8s.yaml est fourni.",
-    tone: "infra",
+    stage: "Compose reste en secours",
+    detail: "docker-compose.yml fonctionne toujours en local ou en repli : mêmes noms de services, même .env. Rien n'est verrouillé.",
+    tone: "warn",
   },
 ] as const;

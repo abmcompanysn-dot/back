@@ -20,6 +20,7 @@ import {
   NOW_STEPS,
   K8S_COMPARE,
   K8S_PATH,
+  VPS_ACCESS,
   type Service,
 } from "./data";
 import {
@@ -673,6 +674,99 @@ function MigrationTimeline() {
 
 const CHECK_KEY = "miad-now-checklist";
 
+/* ---------- Panneau d'accès SSH au VPS ---------- */
+
+function SshPanel() {
+  const [pwd, setPwd] = useState("");
+  const [show, setShow] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const sshCmd = `ssh ${VPS_ACCESS.user}@${VPS_ACCESS.host}`;
+
+  const copyPwd = async () => {
+    if (!pwd) return;
+    try {
+      await navigator.clipboard.writeText(pwd);
+    } catch {
+      /* silencieux */
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  };
+
+  return (
+    <div className="panel overflow-hidden mb-5">
+      <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+        <span className="label-mono !text-ink">Accès SSH au VPS</span>
+        <span className="chip !text-ok !border-ok/40">
+          <StatusDot tone="ok" />
+          k3s cible
+        </span>
+      </div>
+      <div className="p-4 grid lg:grid-cols-2 gap-4">
+        <div>
+          <div className="code-block p-3.5 flex items-center justify-between gap-3">
+            <p className="text-[13px]">
+              <span className="text-ok">$</span> {sshCmd}
+            </p>
+            <CopyButton text={sshCmd} label="" />
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <input
+              type={show ? "text" : "password"}
+              value={pwd}
+              onChange={(e) => setPwd(e.target.value)}
+              placeholder="Mot de passe (saisir pour copier — ni stocké, ni envoyé)"
+              className="flex-1 bg-bg2 border border-line rounded-md px-3 py-2 font-mono text-[12.5px] text-ink placeholder:text-dim outline-none focus:border-ok/50 transition-colors"
+            />
+            <button
+              onClick={() => setShow((v) => !v)}
+              className="chip cursor-pointer hover:!border-line2 hover:!text-ink transition-colors"
+              title={show ? "Masquer" : "Afficher"}
+            >
+              {show ? (
+                <svg viewBox="0 0 14 14" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+                  <path d="M2 7s2-3.5 5-3.5S12 7 12 7s-2 3.5-5 3.5S2 7 2 7Z" />
+                  <circle cx="7" cy="7" r="1.4" />
+                  <path d="m2.5 11.5 9-9" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 14 14" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+                  <path d="M2 7s2-3.5 5-3.5S12 7 12 7s-2 3.5-5 3.5S2 7 2 7Z" />
+                  <circle cx="7" cy="7" r="1.4" />
+                </svg>
+              )}
+            </button>
+            <button
+              onClick={copyPwd}
+              className={`chip cursor-pointer transition-colors ${
+                copied ? "!text-ok !border-ok/50" : "hover:!border-line2 hover:!text-ink"
+              }`}
+            >
+              {copied ? "Copié" : "Copier"}
+            </button>
+          </div>
+          <div className="mt-3 border border-alert/35 bg-alert/8 rounded-lg px-3.5 py-2.5">
+            <p className="text-[12px] text-alert/95 leading-relaxed">
+              <span className="font-mono font-bold">Sécurité :</span> ce mot de passe a circulé
+              dans une conversation — il est compromis. Une fois connecté :{" "}
+              <code className="font-mono text-[11px]">passwd</code> pour en poser un nouveau, puis{" "}
+              <code className="font-mono text-[11px]">ssh-copy-id miad@{VPS_ACCESS.host}</code>{" "}
+              pour basculer sur clé SSH et couper l'accès par mot de passe.
+            </p>
+          </div>
+        </div>
+        <div className="border border-infra/30 bg-infra/5 rounded-lg px-4 py-3.5">
+          <p className="label-mono !text-infra mb-2">Adresse Tailscale détectée</p>
+          <p className="text-[12.5px] text-mut leading-relaxed">{VPS_ACCESS.tailscale}</p>
+          <p className="font-mono text-[11px] text-dim mt-3">
+            → le frontend et toi y accédez via le tailnet ; la CI aura besoin d'un pont (voir étape 08).
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NowChecklist() {
   const [done, setDone] = useState<boolean[]>(() => {
     try {
@@ -748,10 +842,17 @@ function NowChecklist() {
                 <span className="flex-1 min-w-0">
                   <span className="flex items-center justify-between gap-3 flex-wrap">
                     <span className={`font-display font-bold text-[14px] ${isDone ? "text-mut line-through decoration-ok/50" : ""}`}>
-                      <span className="font-mono text-[11px] text-ok mr-2">{String(i + 1).padStart(2, "0")}</span>
+                      <span className={`font-mono text-[11px] mr-2 ${s.alert ? "text-alert" : "text-ok"}`}>
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
                       {s.title}
                     </span>
-                    <span className="chip !text-[10px]">{s.where}</span>
+                    <span className="flex items-center gap-1.5">
+                      {s.alert && !isDone && (
+                        <span className="chip !text-[10px] !text-alert !border-alert/40">prioritaire</span>
+                      )}
+                      <span className="chip !text-[10px]">{s.where}</span>
+                    </span>
                   </span>
                   <span className={`block text-[12.5px] leading-relaxed mt-1 ${isDone ? "text-dim" : "text-mut"}`}>
                     {s.body}
@@ -1132,8 +1233,8 @@ export default function App() {
         <SectionHead
           num="10"
           kicker="Exécution"
-          title="Déploiement VPS"
-          lead="Tout tient dans un docker compose up : 7 binaires Go, Postgres qui crée ses 7 bases au premier boot, Kafka KRaft single-node, Redis, et Caddy en passerelle — l'URL que pointera app/api/*."
+          title="Déploiement VPS — option Compose"
+          lead="Le mode Kubernetes (k3s) est le chemin principal — section 12. Cette pile Compose reste le repli local ou VPS : mêmes services, mêmes noms, même .env, rien n'est verrouillé."
         />
         <div className="grid md:grid-cols-2 gap-3 mb-5">
           {DEPLOY_STEPS.map((s, i) => (
@@ -1204,7 +1305,7 @@ export default function App() {
                 { t: "GitHub", s: "backend-miad", tone: "text-ok border-ok/40" },
                 { t: "GitHub Actions", s: "deploy-vps.yml", tone: "text-warn border-warn/40" },
                 { t: "SSH", s: "secrets VPS_*", tone: "text-infra border-infra/40" },
-                { t: "VPS", s: "docker compose up -d --build", tone: "text-ok border-ok/40" },
+                { t: "VPS (k3s)", s: "vps-bootstrap.sh", tone: "text-ok border-ok/40" },
               ].map((p, i, arr) => (
                 <div key={p.t} className="flex items-center flex-1">
                   <div className={`flex-1 border rounded-lg px-3 py-3 text-center ${p.tone} bg-bg2/60`}>
@@ -1286,9 +1387,12 @@ export default function App() {
                 <p className="text-[13px] text-mut leading-relaxed">
                   Le workflow SSH dans le VPS, tire la branche <span className="font-mono text-[11.5px] text-ok">main</span>,
                   vérifie que le <span className="font-mono text-[11.5px] text-warn">.env</span> est présent,
-                  relance <span className="font-mono text-[11.5px] text-ink">docker compose up -d --build</span> puis exécute{" "}
-                  <span className="font-mono text-[11.5px] text-ok">scripts/system-check.sh</span> : un déploiement
-                  ne passe jamais en silence, il est confirmé ou il échoue explicitement.
+                  puis relance <span className="font-mono text-[11.5px] text-ink">scripts/vps-bootstrap.sh</span> : rebuild des
+                  images, rollout Kubernetes, health-check pod par pod — un déploiement ne passe jamais en silence.
+                  <span className="block mt-2 text-warn/90 text-[12px]">
+                    Attention : {VPS_ACCESS.host} est une IP Tailscale — le runner GitHub (internet) ne peut pas SSH directement.
+                    Pont nécessaire (action Tailscale sur le runner ou IP publique).
+                  </span>
                 </p>
               </div>
               <div className="pt-4 border-t border-line">
@@ -1310,9 +1414,13 @@ export default function App() {
         <SectionHead
           num="12"
           kicker="Exécution"
-          title="Maintenant"
-          lead="Deux réponses concrètes : la feuille de route pour mettre la stack en ligne, et le verdict honnête entre Docker Compose et Kubernetes."
+          title="Maintenant — Kubernetes sur le VPS"
+          lead="Choix acté : Kubernetes (k3s). Voici l'accès au VPS, la feuille de route pas à pas, et pourquoi ce choix tient la route — avec Compose gardé en secours."
         />
+
+        <Reveal>
+          <SshPanel />
+        </Reveal>
 
         <div className="grid lg:grid-cols-[1.25fr_1fr] gap-5 items-start mb-5">
           <Reveal>
@@ -1322,20 +1430,20 @@ export default function App() {
             <div className="panel p-5">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <p className="label-mono">Orchestration</p>
-                <span className="chip !text-ok !border-ok/40">verdict</span>
+                <span className="chip !text-ok !border-ok/40">choix acté</span>
               </div>
               <h3 className="font-display font-bold text-[19px] leading-tight">
-                Compose maintenant.
-                <span className="block text-ok mt-1">Kubernetes plus tard.</span>
+                Kubernetes, version k3s.
+                <span className="block text-ok mt-1">Sur le VPS, dès maintenant.</span>
               </h3>
               <p className="text-[13.5px] text-mut leading-relaxed mt-3">
-                Sur un VPS, K8s ajoute un plan de contrôle qui consomme de la RAM et de la
-                complexité — pour des bénéfices (scaling multi-nœuds, rolling update) dont
-                70 boutiques n'ont pas besoin aujourd'hui. Le brief l'assume : démarrer en
-                Compose. Le repo est <span className="text-ink">déjà compatible K8s</span>{" "}
-                (services stateless, health-checks, une base par service) :{" "}
-                <code className="font-mono text-[11.5px] text-warn">deploy/k8s.yaml</code> est
-                fourni pour le jour de la bascule.
+                k3s, c'est Kubernetes en un seul binaire : mêmes objets (Deployments, Services,
+                probes, LoadBalancer), sans le plan de contrôle à 2 Go de RAM. Les manifests sont
+                prêts dans <code className="font-mono text-[11.5px] text-warn">deploy/k8s/</code>{" "}
+                (4 fichiers, namespace <span className="font-mono text-[11.5px] text-ink">miad</span>),
+                le bootstrap installe tout en une commande — et un jour,{" "}
+                <code className="font-mono text-[11.5px] text-warn">kubectl apply</code> des mêmes
+                fichiers fonctionnera sur un cluster standard.
               </p>
               <div className="mt-4 pt-4 border-t border-line space-y-3">
                 {K8S_PATH.map((p) => (
@@ -1391,9 +1499,12 @@ export default function App() {
             ))}
             <div className="px-4 py-3.5 border-t border-line bg-bg2/60">
               <p className="font-mono text-[11.5px] text-mut leading-relaxed">
-                <span className="text-ok">Bilan :</span> Compose gagne 4 critères, égalité sur 1,
-                K8s sur 2 (qui ne servent qu'à grande échelle). Commencer en Compose n'est pas un
-                pis-aller — c'est le choix adapté, réversible sans réécriture.
+                <span className="text-infra">Bilan :</span> sur ce tableau, Compose gagne 4 critères —
+                mais Kubernetes a été <span className="text-ink">choisi quand même</span>, et c'est
+                défendable : en prenant <span className="text-ok">k3s</span>, l'écart de complexité
+                devient minime (un binaire, zéro plan de contrôle à opérer) et tu gardes les vraies
+                forces de K8s : rolling updates, probes, scaling. Compose reste disponible en repli
+                avec exactement le même .env.
               </p>
             </div>
           </div>
@@ -1412,7 +1523,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <StatusDot tone="ok" />
             <span className="font-mono text-[11px] text-mut">
-              socle initial · 7 services · CI/CD prêt · phase 01/06
+              Kubernetes (k3s) acté · manifests deploy/k8s/ · bootstrap prêt · phase 01/06
             </span>
           </div>
         </div>
