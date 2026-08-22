@@ -1,1 +1,186 @@
 @import "tailwindcss";
+
+@theme {
+  --font-display: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-ink: #0c111c;
+  --color-ink2: #0f1626;
+  --color-panel: #121a2b;
+  --color-panel2: #172136;
+  --color-line: #223050;
+  --color-line2: #2d3f66;
+  --color-mist: #8b98b8;
+  --color-dim: #5c6a8c;
+  --color-paper: #e9eef8;
+  --color-amber: #f2a93b;
+  --color-teal: #3fc9b0;
+  --color-coral: #f2695c;
+  --color-sky: #7fb1e8;
+  --color-moss: #6fcf8e;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(242, 169, 59, 0.35);
+  color: #fff7e8;
+}
+
+/* ---------- layered ambient background ---------- */
+.bg-dotgrid {
+  background-image: radial-gradient(rgba(139, 152, 184, 0.14) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+
+.noise-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+}
+
+.scanline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10%;
+  height: 34%;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(63, 201, 176, 0.045),
+    transparent
+  );
+  animation: scan 9s linear infinite;
+}
+
+@keyframes scan {
+  0% { top: -35%; }
+  100% { top: 110%; }
+}
+
+/* ---------- reveal on scroll ---------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity 0.7s cubic-bezier(0.2, 0.7, 0.3, 1),
+    transform 0.7s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.reveal.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- stamp ---------- */
+.stamp {
+  border: 2px solid var(--color-amber);
+  box-shadow: inset 0 0 0 1.5px var(--color-ink), inset 0 0 0 3px var(--color-amber);
+  transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.stamp:hover {
+  transform: rotate(-3deg) scale(1.04);
+}
+
+.clip-corner {
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+}
+.clip-corner-bl {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+}
+
+/* ---------- marquee ticker ---------- */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.ticker-track {
+  animation: marquee 30s linear infinite;
+}
+.ticker-track:hover {
+  animation-play-state: paused;
+}
+
+/* ---------- blinking cursor / status dot ---------- */
+@keyframes blink {
+  0%, 55% { opacity: 1; }
+  56%, 100% { opacity: 0; }
+}
+.cursor-blink {
+  animation: blink 1.05s steps(1) infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(242, 105, 92, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(242, 105, 92, 0); }
+}
+.pulse-dot {
+  animation: pulse-dot 1.8s ease-out infinite;
+}
+
+@keyframes glowdrift {
+  0%, 100% { opacity: 0.55; transform: translate3d(0, 0, 0); }
+  50% { opacity: 0.85; transform: translate3d(0, 26px, 0); }
+}
+.glow-drift {
+  animation: glowdrift 11s ease-in-out infinite;
+}
+.glow-drift-slow {
+  animation: glowdrift 16s ease-in-out infinite reverse;
+}
+
+/* ---------- rows ---------- */
+.row-slide {
+  transition: transform 0.25s ease, background-color 0.25s ease,
+    border-color 0.25s ease;
+}
+.row-slide:hover {
+  transform: translateX(5px);
+}
+
+/* ---------- gauge ---------- */
+.gauge-ring {
+  transition: stroke-dashoffset 1.5s cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+.score-bar {
+  transition: width 1.2s cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+
+/* ---------- scrollbar ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0c111c;
+}
+::-webkit-scrollbar-thumb {
+  background: #223050;
+  border: 2px solid #0c111c;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #35497a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .ticker-track, .scanline::after, .glow-drift, .glow-drift-slow,
+  .cursor-blink, .pulse-dot { animation: none; }
+  .gauge-ring, .score-bar { transition: none; }
+}
