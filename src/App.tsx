@@ -24,6 +24,10 @@ import {
   TRANSFER,
   ADMIN_VIEWS,
   AUTH_FLOWS,
+  GRPC_COMPARE,
+  GRPC_STEPS,
+  GRPC_CODE_REST,
+  GRPC_CODE_GRPC,
   type Service,
 } from "./data";
 import {
@@ -55,6 +59,7 @@ const SECTIONS = [
   { id: "git", n: "11", label: "Git & CI" },
   { id: "maintenant", n: "12", label: "Maintenant" },
   { id: "admin", n: "13", label: "Admin" },
+  { id: "grpc", n: "14", label: "gRPC" },
 ];
 
 function useScrollSpy() {
@@ -944,6 +949,226 @@ function NowChecklist() {
 }
 
 /* ============================================================
+   gRPC — le déroulé animé d'un appel interne
+   ============================================================ */
+
+const GRPC_TONE: Record<string, { dot: string; border: string; text: string; label: string }> = {
+  rest: { dot: "#4fd68b", border: "border-ok/40", text: "text-ok", label: "REST/JSON" },
+  gateway: { dot: "#f2b44c", border: "border-warn/40", text: "text-warn", label: "passerelle" },
+  grpc: { dot: "#5fc8de", border: "border-infra/40", text: "text-infra", label: "gRPC" },
+  kafka: { dot: "#f27c6b", border: "border-alert/40", text: "text-alert", label: "Kafka" },
+};
+
+function GrpcSection() {
+  const [tab, setTab] = useState<"rest" | "grpc">("grpc");
+  const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(true);
+
+  useEffect(() => {
+    if (!playing) return;
+    const iv = window.setInterval(() => setStep((s) => (s + 1) % GRPC_STEPS.length), 2400);
+    return () => clearInterval(iv);
+  }, [playing]);
+
+  return (
+    <section id="grpc" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+      <SectionHead
+        num="14"
+        kicker="Concept"
+        title="RPC interne & gRPC"
+        lead="Un RPC (Remote Procedure Call), c'est un service qui appelle une fonction d'un autre service comme si elle était locale. gRPC est l'implémentation retenue ici : le contrat vit dans un fichier .proto, le code est généré, et le transport est binaire. C'est la langue que parlent les 8 services entre eux — le frontend, lui, continue de parler JSON."
+      />
+
+      {/* Deux lectures du même appel */}
+      <div className="grid lg:grid-cols-2 gap-4 mb-4">
+        <Reveal>
+          <div className="panel p-5 h-full">
+            <p className="label-mono mb-3">L'idée en une phrase</p>
+            <p className="text-[14px] text-ink leading-relaxed">
+              Au lieu de construire une URL, d'envoyer du JSON et d'espérer que la réponse ait la
+              bonne forme, on écrit{" "}
+              <code className="font-mono text-[12.5px] text-infra">Quote(country: "SN", items: 2)</code>{" "}
+              et on reçoit une réponse <span className="text-ok">typée et garantie par le contrat</span>.
+            </p>
+            <p className="text-[13.5px] text-mut leading-relaxed mt-4">
+              <span className="text-ink">Analogie :</span> dans l'entreprise, les équipes se parlent
+              entre elles en langage technique précis et rapide — c'est <span className="text-infra">gRPC</span>.
+              Avec les clients, on parle la langue du client — c'est le <span className="text-ok">REST/JSON</span>{" "}
+              exposé par la passerelle grpc-gateway. Le frontend Next.js est le client : il ne voit que le JSON.
+            </p>
+            <div className="grid grid-cols-2 gap-2 mt-5">
+              <div className="border border-infra/35 bg-infra/5 rounded-lg px-3 py-2.5">
+                <p className="font-mono text-[11px] text-infra font-bold">gRPC — interne</p>
+                <p className="text-[11.5px] text-mut mt-1 leading-snug">entre les 8 services, synchrone, typé</p>
+              </div>
+              <div className="border border-warn/35 bg-warn/5 rounded-lg px-3 py-2.5">
+                <p className="font-mono text-[11px] text-warn font-bold">Kafka — interne</p>
+                <p className="text-[11.5px] text-mut mt-1 leading-snug">événements asynchrones, découplés</p>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+        <Reveal delay={100}>
+          <div className="panel overflow-hidden h-full flex flex-col">
+            <div className="flex items-center gap-1.5 p-3 border-b border-line">
+              {(["grpc", "rest"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={`px-3 py-1.5 rounded-md font-mono text-[11.5px] cursor-pointer transition-colors border ${
+                    tab === t
+                      ? t === "grpc"
+                        ? "bg-infra/12 text-infra border-infra/40"
+                        : "bg-ok/12 text-ok border-ok/40"
+                      : "text-mut border-transparent hover:text-ink"
+                  }`}
+                >
+                  {t === "grpc" ? "gRPC / Protobuf" : "REST / JSON"}
+                </button>
+              ))}
+              <span className="ml-auto font-mono text-[10px] text-dim">même opération</span>
+            </div>
+            <pre className="code-block !border-0 !rounded-none p-4 text-[11.5px] leading-relaxed flex-1 overflow-x-auto">
+              <code className={tab === "grpc" ? "text-ink/90" : "text-ink/80"}>
+                {tab === "grpc" ? GRPC_CODE_GRPC : GRPC_CODE_REST}
+              </code>
+            </pre>
+          </div>
+        </Reveal>
+      </div>
+
+      {/* Déroulé animé du checkout */}
+      <Reveal>
+        <div className="panel overflow-hidden mb-4">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line bg-bg2/60">
+            <span className="label-mono !text-ink">Une commande, pas à pas</span>
+            <button onClick={() => setPlaying((p) => !p)} className="chip cursor-pointer hover:!border-infra/50 hover:!text-infra transition-colors">
+              {playing ? (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="currentColor"><path d="M2 1.5h3v9H2zM7 1.5h3v9H7z" /></svg>
+              ) : (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="currentColor"><path d="M2.5 1.5 10.5 6l-8 4.5z" /></svg>
+              )}
+              {playing ? "Pause" : "Lecture"}
+            </button>
+          </div>
+          <div className="grid md:grid-cols-4 gap-0">
+            {GRPC_STEPS.map((s, i) => {
+              const t = GRPC_TONE[s.tone];
+              const active = i === step;
+              return (
+                <button
+                  key={s.who}
+                  onClick={() => {
+                    setStep(i);
+                    setPlaying(false);
+                  }}
+                  className={`text-left p-4 border-b md:border-b-0 md:border-r border-line last:border-0 cursor-pointer transition-all duration-300 relative ${
+                    active ? "bg-raise" : "bg-bg2/40 hover:bg-bg2/70"
+                  }`}
+                >
+                  <span
+                    className="absolute top-0 left-0 h-[3px] transition-all duration-500"
+                    style={{ background: t.dot, width: active ? "100%" : "0%" }}
+                  />
+                  <span className="flex items-center gap-2 mb-2">
+                    <span
+                      className={`w-2 h-2 rounded-full shrink-0 transition-opacity ${active ? "dot-live" : ""}`}
+                      style={{ background: t.dot, opacity: active ? 1 : 0.35 }}
+                    />
+                    <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded border ${t.border} ${t.text}`}>{t.label}</span>
+                  </span>
+                  <span className={`block font-display font-bold text-[13px] leading-tight mb-1.5 ${active ? "text-ink" : "text-mut"}`}>{s.who}</span>
+                  <span className={`block text-[11.5px] leading-relaxed transition-colors ${active ? "text-mut" : "text-dim"}`}>{s.text}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="px-4 py-2.5 border-t border-line bg-bg2/60 flex items-center gap-2">
+            {GRPC_STEPS.map((_, i) => (
+              <span
+                key={i}
+                className="h-1 rounded-full transition-all duration-500 cursor-pointer"
+                style={{ width: i === step ? 28 : 8, background: i === step ? GRPC_TONE[GRPC_STEPS[i].tone].dot : "var(--color-line2)" }}
+                onClick={() => {
+                  setStep(i);
+                  setPlaying(false);
+                }}
+              />
+            ))}
+            <span className="ml-auto font-mono text-[10.5px] text-dim">
+              étape {step + 1}/{GRPC_STEPS.length} — clique pour explorer
+            </span>
+          </div>
+        </div>
+      </Reveal>
+
+      {/* Comparatif + extrait .proto réel */}
+      <div className="grid lg:grid-cols-[1.4fr_1fr] gap-4">
+        <Reveal>
+          <div className="panel overflow-hidden h-full">
+            <div className="px-4 py-3 border-b border-line bg-bg2/60">
+              <span className="label-mono !text-ink">REST vs gRPC — le match</span>
+            </div>
+            <div className="hidden md:grid md:grid-cols-[130px_1fr_1fr] px-4 py-2 border-b border-line font-mono text-[10.5px] uppercase tracking-widest text-dim">
+              <span>Critère</span>
+              <span className="text-ok">REST / JSON</span>
+              <span className="text-infra">gRPC / Protobuf</span>
+            </div>
+            {GRPC_COMPARE.map((r, i) => (
+              <div
+                key={r.criterion}
+                className={`row-hover grid grid-cols-1 md:grid-cols-[130px_1fr_1fr] gap-1.5 md:gap-3 px-4 py-3 ${i > 0 ? "border-t border-line" : ""}`}
+              >
+                <span className="text-[13px] text-ink font-medium">{r.criterion}</span>
+                <span className="text-[12.5px] text-mut leading-snug">{r.rest}</span>
+                <span className="text-[12.5px] text-mut leading-snug">{r.grpc}</span>
+              </div>
+            ))}
+            <div className="px-4 py-3.5 border-t border-line bg-bg2/60">
+              <p className="font-mono text-[11.5px] text-mut leading-relaxed">
+                <span className="text-infra">La règle du projet :</span> gRPC + Kafka à l'intérieur,
+                REST/JSON à la frontière. Le frontend ne saura jamais que gRPC tourne derrière.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+        <Reveal delay={100}>
+          <div className="panel overflow-hidden h-full flex flex-col">
+            <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between">
+              <span className="label-mono !text-ink">Le vrai contrat</span>
+              <span className="chip !text-[10px]">shipping.proto</span>
+            </div>
+            <pre className="code-block !border-0 !rounded-none p-4 text-[11.5px] leading-relaxed flex-1 overflow-x-auto">
+              <code className="text-ink/85">{`service ShippingService {
+  rpc Quote(QuoteRequest)
+      returns (QuoteResponse) {
+    option (google.api.http) = {
+      get: "/shipping-rates/quote"
+    };
+  }
+}
+
+message QuoteRequest {
+  string country = 1;   // "SN"
+  int32  item_count = 2;
+}`}</code>
+            </pre>
+            <div className="px-4 py-3 border-t border-line bg-bg2/60">
+              <p className="text-[11.5px] text-dim leading-relaxed">
+                Un seul fichier <span className="font-mono text-infra">.proto</span> donne à la fois
+                l'appel gRPC interne <span className="font-mono text-ink">Quote(...)</span> et la route
+                REST <span className="font-mono text-ok">GET /shipping-rates/quote</span> pour le frontend.
+                C'est l'annotation <span className="font-mono text-warn">google.api.http</span> qui fait le pont.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
    App
    ============================================================ */
 
@@ -1724,6 +1949,9 @@ export default function App() {
           </div>
         </Reveal>
       </section>
+
+      {/* ---------- 14 · RPC interne & gRPC ---------- */}
+      <GrpcSection />
 
       {/* ---------- Pied ---------- */}
       <footer className="border-t border-line bg-bg2/50">

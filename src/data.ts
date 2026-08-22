@@ -477,6 +477,59 @@ export const TRANSFER: TransferOption[] = [
   },
 ];
 
+/* ============================================================
+   Section 14 — RPC interne & gRPC, expliqué
+   ============================================================ */
+
+export const GRPC_COMPARE: { criterion: string; rest: string; grpc: string }[] = [
+  { criterion: "Format", rest: "JSON texte — verbeux, lisible par un humain", grpc: "Protobuf binaire — compact, pensé machine" },
+  { criterion: "Contrat", rest: "implicite (documenté… ou pas)", grpc: ".proto explicite, code généré, erreur à la compilation" },
+  { criterion: "Typage", rest: "lâche (tout est string ou number)", grpc: "strict (int64, enums, map<string,string>…)" },
+  { criterion: "Transport", rest: "1 requête = 1 réponse", grpc: "HTTP/2 — streaming et multiplexage natifs" },
+  { criterion: "Poids / latence", rest: "référence", grpc: "messages 3 à 10× plus petits" },
+  { criterion: "Usage type", rest: "API publique, navigateur, frontend", grpc: "interne, entre services" },
+];
+
+export const GRPC_STEPS: { who: string; text: string; tone: "rest" | "gateway" | "grpc" | "kafka" }[] = [
+  {
+    who: "Next.js (frontend)",
+    text: "Checkout : le frontend appelle POST /orders en JSON — exactement comme il le fait déjà avec WooCommerce. Il ne sait rien de gRPC.",
+    tone: "rest",
+  },
+  {
+    who: "Caddy + grpc-gateway",
+    text: "La passerelle reçoit le JSON et le traduit en appel gRPC typé, généré depuis le .proto. Le contrat REST et le contrat gRPC sortent du même fichier.",
+    tone: "gateway",
+  },
+  {
+    who: "order-svc → shipping-svc",
+    text: "Pour chiffrer la livraison, order-svc appelle Quote(country: \"SN\", items: 2) : c'est ÇA le RPC — une fonction distante, réponse typée, synchrone. Pas d'URL à construire, pas de JSON à parser à la main.",
+    tone: "grpc",
+  },
+  {
+    who: "order-svc → Kafka",
+    text: "Commande créée : order.created est publié. payment-svc et notification-svc réagissent chacun de leur côté — asynchrone et découplé. gRPC pour le synchrone, Kafka pour le reste.",
+    tone: "kafka",
+  },
+];
+
+export const GRPC_CODE_REST = `// REST / JSON — l'appel tel qu'il existe aujourd'hui
+fetch("http://shipping-svc:8085/shipping-rates/quote?country=SN&items=2")
+  .then((r) => r.json())
+  .then((data) => data.total_xof);
+// data.total_xof existe-t-il vraiment ? Personne ne le garantit :
+// le contrat vit dans la doc… quand il y en a une.`;
+
+export const GRPC_CODE_GRPC = `// gRPC / Protobuf — la même opération, en appel typé
+resp, err := shippingClient.Quote(ctx, &shippingv1.QuoteRequest{
+    Country:   "SN",
+    ItemCount: 2,
+})
+if err != nil { ... }
+total := resp.TotalXof // int64, garanti par le contrat .proto
+// Si le contrat change, le code ne compile plus :
+// l'erreur se voit AVANT la production.`;
+
 export const ADMIN_VIEWS: { name: string; desc: string; svc: string }[] = [
   { name: "Vue d'ensemble", desc: "Compteurs agrégés (produits, boutiques, commandes, clients, CA) + dernières commandes + état des services en direct.", svc: "agrégation" },
   { name: "Commandes", desc: "Toutes les commandes avec filtres de statut, pagination explicite, référence et boutique d'origine.", svc: "order-svc" },
