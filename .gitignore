@@ -1,33 +1,41 @@
-# ---- Secrets & config locale — JAMAIS dans le dépôt
-.env
-.env.local
-.env.*.local
-*.pem
-*.key
-
-# ---- Go
-/bin/
-/services/*/[!.]*
-*.exe
+```
+# Go-specific ignores
+*.o
+*.a
+*.out
 *.test
+*.prof
+*.syso
+
+# Dependencies
 vendor/
 
-# ---- Node (console web)
-node_modules/
-dist/
+# Environment
+.env
+.env.local
+.env.*
+
+# Logs and temp files
 *.log
-npm-debug.log*
+*.tmp
 
-# ---- Docker volumes locaux
-pg/
-kafka/
-caddy_data/
-
-# ---- OS & éditeurs
-.DS_Store
+# Editors
+.vscode/
 .idea/
-.vscode/*
-!.vscode/extensions.json
 *.swp
-.next/
+*.swo
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Build artifacts
+dist/
 build/
+target/
+```

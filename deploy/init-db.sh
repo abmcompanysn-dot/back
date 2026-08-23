@@ -14,6 +14,7 @@ DATABASES=(
   miad_shipping
   miad_auth
   miad_notification
+  miad_email
 )
 
 for db in "${DATABASES[@]}"; do
@@ -23,4 +24,4 @@ for db in "${DATABASES[@]}"; do
 EOSQL
 done
 
-echo "→ 7 bases prêtes."
+echo "→ 8 bases prêtes."
