@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	wcURL    = flag.String("wc-url", "", "https://api.miadmarket.com")
+	wcURL    = flag.String("wc-url", "", "https://api.miadmarket.ca")
 	wcKey    = flag.String("wc-key", "", "ck_…")
 	wcSecret = flag.String("wc-secret", "", "cs_…")
 )

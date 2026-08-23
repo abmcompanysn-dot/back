@@ -119,6 +119,19 @@ services:
       redis: { condition: service_healthy }
       kafka: { condition: service_started }
 
+  email-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: email-svc } }
+    environment:
+      DATABASE_URL_EMAIL: ${DATABASE_URL_EMAIL}
+      PORT_EMAIL: "8089"
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      FROM_EMAIL: ${FROM_EMAIL}
+    ports: ["127.0.0.1:8089:8089"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_started }
+
   notification-svc:
     <<: *service-defaults
     build: { context: ., dockerfile: Dockerfile, args: { SERVICE: notification-svc } }
@@ -140,6 +153,7 @@ services:
       SHIPPING_SVC_URL: http://shipping-svc:8085
       AUTH_SVC_URL: http://auth-svc:8086
       NOTIFICATION_SVC_URL: http://notification-svc:8087
+      EMAIL_SVC_URL: http://email-svc:8089
     ports: ["127.0.0.1:8088:8088"]
 
   # ---------- Passerelle externe ----------
