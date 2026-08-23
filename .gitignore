@@ -1,41 +1,62 @@
 ```
-# Go-specific ignores
-*.o
-*.a
-*.out
-*.test
-*.prof
-*.syso
-
 # Dependencies
 vendor/
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.a
+*.o
+*.obj
+*.out
+
+# Build artifacts
+bin/
+dist/
+build/
+target/
+
+# Logs
+*.log
 
 # Environment
 .env
 .env.local
-.env.*
-
-# Logs and temp files
-*.log
-*.tmp
+*.env.*
 
 # Editors
 .vscode/
 .idea/
 *.swp
 *.swo
+*.tmp
 
-# OS-specific
+# OS
 .DS_Store
 Thumbs.db
 
 # Coverage
-.coverage
 coverage/
 htmlcov/
+.coverage
 
-# Build artifacts
-dist/
-build/
-target/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+.eggs/
+
+# Node
+node_modules/
+
+# Go specific
+*.test
+*.prof
+go.mod
+go.sum
 ```
