@@ -29,8 +29,15 @@ data:
   PORT_SHIPPING: "8085"
   PORT_AUTH: "8086"
   PORT_NOTIFICATION: "8087"
+  PORT_ADMIN: "8088"
   CATALOG_SVC_URL: http://catalog-svc
+  VENDOR_SVC_URL: http://vendor-svc
   ORDER_SVC_URL: http://order-svc
+  PAYMENT_SVC_URL: http://payment-svc
+  SHIPPING_SVC_URL: http://shipping-svc
+  AUTH_SVC_URL: http://auth-svc
+  NOTIFICATION_SVC_URL: http://notification-svc
+  ADMIN_SVC_URL: http://admin-svc
   PAYMENT_TIMEOUT_MINUTES: "30"
   OTP_TTL_MINUTES: "5"
   JWT_TTL_HOURS: "72"
@@ -54,8 +61,14 @@ stringData:
   DATABASE_URL_AUTH: postgres://miad:CHANGE-MOI@postgres:5432/miad_auth?sslmode=disable
   DATABASE_URL_NOTIFICATION: postgres://miad:CHANGE-MOI@postgres:5432/miad_notification?sslmode=disable
   JWT_SECRET: CHANGE-MOI-SUR-LE-VPS
+  ADMIN_EMAIL: ""
+  ADMIN_PASSWORD: ""
   REDIS_PASSWORD: ""
   STRIPE_SECRET_KEY: ""
   STRIPE_WEBHOOK_SECRET: ""
+  PAYDUNYA_MASTER_KEY: ""
+  PAYDUNYA_API_KEY_PUBLIC: ""
   PAYDUNYA_API_KEY_PRIVATE: ""
+  FIREBASE_WEB_CLIENT_ID: ""
+  STOREFRONT_URL: ""
   SMS_PROVIDER_URL: ""

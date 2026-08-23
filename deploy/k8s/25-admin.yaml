@@ -1,0 +1,45 @@
+# ============================================================
+# admin-svc — console d'administration + API agrégée.
+# L'interface est EMBARQUÉE dans le binaire Go (go:embed).
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin-svc
+  namespace: miad
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: admin-svc }
+  template:
+    metadata:
+      labels: { app: admin-svc }
+    spec:
+      containers:
+        - name: svc
+          image: miad/admin-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8088 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8088 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8088 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin-svc
+  namespace: miad
+spec:
+  selector: { app: admin-svc }
+  ports: [{ port: 80, targetPort: 8088 }]

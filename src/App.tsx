@@ -21,6 +21,13 @@ import {
   K8S_COMPARE,
   K8S_PATH,
   VPS_ACCESS,
+  TRANSFER,
+  ADMIN_VIEWS,
+  AUTH_FLOWS,
+  GRPC_COMPARE,
+  GRPC_STEPS,
+  GRPC_CODE_REST,
+  GRPC_CODE_GRPC,
   type Service,
 } from "./data";
 import {
@@ -51,6 +58,8 @@ const SECTIONS = [
   { id: "vps", n: "10", label: "VPS" },
   { id: "git", n: "11", label: "Git & CI" },
   { id: "maintenant", n: "12", label: "Maintenant" },
+  { id: "admin", n: "13", label: "Admin" },
+  { id: "grpc", n: "14", label: "gRPC" },
 ];
 
 function useScrollSpy() {
@@ -767,6 +776,58 @@ function SshPanel() {
   );
 }
 
+/* ---------- Transfert du code vers le VPS ---------- */
+
+function TransferPanel() {
+  const [tab, setTab] = useState(TRANSFER[0].id);
+  const active = TRANSFER.find((t) => t.id === tab) ?? TRANSFER[0];
+
+  return (
+    <div className="panel overflow-hidden mb-5">
+      <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+        <span className="label-mono !text-ink">Faire arriver le code sur le VPS</span>
+        <div className="flex gap-1.5">
+          {TRANSFER.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-3 py-1 rounded-md font-mono text-[11px] cursor-pointer transition-colors border ${
+                tab === t.id
+                  ? "bg-ok/12 text-ok border-ok/35"
+                  : "text-mut border-transparent hover:text-ink"
+              }`}
+            >
+              {t.badge}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="p-4 space-y-4">
+        <p className="font-display font-bold text-[15px]">{active.title}</p>
+        {active.steps.map((s, i) => (
+          <div key={i}>
+            <p className="text-[12.5px] text-mut leading-relaxed mb-2">
+              <span className="font-mono text-[11px] text-ok mr-1.5">{String(i + 1).padStart(2, "0")}</span>
+              {s.label}
+            </p>
+            <div className="code-block p-3.5 flex items-start justify-between gap-3">
+              <code className="text-[12px] text-ink/90 whitespace-pre-wrap break-all leading-relaxed">
+                {s.cmd}
+              </code>
+              <span className="shrink-0">
+                <CopyButton text={s.cmd} label="" />
+              </span>
+            </div>
+          </div>
+        ))}
+        <p className="font-mono text-[11px] text-dim leading-relaxed pt-1">
+          {active.note}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function NowChecklist() {
   const [done, setDone] = useState<boolean[]>(() => {
     try {
@@ -884,6 +945,226 @@ function NowChecklist() {
         )}
       </p>
     </div>
+  );
+}
+
+/* ============================================================
+   gRPC — le déroulé animé d'un appel interne
+   ============================================================ */
+
+const GRPC_TONE: Record<string, { dot: string; border: string; text: string; label: string }> = {
+  rest: { dot: "#4fd68b", border: "border-ok/40", text: "text-ok", label: "REST/JSON" },
+  gateway: { dot: "#f2b44c", border: "border-warn/40", text: "text-warn", label: "passerelle" },
+  grpc: { dot: "#5fc8de", border: "border-infra/40", text: "text-infra", label: "gRPC" },
+  kafka: { dot: "#f27c6b", border: "border-alert/40", text: "text-alert", label: "Kafka" },
+};
+
+function GrpcSection() {
+  const [tab, setTab] = useState<"rest" | "grpc">("grpc");
+  const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(true);
+
+  useEffect(() => {
+    if (!playing) return;
+    const iv = window.setInterval(() => setStep((s) => (s + 1) % GRPC_STEPS.length), 2400);
+    return () => clearInterval(iv);
+  }, [playing]);
+
+  return (
+    <section id="grpc" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+      <SectionHead
+        num="14"
+        kicker="Concept"
+        title="RPC interne & gRPC"
+        lead="Un RPC (Remote Procedure Call), c'est un service qui appelle une fonction d'un autre service comme si elle était locale. gRPC est l'implémentation retenue ici : le contrat vit dans un fichier .proto, le code est généré, et le transport est binaire. C'est la langue que parlent les 8 services entre eux — le frontend, lui, continue de parler JSON."
+      />
+
+      {/* Deux lectures du même appel */}
+      <div className="grid lg:grid-cols-2 gap-4 mb-4">
+        <Reveal>
+          <div className="panel p-5 h-full">
+            <p className="label-mono mb-3">L'idée en une phrase</p>
+            <p className="text-[14px] text-ink leading-relaxed">
+              Au lieu de construire une URL, d'envoyer du JSON et d'espérer que la réponse ait la
+              bonne forme, on écrit{" "}
+              <code className="font-mono text-[12.5px] text-infra">Quote(country: "SN", items: 2)</code>{" "}
+              et on reçoit une réponse <span className="text-ok">typée et garantie par le contrat</span>.
+            </p>
+            <p className="text-[13.5px] text-mut leading-relaxed mt-4">
+              <span className="text-ink">Analogie :</span> dans l'entreprise, les équipes se parlent
+              entre elles en langage technique précis et rapide — c'est <span className="text-infra">gRPC</span>.
+              Avec les clients, on parle la langue du client — c'est le <span className="text-ok">REST/JSON</span>{" "}
+              exposé par la passerelle grpc-gateway. Le frontend Next.js est le client : il ne voit que le JSON.
+            </p>
+            <div className="grid grid-cols-2 gap-2 mt-5">
+              <div className="border border-infra/35 bg-infra/5 rounded-lg px-3 py-2.5">
+                <p className="font-mono text-[11px] text-infra font-bold">gRPC — interne</p>
+                <p className="text-[11.5px] text-mut mt-1 leading-snug">entre les 8 services, synchrone, typé</p>
+              </div>
+              <div className="border border-warn/35 bg-warn/5 rounded-lg px-3 py-2.5">
+                <p className="font-mono text-[11px] text-warn font-bold">Kafka — interne</p>
+                <p className="text-[11.5px] text-mut mt-1 leading-snug">événements asynchrones, découplés</p>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+        <Reveal delay={100}>
+          <div className="panel overflow-hidden h-full flex flex-col">
+            <div className="flex items-center gap-1.5 p-3 border-b border-line">
+              {(["grpc", "rest"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={`px-3 py-1.5 rounded-md font-mono text-[11.5px] cursor-pointer transition-colors border ${
+                    tab === t
+                      ? t === "grpc"
+                        ? "bg-infra/12 text-infra border-infra/40"
+                        : "bg-ok/12 text-ok border-ok/40"
+                      : "text-mut border-transparent hover:text-ink"
+                  }`}
+                >
+                  {t === "grpc" ? "gRPC / Protobuf" : "REST / JSON"}
+                </button>
+              ))}
+              <span className="ml-auto font-mono text-[10px] text-dim">même opération</span>
+            </div>
+            <pre className="code-block !border-0 !rounded-none p-4 text-[11.5px] leading-relaxed flex-1 overflow-x-auto">
+              <code className={tab === "grpc" ? "text-ink/90" : "text-ink/80"}>
+                {tab === "grpc" ? GRPC_CODE_GRPC : GRPC_CODE_REST}
+              </code>
+            </pre>
+          </div>
+        </Reveal>
+      </div>
+
+      {/* Déroulé animé du checkout */}
+      <Reveal>
+        <div className="panel overflow-hidden mb-4">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line bg-bg2/60">
+            <span className="label-mono !text-ink">Une commande, pas à pas</span>
+            <button onClick={() => setPlaying((p) => !p)} className="chip cursor-pointer hover:!border-infra/50 hover:!text-infra transition-colors">
+              {playing ? (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="currentColor"><path d="M2 1.5h3v9H2zM7 1.5h3v9H7z" /></svg>
+              ) : (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="currentColor"><path d="M2.5 1.5 10.5 6l-8 4.5z" /></svg>
+              )}
+              {playing ? "Pause" : "Lecture"}
+            </button>
+          </div>
+          <div className="grid md:grid-cols-4 gap-0">
+            {GRPC_STEPS.map((s, i) => {
+              const t = GRPC_TONE[s.tone];
+              const active = i === step;
+              return (
+                <button
+                  key={s.who}
+                  onClick={() => {
+                    setStep(i);
+                    setPlaying(false);
+                  }}
+                  className={`text-left p-4 border-b md:border-b-0 md:border-r border-line last:border-0 cursor-pointer transition-all duration-300 relative ${
+                    active ? "bg-raise" : "bg-bg2/40 hover:bg-bg2/70"
+                  }`}
+                >
+                  <span
+                    className="absolute top-0 left-0 h-[3px] transition-all duration-500"
+                    style={{ background: t.dot, width: active ? "100%" : "0%" }}
+                  />
+                  <span className="flex items-center gap-2 mb-2">
+                    <span
+                      className={`w-2 h-2 rounded-full shrink-0 transition-opacity ${active ? "dot-live" : ""}`}
+                      style={{ background: t.dot, opacity: active ? 1 : 0.35 }}
+                    />
+                    <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded border ${t.border} ${t.text}`}>{t.label}</span>
+                  </span>
+                  <span className={`block font-display font-bold text-[13px] leading-tight mb-1.5 ${active ? "text-ink" : "text-mut"}`}>{s.who}</span>
+                  <span className={`block text-[11.5px] leading-relaxed transition-colors ${active ? "text-mut" : "text-dim"}`}>{s.text}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="px-4 py-2.5 border-t border-line bg-bg2/60 flex items-center gap-2">
+            {GRPC_STEPS.map((_, i) => (
+              <span
+                key={i}
+                className="h-1 rounded-full transition-all duration-500 cursor-pointer"
+                style={{ width: i === step ? 28 : 8, background: i === step ? GRPC_TONE[GRPC_STEPS[i].tone].dot : "var(--color-line2)" }}
+                onClick={() => {
+                  setStep(i);
+                  setPlaying(false);
+                }}
+              />
+            ))}
+            <span className="ml-auto font-mono text-[10.5px] text-dim">
+              étape {step + 1}/{GRPC_STEPS.length} — clique pour explorer
+            </span>
+          </div>
+        </div>
+      </Reveal>
+
+      {/* Comparatif + extrait .proto réel */}
+      <div className="grid lg:grid-cols-[1.4fr_1fr] gap-4">
+        <Reveal>
+          <div className="panel overflow-hidden h-full">
+            <div className="px-4 py-3 border-b border-line bg-bg2/60">
+              <span className="label-mono !text-ink">REST vs gRPC — le match</span>
+            </div>
+            <div className="hidden md:grid md:grid-cols-[130px_1fr_1fr] px-4 py-2 border-b border-line font-mono text-[10.5px] uppercase tracking-widest text-dim">
+              <span>Critère</span>
+              <span className="text-ok">REST / JSON</span>
+              <span className="text-infra">gRPC / Protobuf</span>
+            </div>
+            {GRPC_COMPARE.map((r, i) => (
+              <div
+                key={r.criterion}
+                className={`row-hover grid grid-cols-1 md:grid-cols-[130px_1fr_1fr] gap-1.5 md:gap-3 px-4 py-3 ${i > 0 ? "border-t border-line" : ""}`}
+              >
+                <span className="text-[13px] text-ink font-medium">{r.criterion}</span>
+                <span className="text-[12.5px] text-mut leading-snug">{r.rest}</span>
+                <span className="text-[12.5px] text-mut leading-snug">{r.grpc}</span>
+              </div>
+            ))}
+            <div className="px-4 py-3.5 border-t border-line bg-bg2/60">
+              <p className="font-mono text-[11.5px] text-mut leading-relaxed">
+                <span className="text-infra">La règle du projet :</span> gRPC + Kafka à l'intérieur,
+                REST/JSON à la frontière. Le frontend ne saura jamais que gRPC tourne derrière.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+        <Reveal delay={100}>
+          <div className="panel overflow-hidden h-full flex flex-col">
+            <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between">
+              <span className="label-mono !text-ink">Le vrai contrat</span>
+              <span className="chip !text-[10px]">shipping.proto</span>
+            </div>
+            <pre className="code-block !border-0 !rounded-none p-4 text-[11.5px] leading-relaxed flex-1 overflow-x-auto">
+              <code className="text-ink/85">{`service ShippingService {
+  rpc Quote(QuoteRequest)
+      returns (QuoteResponse) {
+    option (google.api.http) = {
+      get: "/shipping-rates/quote"
+    };
+  }
+}
+
+message QuoteRequest {
+  string country = 1;   // "SN"
+  int32  item_count = 2;
+}`}</code>
+            </pre>
+            <div className="px-4 py-3 border-t border-line bg-bg2/60">
+              <p className="text-[11.5px] text-dim leading-relaxed">
+                Un seul fichier <span className="font-mono text-infra">.proto</span> donne à la fois
+                l'appel gRPC interne <span className="font-mono text-ink">Quote(...)</span> et la route
+                REST <span className="font-mono text-ok">GET /shipping-rates/quote</span> pour le frontend.
+                C'est l'annotation <span className="font-mono text-warn">google.api.http</span> qui fait le pont.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+      </div>
+    </section>
   );
 }
 
@@ -1302,7 +1583,7 @@ export default function App() {
             <div className="flex items-stretch gap-2 min-w-[720px]">
               {[
                 { t: "Ta machine", s: "scripts/git-publish.sh", tone: "text-ink border-line2" },
-                { t: "GitHub", s: "backend-miad", tone: "text-ok border-ok/40" },
+                { t: "GitHub", s: "abmcompanysn-dot/back", tone: "text-ok border-ok/40" },
                 { t: "GitHub Actions", s: "deploy-vps.yml", tone: "text-warn border-warn/40" },
                 { t: "SSH", s: "secrets VPS_*", tone: "text-infra border-infra/40" },
                 { t: "VPS (k3s)", s: "vps-bootstrap.sh", tone: "text-ok border-ok/40" },
@@ -1329,14 +1610,14 @@ export default function App() {
               <div className="panel overflow-hidden">
                 <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-bg2/60">
                   <span className="font-mono text-[11px] text-mut">Étape 1 — pousser vers le dépôt créé</span>
-                  <CopyButton text={"git init\ngit add -A\ngit commit -m \"premier commit\"\ngit branch -M main\ngit remote add origin https://github.com/abmcompanysn-dot/backend-miad.git\ngit push -u origin main"} />
+                  <CopyButton text={"git init\ngit add -A\ngit commit -m \"premier commit\"\ngit branch -M main\ngit remote add origin https://github.com/abmcompanysn-dot/back.git\ngit push -u origin main"} />
                 </div>
                 <div className="code-block !border-0 !rounded-none p-4">
                   <p><span className="text-ok">$</span> git init</p>
                   <p><span className="text-ok">$</span> git add -A <span className="text-dim"># tout le backend, pas seulement le README</span></p>
                   <p><span className="text-ok">$</span> git commit -m "premier commit"</p>
                   <p><span className="text-ok">$</span> git branch -M main</p>
-                  <p><span className="text-ok">$</span> git remote add origin https://github.com/abmcompanysn-dot/backend-miad.git</p>
+                  <p><span className="text-ok">$</span> git remote add origin https://github.com/abmcompanysn-dot/back.git</p>
                   <p><span className="text-ok">$</span> git push -u origin main</p>
                 </div>
                 <div className="px-4 py-3 border-t border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
@@ -1344,12 +1625,12 @@ export default function App() {
                     Ou en une seule commande : <code className="font-mono text-ok">bash scripts/git-publish.sh</code>
                   </p>
                   <a
-                    href="https://github.com/abmcompanysn-dot/backend-miad"
+                    href="https://github.com/abmcompanysn-dot/back"
                     target="_blank"
                     rel="noreferrer"
                     className="chip !text-ink hover:!border-ok/50 hover:!text-ok transition-colors"
                   >
-                    abmcompanysn-dot/backend-miad
+                    abmcompanysn-dot/back
                     <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M4 2h6v6M10 2 2 10" />
                     </svg>
@@ -1420,6 +1701,10 @@ export default function App() {
 
         <Reveal>
           <SshPanel />
+        </Reveal>
+
+        <Reveal delay={60}>
+          <TransferPanel />
         </Reveal>
 
         <div className="grid lg:grid-cols-[1.25fr_1fr] gap-5 items-start mb-5">
@@ -1511,6 +1796,163 @@ export default function App() {
         </Reveal>
       </section>
 
+      {/* ---------- 13 · Admin ---------- */}
+      <section id="admin" className="max-w-[1200px] mx-auto px-5 py-16 border-t border-line scroll-mt-16">
+        <SectionHead
+          num="13"
+          kicker="Conception"
+          title="Console d'administration"
+          lead="Un 8ᵉ service (admin-svc) embarque l'interface complète — servie par le backend lui-même sur /admin, zéro build frontend. Chaque requête API exige un JWT role=admin, vérifié deux fois (admin-svc puis le service propriétaire)."
+        />
+
+        <div className="grid lg:grid-cols-[1.45fr_1fr] gap-4 mb-4">
+          {/* Aperçu vivant du tableau de bord */}
+          <Reveal>
+            <div className="panel overflow-hidden">
+              <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line bg-bg2/60">
+                <span className="w-2.5 h-2.5 rounded-full bg-alert/70" />
+                <span className="w-2.5 h-2.5 rounded-full bg-warn/70" />
+                <span className="w-2.5 h-2.5 rounded-full bg-ok/70" />
+                <span className="font-mono text-[10.5px] text-mut ml-2">https://miadmarket.com/admin</span>
+                <span className="chip ml-auto !text-[10px] !text-ok !border-ok/40">GET /admin</span>
+              </div>
+              <div className="grid grid-cols-[92px_1fr] min-h-[300px]">
+                <div className="border-r border-line bg-bg2/40 p-2.5 flex flex-col gap-1.5">
+                  {["Vue d'ensemble", "Commandes", "Produits", "Boutiques", "Clients", "Paiements", "Livraison", "Système"].map((v, i) => (
+                    <span
+                      key={v}
+                      className={`block font-mono text-[9.5px] px-2 py-1.5 rounded-md transition-colors cursor-default ${
+                        i === 0 ? "bg-ok/12 text-ok border border-ok/30" : "text-dim hover:text-ink hover:bg-raise border border-transparent"
+                      }`}
+                    >
+                      {v}
+                    </span>
+                  ))}
+                </div>
+                <div className="p-4">
+                  <div className="grid grid-cols-4 gap-2 mb-4">
+                    {[
+                      { l: "Produits", v: "1 284" },
+                      { l: "Boutiques", v: "73" },
+                      { l: "Commandes", v: "9 412" },
+                      { l: "CA confirmé", v: "8,4 M XOF" },
+                    ].map((t, i) => (
+                      <div key={t.l} className="bg-bg2/70 border border-line rounded-lg p-2.5">
+                        <p className="font-display font-extrabold text-[15px] leading-none">{t.v}</p>
+                        <p className="font-mono text-[8.5px] text-dim uppercase tracking-wider mt-1.5">{t.l}</p>
+                        <div className="h-[3px] rounded-full bg-line mt-2 overflow-hidden">
+                          <div className="h-full bg-ok bar-grow" style={{ width: `${48 + i * 14}%`, animationDelay: `${i * 130}ms` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5">
+                    {[
+                      { ref: "MIAD-20260214-113207-1", st: "paid", tone: "ok", amt: "24 500" },
+                      { ref: "MIAD-20260214-113241-1", st: "pending_payment", tone: "warn", amt: "9 000" },
+                      { ref: "MIAD-20260214-113312-2", st: "shipped", tone: "infra", amt: "61 250" },
+                    ].map((o, i) => (
+                      <div key={o.ref} className="flex items-center gap-3 bg-bg2/50 border border-line rounded-md px-3 py-2">
+                        <span className={`w-1.5 h-1.5 rounded-full ${i === 1 ? "bg-warn node-pulse" : "bg-ok/70"}`} />
+                        <span className="font-mono text-[10px] text-ink/80 flex-1 truncate">{o.ref}</span>
+                        <span className={`font-mono text-[9px] px-2 py-0.5 rounded-full border ${
+                          o.tone === "ok" ? "text-ok border-ok/40 bg-ok/8" : o.tone === "warn" ? "text-warn border-warn/40 bg-warn/8" : "text-infra border-infra/40 bg-infra/8"
+                        }`}>{o.st}</span>
+                        <span className="font-mono text-[10px] text-mut">{o.amt} XOF</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="px-4 py-3 border-t border-line bg-bg2/60 flex items-center gap-3 flex-wrap">
+                <span className="label-mono">Embarquée dans admin-svc (embed Go)</span>
+                <span className="chip !text-[10px]">vanilla JS · zéro dépendance</span>
+                <span className="chip !text-[10px]">JWT role=admin exigé</span>
+              </div>
+            </div>
+          </Reveal>
+
+          {/* Auth + câblages réels */}
+          <div className="space-y-4">
+            <Reveal delay={80}>
+              <div className="panel p-5">
+                <p className="label-mono mb-3.5 !text-warn">Trois façons de s'authentifier</p>
+                <div className="space-y-3">
+                  {AUTH_FLOWS.map((f) => (
+                    <div key={f.name} className={`border rounded-lg p-3.5 bg-bg2/60 ${
+                      f.tone === "ok" ? "border-ok/30" : f.tone === "warn" ? "border-warn/30" : "border-infra/30"
+                    }`}>
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <p className="font-display font-bold text-[13.5px]">{f.name}</p>
+                        <span className={`chip !text-[9.5px] ${
+                          f.tone === "ok" ? "!text-ok !border-ok/40" : f.tone === "warn" ? "!text-warn !border-warn/40" : "!text-infra !border-infra/40"
+                        }`}>auth-svc</span>
+                      </div>
+                      <p className={`font-mono text-[10.5px] mt-1.5 ${
+                        f.tone === "ok" ? "text-ok/80" : f.tone === "warn" ? "text-warn/80" : "text-infra/80"
+                      }`}>{f.endpoint}</p>
+                      <p className="text-[12px] text-mut leading-relaxed mt-2">{f.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Reveal>
+            <Reveal delay={160}>
+              <div className="panel p-5">
+                <p className="label-mono mb-3 !text-ok">Paiements — câblés pour de vrai</p>
+                <ul className="space-y-2.5">
+                  {[
+                    ["Stripe Checkout Session", "api.stripe.com/v1/checkout/sessions — URL de paiement carte renvoyée au frontend"],
+                    ["PayDunya invoices", "app.paydunya.com/api/v1 — Wave & Orange Money en XOF, redirect_url fournie"],
+                    ["Signatures vérifiées", "Stripe-Signature (HMAC) + token PayDunya contrôlés avant toute mutation"],
+                    ["Kafka de bout en bout", "order.created → init paiement → payment.confirmed → commande paid"],
+                  ].map(([k, v]) => (
+                    <li key={k} className="flex gap-3 text-[12.5px] leading-relaxed">
+                      <span className="text-ok shrink-0 mt-[3px]">▸</span>
+                      <span><span className="text-ink">{k}</span> <span className="text-mut">— {v}</span></span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Reveal>
+          </div>
+        </div>
+
+        {/* Les 8 vues */}
+        <Reveal>
+          <div className="panel overflow-hidden">
+            <div className="px-4 py-3 border-b border-line bg-bg2/60 flex items-center justify-between gap-3 flex-wrap">
+              <span className="label-mono !text-ink">Les 8 vues de la console</span>
+              <span className="chip !text-[10px]">chaque vue interroge son service propriétaire via l'API admin</span>
+            </div>
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 divide-line">
+              {ADMIN_VIEWS.map((v, i) => (
+                <div key={v.name} className={`row-hover px-4 py-3.5 flex gap-4 ${i > 0 ? "md:border-t md:border-line" : ""} ${i % 2 === 1 ? "md:border-l md:border-line" : ""}`}>
+                  <span className="font-mono text-[11px] text-ok pt-0.5 shrink-0">{String(i + 1).padStart(2, "0")}</span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <p className="font-display font-bold text-[14px]">{v.name}</p>
+                      <span className="chip !text-[9.5px]">{v.svc}</span>
+                    </div>
+                    <p className="text-[12.5px] text-mut leading-relaxed mt-1">{v.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-4 py-3.5 border-t border-line bg-bg2/60">
+              <p className="font-mono text-[11.5px] text-mut leading-relaxed">
+                <span className="text-ok">Première connexion :</span> le compte admin est seedé au démarrage depuis{" "}
+                <span className="text-warn">ADMIN_EMAIL</span> / <span className="text-warn">ADMIN_PASSWORD</span> du .env —
+                à définir <span className="text-ink">avant le premier boot</span> sur le VPS.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
+      {/* ---------- 14 · RPC interne & gRPC ---------- */}
+      <GrpcSection />
+
       {/* ---------- Pied ---------- */}
       <footer className="border-t border-line bg-bg2/50">
         <div className="max-w-[1200px] mx-auto px-5 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -1523,7 +1965,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <StatusDot tone="ok" />
             <span className="font-mono text-[11px] text-mut">
-              Kubernetes (k3s) acté · manifests deploy/k8s/ · bootstrap prêt · phase 01/06
+              8 services · console admin /admin · Firebase + OTP · k3s acté · phase 01/06
             </span>
           </div>
         </div>

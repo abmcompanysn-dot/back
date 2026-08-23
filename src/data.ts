@@ -341,8 +341,8 @@ sans WordPress, en suivant exactement les sections 3 à 6 du document "Backend s
   paiement) et propose une gestion explicite de ce cas avant de continuer.`;
 
 export const STATS = [
-  { value: 7, suffix: "", label: "services Go indépendants" },
-  { value: 19, suffix: "", label: "routes contractualisées ici" },
+  { value: 8, suffix: "", label: "services Go (dont admin-svc)" },
+  { value: 32, suffix: "", label: "routes contractualisées ici" },
   { value: 80, suffix: "+", label: "routes Next.js à couvrir" },
   { value: 70, suffix: "+", label: "boutiques actives à migrer" },
 ];
@@ -371,12 +371,12 @@ export const NOW_STEPS: NowStep[] = [
   {
     title: "Récupère le code sur ta machine",
     where: "Ta machine",
-    body: "Télécharge l'export du projet depuis ce sandbox (bouton d'export de ta plateforme), ou copie l'arborescence dans un dossier local « backend-miad ». C'est ce dossier qui deviendra le dépôt.",
+    body: "Télécharge l'export du projet depuis ce sandbox (bouton d'export de ta plateforme), ou copie l'arborescence dans un dossier local « back ». C'est ce dossier qui deviendra le dépôt.",
   },
   {
     title: "Publie sur ton dépôt GitHub",
     where: "Ta machine",
-    body: "Le dépôt abmcompanysn-dot/backend-miad existe déjà. Une seule commande pousse tout le backend (pas juste le README) :",
+    body: "Le dépôt abmcompanysn-dot/back existe déjà. Une seule commande pousse tout le backend (pas juste le README) :",
     cmd: "bash scripts/git-publish.sh",
   },
   {
@@ -390,7 +390,7 @@ export const NOW_STEPS: NowStep[] = [
     title: "Clone le dépôt sur le VPS",
     where: "SSH → VPS",
     body: "Le bootstrap a besoin du code (manifests, Caddyfile, scripts) présent sur la machine :",
-    cmd: "git clone https://github.com/abmcompanysn-dot/backend-miad.git /opt/miad-backend",
+    cmd: "git clone https://github.com/abmcompanysn-dot/back.git /opt/miad-backend",
   },
   {
     title: "Bootstrap Kubernetes — UNE commande",
@@ -432,6 +432,134 @@ export const K8S_COMPARE: CompareRow[] = [
   { criterion: "Scaling horizontal multi-machines", compose: "manuel", k8s: "natif + autoscaling (HPA)", winner: "k8s" },
   { criterion: "Débogage au quotidien", compose: "docker compose logs, 1 fichier", k8s: "kubectl + concepts à maîtriser", winner: "compose" },
   { criterion: "Pour 70 boutiques / trafic actuel", compose: "largement suffisant", k8s: "surdimensionné", winner: "compose" },
+];
+
+export interface TransferOption {
+  id: string;
+  badge: string;
+  title: string;
+  steps: { label: string; cmd: string }[];
+  note: string;
+}
+
+export const TRANSFER: TransferOption[] = [
+  {
+    id: "github",
+    badge: "recommandé",
+    title: "Via GitHub (active la CI/CD)",
+    steps: [
+      {
+        label: "Sur ton PC — exporte le projet depuis le sandbox (bouton Download / Export / ZIP de l'interface), décompresse-le, puis :",
+        cmd: "cd back\ngit init\ngit add -A\ngit commit -m \"premier commit\"\ngit branch -M main\ngit remote add origin https://github.com/abmcompanysn-dot/back.git\ngit push -u origin main",
+      },
+      {
+        label: "Sur le VPS — le clone fonctionne maintenant :",
+        cmd: "rm -rf /opt/miad-backend\ngit clone https://github.com/abmcompanysn-dot/back.git /opt/miad-backend\nbash /opt/miad-backend/scripts/vps-bootstrap.sh",
+      },
+    ],
+    note: "Chaque futur git push pourra redéployer automatiquement via GitHub Actions.",
+  },
+  {
+    id: "scp",
+    badge: "direct",
+    title: "Sans GitHub — transfert direct",
+    steps: [
+      {
+        label: "Sur ton PC — après avoir exporté le ZIP du sandbox :",
+        cmd: "scp back.zip miad@100.79.191.101:/opt/",
+      },
+      {
+        label: "Sur le VPS — décompresse puis déploie :",
+        cmd: "cd /opt\nunzip back.zip -d miad-backend\ncd miad-backend\nbash scripts/vps-bootstrap.sh",
+      },
+    ],
+    note: "Le bootstrap détecte les sources locales et déploie sans cloner. La CI/CD viendra plus tard.",
+  },
+];
+
+/* ============================================================
+   Section 14 — RPC interne & gRPC, expliqué
+   ============================================================ */
+
+export const GRPC_COMPARE: { criterion: string; rest: string; grpc: string }[] = [
+  { criterion: "Format", rest: "JSON texte — verbeux, lisible par un humain", grpc: "Protobuf binaire — compact, pensé machine" },
+  { criterion: "Contrat", rest: "implicite (documenté… ou pas)", grpc: ".proto explicite, code généré, erreur à la compilation" },
+  { criterion: "Typage", rest: "lâche (tout est string ou number)", grpc: "strict (int64, enums, map<string,string>…)" },
+  { criterion: "Transport", rest: "1 requête = 1 réponse", grpc: "HTTP/2 — streaming et multiplexage natifs" },
+  { criterion: "Poids / latence", rest: "référence", grpc: "messages 3 à 10× plus petits" },
+  { criterion: "Usage type", rest: "API publique, navigateur, frontend", grpc: "interne, entre services" },
+];
+
+export const GRPC_STEPS: { who: string; text: string; tone: "rest" | "gateway" | "grpc" | "kafka" }[] = [
+  {
+    who: "Next.js (frontend)",
+    text: "Checkout : le frontend appelle POST /orders en JSON — exactement comme il le fait déjà avec WooCommerce. Il ne sait rien de gRPC.",
+    tone: "rest",
+  },
+  {
+    who: "Caddy + grpc-gateway",
+    text: "La passerelle reçoit le JSON et le traduit en appel gRPC typé, généré depuis le .proto. Le contrat REST et le contrat gRPC sortent du même fichier.",
+    tone: "gateway",
+  },
+  {
+    who: "order-svc → shipping-svc",
+    text: "Pour chiffrer la livraison, order-svc appelle Quote(country: \"SN\", items: 2) : c'est ÇA le RPC — une fonction distante, réponse typée, synchrone. Pas d'URL à construire, pas de JSON à parser à la main.",
+    tone: "grpc",
+  },
+  {
+    who: "order-svc → Kafka",
+    text: "Commande créée : order.created est publié. payment-svc et notification-svc réagissent chacun de leur côté — asynchrone et découplé. gRPC pour le synchrone, Kafka pour le reste.",
+    tone: "kafka",
+  },
+];
+
+export const GRPC_CODE_REST = `// REST / JSON — l'appel tel qu'il existe aujourd'hui
+fetch("http://shipping-svc:8085/shipping-rates/quote?country=SN&items=2")
+  .then((r) => r.json())
+  .then((data) => data.total_xof);
+// data.total_xof existe-t-il vraiment ? Personne ne le garantit :
+// le contrat vit dans la doc… quand il y en a une.`;
+
+export const GRPC_CODE_GRPC = `// gRPC / Protobuf — la même opération, en appel typé
+resp, err := shippingClient.Quote(ctx, &shippingv1.QuoteRequest{
+    Country:   "SN",
+    ItemCount: 2,
+})
+if err != nil { ... }
+total := resp.TotalXof // int64, garanti par le contrat .proto
+// Si le contrat change, le code ne compile plus :
+// l'erreur se voit AVANT la production.`;
+
+export const ADMIN_VIEWS: { name: string; desc: string; svc: string }[] = [
+  { name: "Vue d'ensemble", desc: "Compteurs agrégés (produits, boutiques, commandes, clients, CA) + dernières commandes + état des services en direct.", svc: "agrégation" },
+  { name: "Commandes", desc: "Toutes les commandes avec filtres de statut, pagination explicite, référence et boutique d'origine.", svc: "order-svc" },
+  { name: "Produits", desc: "Catalogue bilingue FR/EN (bascule de langue), recherche, modèle trid + lang visible, variations signalées.", svc: "catalog-svc" },
+  { name: "Boutiques", desc: "Cartes des boutiques vérifiées : pays, note, nombre de produits, logo/bannière R2.", svc: "vendor-svc" },
+  { name: "Clients", desc: "Comptes acheteurs inscrits par OTP ou Firebase, langue préférée, date d'inscription.", svc: "auth-svc" },
+  { name: "Paiements", desc: "Chaque paiement Stripe / PayDunya avec montant XOF, statut et référence fournisseur.", svc: "payment-svc" },
+  { name: "Livraison", desc: "Zones tarifaires + simulateur de devis interactif (pays + articles → détail du calcul).", svc: "shipping-svc" },
+  { name: "Système", desc: "Health-check agrégé : chaque service sondé avec ses dépendances (Postgres, Kafka, Redis, Stripe…).", svc: "transverse" },
+];
+
+export const AUTH_FLOWS: { name: string; endpoint: string; desc: string; tone: "ok" | "warn" | "infra" }[] = [
+  {
+    name: "Acheteur — email ou SMS",
+    endpoint: "POST /auth/otp/send → /auth/otp/verify",
+    desc: "Code à 6 chiffres stocké en Redis avec TTL borné. Seule une référence opaque circule : le code n'est jamais renvoyé dans la réponse.",
+    tone: "ok",
+  },
+  {
+    name: "Admin — email + mot de passe",
+    endpoint: "POST /auth/admin/login",
+    desc: "Sel + 10 000 itérations SHA-256, compte seedé depuis ADMIN_EMAIL/ADMIN_PASSWORD au premier démarrage. Émet un JWT role=admin.",
+    tone: "warn",
+  },
+  {
+    name: "Admin — Firebase (Google)",
+    endpoint: "POST /auth/firebase",
+    desc: "Le jeton Google est vérifié auprès de oauth2.googleapis.com (émetteur + audience), puis l'email doit exister dans la table admins.",
+    tone: "infra",
+  },
 ];
 
 export const K8S_PATH = [

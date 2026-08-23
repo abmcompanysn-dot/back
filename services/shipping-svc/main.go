@@ -49,9 +49,30 @@ var seedZones = []struct {
 	PerItem   int64
 	MinD, MaxD int
 }{
-	{"local", []string{"SN"}, 1500, 500, 1, 3},          // même pays que la boutique
-	{"continent", []string{"CI", "ML", "BF", "GN", "BJ", "TG", "NE", "MR", "GM", "GW", "SL", "LR", "GH", "CM", "GA", "CG", "MA", "DZ", "TN"}, 4500, 1000, 5, 10},
-	{"international", []string{"FR", "BE", "US", "CA", "GB", "DE", "ES", "IT", "AE", "CN"}, 9000, 2000, 7, 21},
+	// STRUCTURE reprise de lib/shipping-utils.ts — monter les MONTANTS
+	// exacts du fichier frontend avant la bascule prod.
+	{"local", []string{"SN", "GM"}, 1500, 500, 1, 3}, // même pays / voisin immédiat
+	{"continent", []string{
+		// Afrique de l'Ouest
+		"CI", "ML", "BF", "GN", "BJ", "TG", "NE", "MR", "GW", "SL", "LR", "GH", "CV",
+		// Afrique centrale & du Nord
+		"CM", "GA", "CG", "TD", "CF", "GQ", "MA", "DZ", "TN", "LY", "EG",
+		// Afrique de l'Est & australe
+		"KE", "ET", "UG", "TZ", "RW", "BI", "DJ", "MG", "MU", "SC", "MW", "ZM", "ZW",
+		"BW", "NA", "ZA", "MZ", "AO", "CD",
+	}, 4500, 1000, 5, 10},
+	{"international", []string{
+		// Europe
+		"FR", "BE", "GB", "DE", "ES", "IT", "PT", "NL", "CH", "LU", "AT", "SE",
+		"NO", "DK", "FI", "IE", "PL", "TR",
+		// Amérique
+		"US", "CA", "BR", "AR", "MX",
+		// Moyen-Orient & Asie
+		"AE", "SA", "QA", "KW", "JO", "LB", "IL", "IN", "PK", "BD", "CN", "JP",
+		"KR", "SG", "MY", "TH", "ID", "PH", "VN",
+		// Océanie
+		"AU", "NZ",
+	}, 9000, 2000, 7, 21},
 }
 
 type server struct{ db *pgxpool.Pool }
