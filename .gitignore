@@ -1,41 +1,35 @@
 ```
-# Go-specific ignores
-*.o
-*.a
-*.out
-*.test
-*.prof
-*.syso
-
 # Dependencies
 vendor/
 
-# Environment
-.env
-.env.local
-.env.*
+# Compiled and build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+*.out
+
+# Go-specific
+*.test
+*.prof
+go.mod
+go.sum
+!go.mod
+!go.sum
 
 # Logs and temp files
 *.log
 *.tmp
+*.swp
 
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# OS-specific
-.DS_Store
-Thumbs.db
-
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# Build artifacts
-dist/
-build/
-target/
+# Environment
+.env
+.env.local
+*.env.*
 ```
