@@ -2,61 +2,34 @@
 # Dependencies
 vendor/
 
-# Binaries
-*.exe
-*.dll
-*.so
-*.a
+# Compiled and build artifacts
 *.o
 *.obj
+*.a
+*.so
+*.dll
+*.exe
 *.out
 
-# Build artifacts
-bin/
-dist/
-build/
-target/
+# Go-specific
+*.test
+*.prof
+go.mod
+go.sum
+!go.mod
+!go.sum
 
-# Logs
+# Logs and temp files
 *.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
 
 # Environment
 .env
 .env.local
 *.env.*
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-*.tmp
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg-info/
-.eggs/
-
-# Node
-node_modules/
-
-# Go specific
-*.test
-*.prof
-go.mod
-go.sum
 ```
