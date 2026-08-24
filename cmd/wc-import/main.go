@@ -165,13 +165,15 @@ type wcProduct struct {
 	Description string `json:"description"`
 	Price       string `json:"price"`
 	Status      string `json:"status"`
-	// author n'est PAS renvoyé par défaut dans wc/v3/products — il faut
-	// explicitement le demander via _fields (voir fetchProducts). Sans
-	// plugin Dokan actif ce champ peut être absent ; dans ce cas
-	// vendor_id reste 0 et le produit est signalé plutôt qu'assigné au
-	// hasard, pour ne jamais associer silencieusement un produit au
-	// mauvais vendeur.
-	Author     int64 `json:"author"`
+	// "author" (post_author WordPress) n'existe pas du tout dans le
+	// schéma REST wc/v3/products, avec ou sans plugin Dokan — confirmé en
+	// migration réelle le 2026-08-24 (absent même en le demandant
+	// explicitement via _fields). Le vendeur est en réalité exposé par
+	// Dokan sous product.store.id (même id que dokan/v1/stores[].id) —
+	// c'est ce champ qu'il faut lire, pas "author".
+	Store struct {
+		ID int64 `json:"id"`
+	} `json:"store"`
 	Categories []struct {
 		ID int64 `json:"id"`
 	} `json:"categories"`
@@ -285,8 +287,8 @@ func main() {
 				imagesJSON, _ := json.Marshal(imageURLs(p.Images))
 
 				var vendorID int64
-				if p.Author != 0 {
-					vendorID = wcIDToVendorID[p.Author]
+				if p.Store.ID != 0 {
+					vendorID = wcIDToVendorID[p.Store.ID]
 				}
 				if vendorID == 0 {
 					unresolvedVendor++
@@ -318,7 +320,7 @@ func main() {
 		}
 	}
 	if unresolvedVendor > 0 {
-		log.Error(fmt.Sprintf("ATTENTION : %d produits sans vendor_id résolu (champ 'author' absent de la réponse WooCommerce, ou vendeur non trouvé dans dokan/v1/stores) — vérifier manuellement ces produits en base (vendor_id=0)", unresolvedVendor))
+		log.Error(fmt.Sprintf("ATTENTION : %d produits sans vendor_id résolu (champ 'store' absent de la réponse WooCommerce, ou vendeur non trouvé dans dokan/v1/stores) — vérifier manuellement ces produits en base (vendor_id=0)", unresolvedVendor))
 	}
 
 	// TODO(phase 2, suite) : wc/v3/orders → miad_order, avec les mêmes
@@ -356,10 +358,10 @@ func fetchCategories(lang string) ([]wcCategory, error) {
 }
 
 func fetchProducts(page int, lang string) ([]wcProduct, error) {
-	// _fields force explicitement l'inclusion de "author" — absent par
-	// défaut de la réponse standard wc/v3/products.
+	// _fields limite la réponse aux champs réellement utilisés (store.id
+	// est le champ Dokan qui porte le vendeur — voir wcProduct.Store).
 	url := fmt.Sprintf("%s/wp-json/wc/v3/products?per_page=100&page=%d&lang=%s&consumer_key=%s&consumer_secret=%s"+
-		"&_fields=id,name,slug,description,price,status,author,categories,images,meta_data",
+		"&_fields=id,name,slug,description,price,status,store,categories,images,meta_data",
 		*wcURL, page, lang, *wcKey, *wcSecret)
 	var out []wcProduct
 	return out, fetchJSONPaginated(url, &out)
