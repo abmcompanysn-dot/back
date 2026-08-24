@@ -50,10 +50,12 @@ body {
   border: none;
   color: #fff;
   cursor: pointer;
-  font-size: 16px;
   padding: 4px 6px;
   border-radius: 6px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .sidebar-toggle:hover {
   background: rgba(255, 255, 255, 0.1);
@@ -90,7 +92,16 @@ body {
 .sidebar-link .icon {
   flex-shrink: 0;
   width: 18px;
-  text-align: center;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.sidebar-link .icon svg {
+  opacity: 0.9;
+}
+.sidebar-link.active .icon svg {
+  opacity: 1;
 }
 
 .sidebar-footer {
@@ -316,8 +327,10 @@ button:disabled {
   color: #555;
 }
 .empty-state .empty-icon {
-  font-size: 40px;
-  opacity: 0.5;
+  display: flex;
+  justify-content: center;
+  color: #9aa3ac;
+  opacity: 0.8;
   margin-bottom: 12px;
 }
 .empty-state h3 {

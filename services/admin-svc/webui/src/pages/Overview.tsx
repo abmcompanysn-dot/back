@@ -1,6 +1,7 @@
 import { useApiData } from '../lib/useApiData'
 import { EmptyState } from '../components/EmptyState'
 import { StatusBadge } from '../components/StatusBadge'
+import { IconAlert } from '../components/Icons'
 
 interface OverviewData {
   orders_total?: number
@@ -23,7 +24,13 @@ export function Overview() {
       </div>
 
       {loading && <p>Chargement…</p>}
-      {error && <EmptyState icon="⚠️" title="Impossible de charger le tableau de bord" description={error} />}
+      {error && (
+        <EmptyState
+          icon={<IconAlert width={40} height={40} strokeWidth={1.4} />}
+          title="Impossible de charger le tableau de bord"
+          description={error}
+        />
+      )}
 
       {!loading && !error && data && (
         <>

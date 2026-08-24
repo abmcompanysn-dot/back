@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { EmptyState } from './EmptyState'
 import { StatusBadge } from './StatusBadge'
+import { IconSearch } from './Icons'
 
 interface Column {
   key: string
@@ -17,7 +18,7 @@ interface RowAction {
 interface DataTableProps {
   items: Array<Record<string, unknown>> | undefined
   columns: Column[]
-  emptyIcon?: string
+  emptyIcon?: ReactNode
   emptyTitle?: string
   emptyDescription?: string
   rowActions?: RowAction[]
@@ -29,7 +30,7 @@ const PAGE_SIZES = [10, 25, 50]
 export function DataTable({
   items,
   columns,
-  emptyIcon = '📭',
+  emptyIcon,
   emptyTitle = 'Aucune donnée pour le moment',
   emptyDescription,
   rowActions,
@@ -69,7 +70,11 @@ export function DataTable({
       </div>
 
       {filtered.length === 0 ? (
-        <EmptyState icon="🔍" title="Aucun résultat" description="Essayez un autre terme de recherche." />
+        <EmptyState
+          icon={<IconSearch width={40} height={40} strokeWidth={1.4} />}
+          title="Aucun résultat"
+          description="Essayez un autre terme de recherche."
+        />
       ) : (
         <div className="table-card">
           <table>

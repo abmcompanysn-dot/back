@@ -1,6 +1,8 @@
+import type { ReactNode } from 'react'
 import { useApiData } from '../lib/useApiData'
 import { DataTable } from '../components/DataTable'
 import { EmptyState } from '../components/EmptyState'
+import { IconAlert } from '../components/Icons'
 
 interface ListResponse {
   items?: Array<Record<string, unknown>>
@@ -17,7 +19,7 @@ interface ListViewProps {
   columns: Column[]
   title?: string
   subtitle?: string
-  emptyIcon?: string
+  emptyIcon?: ReactNode
   emptyTitle?: string
   emptyDescription?: string
 }
@@ -39,7 +41,7 @@ export function ListView({ path, columns, title, subtitle, emptyIcon, emptyTitle
       {loading && <p>Chargement…</p>}
       {error && (
         <EmptyState
-          icon="⚠️"
+          icon={<IconAlert width={40} height={40} strokeWidth={1.4} />}
           title="Impossible de charger les données"
           description={error}
         />

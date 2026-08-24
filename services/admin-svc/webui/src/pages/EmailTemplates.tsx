@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ApiError, api } from '../lib/api'
 import { EmptyState } from '../components/EmptyState'
+import { IconMail } from '../components/Icons'
 
 interface EmailTemplate {
   name: string
@@ -77,7 +78,11 @@ export function EmailTemplates() {
             <p className="subtitle">Emails transactionnels envoyés automatiquement</p>
           </div>
         </div>
-        <EmptyState icon="✉️" title="Aucun modèle disponible" description="Les modèles par défaut n'ont pas encore été initialisés côté serveur." />
+        <EmptyState
+          icon={<IconMail width={40} height={40} strokeWidth={1.4} />}
+          title="Aucun modèle disponible"
+          description="Les modèles par défaut n'ont pas encore été initialisés côté serveur."
+        />
       </div>
     )
   }

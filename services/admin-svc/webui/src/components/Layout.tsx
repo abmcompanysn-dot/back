@@ -1,22 +1,35 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import {
+  IconChevronLeft,
+  IconChevronRight,
+  IconCatalog,
+  IconCustomers,
+  IconDashboard,
+  IconFinance,
+  IconLogout,
+  IconMail,
+  IconMarketing,
+  IconOrders,
+  IconSecurity,
+  IconShipping,
+  IconStore,
+  IconSystem,
+} from './Icons'
 
-// Icônes en emoji : pas de bibliothèque d'icônes externe (cohérent avec
-// le reste du dépôt — client HTTP fait main, TOTP en Go pur, etc.), et
-// s'affiche correctement sans police web supplémentaire.
 const TABS = [
-  { path: '/admin/', label: "Tableau de bord", icon: '📊', end: true },
-  { path: '/admin/products', label: 'Catalogue', icon: '🛍️' },
-  { path: '/admin/vendors', label: 'Vendeurs', icon: '🏬' },
-  { path: '/admin/orders', label: 'Commandes', icon: '🧾' },
-  { path: '/admin/customers', label: 'Clients', icon: '👥' },
-  { path: '/admin/shipping', label: 'Livraison', icon: '🚚' },
-  { path: '/admin/marketing', label: 'Marketing', icon: '📣' },
-  { path: '/admin/email-templates', label: 'Modèles de messages', icon: '✉️' },
-  { path: '/admin/payments', label: 'Finances', icon: '💳' },
-  { path: '/admin/security', label: 'Sécurité', icon: '🔐' },
-  { path: '/admin/system', label: 'Système', icon: '⚙️' },
+  { path: '/admin/', label: "Tableau de bord", icon: IconDashboard, end: true },
+  { path: '/admin/products', label: 'Catalogue', icon: IconCatalog },
+  { path: '/admin/vendors', label: 'Vendeurs', icon: IconStore },
+  { path: '/admin/orders', label: 'Commandes', icon: IconOrders },
+  { path: '/admin/customers', label: 'Clients', icon: IconCustomers },
+  { path: '/admin/shipping', label: 'Livraison', icon: IconShipping },
+  { path: '/admin/marketing', label: 'Marketing', icon: IconMarketing },
+  { path: '/admin/email-templates', label: 'Modèles de messages', icon: IconMail },
+  { path: '/admin/payments', label: 'Finances', icon: IconFinance },
+  { path: '/admin/security', label: 'Sécurité', icon: IconSecurity },
+  { path: '/admin/system', label: 'Système', icon: IconSystem },
 ]
 
 const PAGE_TITLES: Record<string, string> = {
@@ -54,26 +67,32 @@ export function Layout() {
         <div className="sidebar-brand">
           {!collapsed && <span className="brand-name">MIAD Market</span>}
           <button className="sidebar-toggle" onClick={toggle} title={collapsed ? 'Étendre' : 'Réduire'}>
-            {collapsed ? '»' : '«'}
+            {collapsed ? <IconChevronRight /> : <IconChevronLeft />}
           </button>
         </div>
         <nav className="sidebar-nav">
-          {TABS.map((tab) => (
-            <NavLink
-              key={tab.path}
-              to={tab.path}
-              end={tab.end}
-              className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
-              title={collapsed ? tab.label : undefined}
-            >
-              <span className="icon">{tab.icon}</span>
-              {!collapsed && <span>{tab.label}</span>}
-            </NavLink>
-          ))}
+          {TABS.map((tab) => {
+            const Icon = tab.icon
+            return (
+              <NavLink
+                key={tab.path}
+                to={tab.path}
+                end={tab.end}
+                className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+                title={collapsed ? tab.label : undefined}
+              >
+                <span className="icon">
+                  <Icon />
+                </span>
+                {!collapsed && <span>{tab.label}</span>}
+              </NavLink>
+            )
+          })}
         </nav>
         <div className="sidebar-footer">
-          <button className="btn-ghost" onClick={logout} style={{ width: '100%' }}>
-            {collapsed ? '⏻' : 'Déconnexion'}
+          <button className="btn-ghost" onClick={logout} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10 }}>
+            <IconLogout />
+            {!collapsed && <span>Déconnexion</span>}
           </button>
         </div>
       </aside>

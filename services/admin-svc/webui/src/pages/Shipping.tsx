@@ -1,4 +1,5 @@
 import { EmptyState } from '../components/EmptyState'
+import { IconShipping } from '../components/Icons'
 
 export function Shipping() {
   return (
@@ -10,7 +11,7 @@ export function Shipping() {
         </div>
       </div>
       <EmptyState
-        icon="🚚"
+        icon={<IconShipping width={40} height={40} strokeWidth={1.4} />}
         title="Devis interactif à venir"
         description="Le simulateur de tarifs par zone (international + national Sénégal) sera intégré ici."
       />

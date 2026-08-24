@@ -16,6 +16,9 @@ import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
 import { Security } from './pages/Security'
 import { System } from './pages/System'
+import { IconCatalog, IconCustomers, IconFinance, IconOrders, IconStore } from './components/Icons'
+
+const emptyIconProps = { width: 40, height: 40, strokeWidth: 1.4 } as const
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -48,7 +51,7 @@ function AppRoutes() {
               columns={ORDER_COLUMNS}
               title="Commandes"
               subtitle="Suivi des commandes multi-boutiques"
-              emptyIcon="🧾"
+              emptyIcon={<IconOrders {...emptyIconProps} />}
               emptyTitle="Aucune commande enregistrée pour le moment"
               emptyDescription="Les nouvelles commandes de vos clients apparaîtront ici automatiquement."
             />
@@ -62,7 +65,7 @@ function AppRoutes() {
               columns={PRODUCT_COLUMNS}
               title="Catalogue"
               subtitle="Produits publiés par les vendeurs"
-              emptyIcon="🛍️"
+              emptyIcon={<IconCatalog {...emptyIconProps} />}
               emptyTitle="Aucun produit dans le catalogue"
               emptyDescription="Les produits créés par les vendeurs apparaîtront ici."
             />
@@ -76,7 +79,7 @@ function AppRoutes() {
               columns={VENDOR_COLUMNS}
               title="Vendeurs"
               subtitle="Boutiques de la marketplace"
-              emptyIcon="🏬"
+              emptyIcon={<IconStore {...emptyIconProps} />}
               emptyTitle="Aucune boutique enregistrée"
               emptyDescription="Les nouvelles boutiques apparaîtront ici après inscription."
             />
@@ -90,7 +93,7 @@ function AppRoutes() {
               columns={CUSTOMER_COLUMNS}
               title="Clients"
               subtitle="Comptes acheteurs"
-              emptyIcon="👥"
+              emptyIcon={<IconCustomers {...emptyIconProps} />}
               emptyTitle="Aucun client inscrit pour le moment"
             />
           }
@@ -103,7 +106,7 @@ function AppRoutes() {
               columns={PAYMENT_COLUMNS}
               title="Finances"
               subtitle="Transactions et paiements"
-              emptyIcon="💳"
+              emptyIcon={<IconFinance {...emptyIconProps} />}
               emptyTitle="Aucune transaction pour le moment"
             />
           }
