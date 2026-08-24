@@ -109,7 +109,10 @@ func main() {
 
 /* ---------- Admin : seed + login ---------- */
 
-func (s *server) seedAdmin(ctx context.Context, log interface{ Info(string, ...any); Warn(string, ...any) }) {
+func (s *server) seedAdmin(ctx context.Context, log interface {
+	Info(string, ...any)
+	Warn(string, ...any)
+}) {
 	email := kit.Env("ADMIN_EMAIL", "")
 	pwd := kit.Env("ADMIN_PASSWORD", "")
 	if email == "" || pwd == "" {

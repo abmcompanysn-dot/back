@@ -71,10 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_tracking_events_shipment ON tracking_events (ship
 // (transporteur externe + douane vs ramassage local).
 var shipmentStages = map[string]bool{
 	"pending_label": true, // commande payée, label DHL pas encore créé
-	"label_created":  true,
-	"in_transit":     true,
-	"customs":        true,
-	"delivered":      true,
+	"label_created": true,
+	"in_transit":    true,
+	"customs":       true,
+	"delivered":     true,
 }
 
 type server struct {
@@ -305,11 +305,11 @@ func (s *server) writeShipmentWithEvents(w http.ResponseWriter, r *http.Request,
 	kit.JSON(w, 200, map[string]any{
 		"id": id, "order_id": orderID, "carrier": carrier, "tracking_number": trackingNumber,
 		"label_url": labelURL, "status": status,
-		"origin": map[string]string{"country": oCountry, "city": oCity},
+		"origin":      map[string]string{"country": oCountry, "city": oCity},
 		"destination": map[string]string{"country": dCountry, "city": dCity},
-		"created_at": createdAt.UTC().Format(time.RFC3339),
-		"updated_at": updatedAt.UTC().Format(time.RFC3339),
-		"events":     events,
+		"created_at":  createdAt.UTC().Format(time.RFC3339),
+		"updated_at":  updatedAt.UTC().Format(time.RFC3339),
+		"events":      events,
 	})
 }
 
@@ -446,8 +446,8 @@ func (s *server) dhlCreateShipment(w http.ResponseWriter, r *http.Request) {
 	}
 	var parsed struct {
 		ShipmentTrackingNumber string `json:"shipmentTrackingNumber"`
-		Documents               []struct {
-			Content string `json:"content"` // label PDF en base64 — upload R2/MinIO à câbler séparément
+		Documents              []struct {
+			Content  string `json:"content"` // label PDF en base64 — upload R2/MinIO à câbler séparément
 			TypeCode string `json:"typeCode"`
 		} `json:"documents"`
 	}

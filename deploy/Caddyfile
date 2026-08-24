@@ -42,8 +42,9 @@
 	# Console d'administration (interface + API) — admin-svc
 	handle /admin*         { reverse_proxy admin-svc:8088 }
 
-	# Notifications (Kafka consumer, stats en lecture) — notification-svc
+	# Notifications (Kafka consumer, stats en lecture) + push FCM — notification-svc
 	handle /notifications*  { reverse_proxy notification-svc:8087 }
+	handle /push/*          { reverse_proxy notification-svc:8087 }
 
 	# Emails transactionnels + webhooks entrants (Resend) — email-svc
 	handle /emails*         { reverse_proxy email-svc:8089 }

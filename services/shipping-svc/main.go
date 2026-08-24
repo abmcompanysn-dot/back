@@ -82,14 +82,14 @@ CREATE TABLE IF NOT EXISTS domestic_order_stages (
 // (ramassage vendeur -> livraison client), distincte des 5 états de la
 // livraison internationale (voir order-svc / DHL).
 var domesticStages = map[string]bool{
-	"pending_pickup":    true,
-	"pickup_scheduled":  true,
-	"picked_up":         true,
-	"in_transit":        true,
-	"out_for_delivery":  true,
+	"pending_pickup":     true,
+	"pickup_scheduled":   true,
+	"picked_up":          true,
+	"in_transit":         true,
+	"out_for_delivery":   true,
 	"delivery_attempted": true,
-	"delivered":         true,
-	"delivery_failed":   true,
+	"delivered":          true,
+	"delivery_failed":    true,
 }
 
 // defaultExchangeRates — seed initial, à ajuster ensuite via
@@ -115,10 +115,10 @@ var defaultDomesticTiers = []struct {
 // seed reprend le découpage existant (structure identique à
 // shipping-utils.ts ; montants à synchroniser avant bascule).
 var seedZones = []struct {
-	Zone      string
-	Countries []string
-	Base      int64
-	PerItem   int64
+	Zone       string
+	Countries  []string
+	Base       int64
+	PerItem    int64
 	MinD, MaxD int
 }{
 	// STRUCTURE reprise de lib/shipping-utils.ts — monter les MONTANTS

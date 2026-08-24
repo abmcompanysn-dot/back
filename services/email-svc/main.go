@@ -1,6 +1,6 @@
 // ============================================================
 // email-svc — Service d'envoi et réception d'emails avec Resend
-// 
+//
 // Fonctionnalités :
 //   - Envoi d'emails transactionnels via Resend API
 //   - Templates HTML professionnels pour MIAD Market
@@ -75,9 +75,9 @@ type server struct {
 }
 
 type EmailTemplate struct {
-	Name        string
-	SubjectTpl  string
-	BodyTpl     string
+	Name       string
+	SubjectTpl string
+	BodyTpl    string
 }
 
 // Templates d'emails MIAD Market
@@ -271,7 +271,7 @@ func (s *server) queueOrderShipped(ctx context.Context, log *slog.Logger, payloa
 
 func (s *server) queueEmail(ctx context.Context, log *slog.Logger, to, templateName, subject string, payload map[string]any) {
 	payloadJSON, _ := json.Marshal(payload)
-	
+
 	var emailID int64
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO emails (to_addr, from_addr, subject, template, payload, status)
@@ -279,7 +279,7 @@ func (s *server) queueEmail(ctx context.Context, log *slog.Logger, to, templateN
 		RETURNING id`,
 		to, s.fromEmail, subject, templateName, payloadJSON,
 	).Scan(&emailID)
-	
+
 	if err != nil {
 		log.Error("échec mise en file email", "err", err)
 		return
@@ -298,14 +298,14 @@ func (s *server) emailWorker(log *slog.Logger) {
 
 func (s *server) processQueue(log *slog.Logger) {
 	ctx := context.Background()
-	
+
 	rows, err := s.db.Query(ctx, `
 		SELECT id, to_addr, from_addr, subject, template, payload, attempts
 		FROM emails
 		WHERE status = 'queued' AND attempts < $1
 		ORDER BY created_at ASC
 		LIMIT 10`, s.maxAttempts)
-	
+
 	if err != nil {
 		log.Error("lecture file emails échouée", "err", err)
 		return
@@ -492,18 +492,18 @@ func (s *server) stats(w http.ResponseWriter, r *http.Request) {
 		  count(*) FILTER (WHERE status='failed'),
 		  count(*) FILTER (WHERE status='sending')
 		FROM emails`)
-	
+
 	var queued, sent, failed, sending int64
 	if err := row.Scan(&queued, &sent, &failed, &sending); err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	
+
 	kit.JSON(w, 200, map[string]any{
-		"queued":  queued,
-		"sent":    sent,
-		"failed":  failed,
-		"sending": sending,
+		"queued":         queued,
+		"sent":           sent,
+		"failed":         failed,
+		"sending":        sending,
 		"watched_topics": watchedTopics,
 	})
 }
@@ -516,23 +516,23 @@ func (s *server) sendEmail(w http.ResponseWriter, r *http.Request) {
 		Template string         `json:"template"`
 		Payload  map[string]any `json:"payload"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
 		return
 	}
-	
+
 	if body.To == "" || body.Subject == "" {
 		kit.Fail(w, 400, "missing_fields", "to et subject obligatoires")
 		return
 	}
-	
+
 	if body.From == "" {
 		body.From = s.fromEmail
 	}
-	
+
 	payloadJSON, _ := json.Marshal(body.Payload)
-	
+
 	var emailID int64
 	err := s.db.QueryRow(r.Context(), `
 		INSERT INTO emails (to_addr, from_addr, subject, template, payload, status)
@@ -540,12 +540,12 @@ func (s *server) sendEmail(w http.ResponseWriter, r *http.Request) {
 		RETURNING id`,
 		body.To, body.From, body.Subject, body.Template, payloadJSON,
 	).Scan(&emailID)
-	
+
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	
+
 	kit.JSON(w, 201, map[string]any{
 		"id":      emailID,
 		"status":  "queued",
@@ -561,15 +561,15 @@ func (s *server) resendWebhook(w http.ResponseWriter, r *http.Request) {
 			EmailID string `json:"email_id"`
 		} `json:"data"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
 		return
 	}
-	
+
 	log := kit.Logger("email-svc")
 	log.Info("webhook Resend reçu", "type", event.Type, "email_id", event.Data.EmailID)
-	
+
 	// Trouver l'email par resend_id et mettre à jour
 	ctx := r.Context()
 	var emailID int64
@@ -578,7 +578,7 @@ func (s *server) resendWebhook(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 404, "email_not_found", "email introuvable")
 		return
 	}
-	
+
 	// Mettre à jour selon le type d'événement
 	switch event.Type {
 	case "email.delivered":
@@ -586,36 +586,36 @@ func (s *server) resendWebhook(w http.ResponseWriter, r *http.Request) {
 	case "email.opened", "email.clicked":
 		// Tracker dans email_events
 	}
-	
+
 	s.logEmailEvent(ctx, emailID, "resend_"+event.Type, map[string]any{"resend_id": event.Data.EmailID})
-	
+
 	kit.JSON(w, 200, map[string]string{"status": "ok"})
 }
 
 func (s *server) inboundWebhook(w http.ResponseWriter, r *http.Request) {
 	// Webhook pour recevoir les emails entrants (réponses clients)
 	// Resend forwards les emails reçus vers cette URL
-	
+
 	var inbound struct {
 		From    string `json:"from"`
 		To      string `json:"to"`
 		Subject string `json:"subject"`
 		Body    string `json:"text"` // ou "html"
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&inbound); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
 		return
 	}
-	
+
 	log := kit.Logger("email-svc")
 	log.Info("email entrant reçu", "from", inbound.From, "to", inbound.To, "subject", inbound.Subject)
-	
+
 	// Ici on peut :
 	// - Stocker la réponse dans une table
 	// - Forward vers un service de support
 	// - Déclencher une notification
-	
+
 	kit.JSON(w, 200, map[string]string{"status": "received"})
 }
 

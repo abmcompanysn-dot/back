@@ -206,9 +206,9 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kit.JSON(w, 201, map[string]any{
-		"parent_order_id":     parentID,
-		"reference":           ref,
-		"vendor_orders":       created,
+		"parent_order_id":      parentID,
+		"reference":            ref,
+		"vendor_orders":        created,
 		"payment_initiated_by": "payment-svc (consommateur de order.created)",
 	})
 }

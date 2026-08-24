@@ -169,7 +169,7 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 		_, _ = s.db.Exec(ctx, "UPDATE payments SET status='failed' WHERE id=$1", id)
 		kit.Publish(s.producer, "payment.failed", fmt.Sprint(ev.OrderID), map[string]any{
 			"order_id": ev.OrderID, "provider": provider, "reason": err.Error(),
-			"at":       time.Now().UTC().Format(time.RFC3339),
+			"at": time.Now().UTC().Format(time.RFC3339),
 		})
 		log.Error("création de session impossible", "provider", provider, "order_id", ev.OrderID, "err", err)
 		return
