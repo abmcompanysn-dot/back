@@ -119,6 +119,7 @@ func main() {
 		mux.HandleFunc("GET /categories", s.listCategories)
 		mux.HandleFunc("GET /search/suggestions", s.suggestions)
 		mux.HandleFunc("POST /vendor/products", s.createProduct)
+		mux.HandleFunc("PUT /products/{id}/images", s.updateProductImages)
 	})
 }
 
@@ -438,6 +439,46 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	})
 
 	kit.JSON(w, 201, map[string]any{"trid": trid, "ids": []int64{idFR, idEN}})
+}
+
+// updateProductImages remplace la liste d'images d'un produit. Le
+// paramètre {id} du chemin peut être soit l'id interne catalog-svc, soit
+// (avec ?by=wc_id) l'ancien id WooCommerce — utile pour cmd/migrate-images
+// qui ne connaît que le wc_id d'origine, pas l'id interne réattribué à
+// l'import. Met à jour TOUTES les lignes du même trid (fr + en) : images
+// est dupliqué par langue dans le modèle actuel (voir createProduct),
+// jamais une langue seule.
+func (s *server) updateProductImages(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Images []string `json:"images"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
+		return
+	}
+
+	idParam := r.PathValue("id")
+	column := "id"
+	if r.URL.Query().Get("by") == "wc_id" {
+		column = "wc_id"
+	}
+
+	var trid string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT trid FROM products WHERE "+column+" = $1", idParam,
+	).Scan(&trid); err != nil {
+		kit.Fail(w, 404, "product_not_found", fmt.Sprintf("aucun produit avec %s=%s", column, idParam))
+		return
+	}
+
+	imagesJSON, _ := json.Marshal(body.Images)
+	tag, err := s.db.Exec(r.Context(),
+		"UPDATE products SET images = $1 WHERE trid = $2", imagesJSON, trid)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"trid": trid, "rows_updated": tag.RowsAffected()})
 }
 
 // ---------- helpers ----------
