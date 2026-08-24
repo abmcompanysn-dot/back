@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS shipping_zones (
   id            BIGSERIAL PRIMARY KEY,
   zone          TEXT UNIQUE NOT NULL,      -- local | continent | international
   countries     JSONB NOT NULL DEFAULT '[]',
-  base_rate_xof BIGINT NOT NULL,
-  per_item_xof  BIGINT NOT NULL DEFAULT 0,
+  base_rate_usd DOUBLE PRECISION NOT NULL, -- USD réel, synchronisé avec lib/shipping-utils.ts du frontend
+  per_item_usd  DOUBLE PRECISION NOT NULL DEFAULT 0,
   min_days      INT NOT NULL DEFAULT 1,
   max_days      INT NOT NULL DEFAULT 7
 );
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
 CREATE TABLE IF NOT EXISTS domestic_tiers (
   id               BIGSERIAL PRIMARY KEY,
   max_distance_km  DOUBLE PRECISION NOT NULL,
-  price_xof        BIGINT NOT NULL
+  price_usd        DOUBLE PRECISION NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS vendor_shipping_addresses (
@@ -99,31 +99,38 @@ var defaultExchangeRates = map[string]float64{
 	"CAD": 1.41,  // 1 / 0.71 (voir CAD_TO_USD_RATE côté frontend)
 }
 
-// defaultDomesticTiers — tranches de distance Dakar-centré, à ajuster
-// via POST /shipping-domestic/tiers une fois les vrais tarifs confirmés.
+// defaultDomesticTiers — tranches de distance Dakar-centré, EN USD.
+// Aucun équivalent existant côté frontend (système Haversine national
+// entièrement nouveau, pas une resynchronisation) — valeurs à confirmer
+// avec le fondateur avant bascule prod, via POST /shipping-domestic/tiers.
 var defaultDomesticTiers = []struct {
 	MaxKM float64
-	Price int64
+	Price float64
 }{
-	{5, 1000},
-	{15, 2000},
-	{30, 3500},
-	{60, 5500},
-	{999999, 8000}, // au-delà : tarif plafond, jamais de refus silencieux
+	{5, 2},
+	{15, 3.5},
+	{30, 6},
+	{60, 9},
+	{999999, 13}, // au-delà : tarif plafond, jamais de refus silencieux
 }
 
-// seed reprend le découpage existant (structure identique à
-// shipping-utils.ts ; montants à synchroniser avant bascule).
+// seed — montants EXACTS de lib/shipping-utils.ts ZONE_SHIPPING_RATES
+// (frontend, section "standardMin"/"local", en USD réel) resynchronisés
+// le jour du passage price_xof -> price_usd de tout le backend. Le
+// frontend a 6 zones continentales (AF/EU/NA/SA/AS/OC) + "local" ; ce
+// service en garde 3 (local/continent/international) — "continent" =
+// tarif AF (le cas Sénégal→reste de l'Afrique, le plus fréquent pour
+// MIAD Market), "international" = moyenne standardMin des 5 autres
+// zones (EU/NA/SA/AS/OC ≈ 25-30$, arrondi à 27$). Documenté ici pour
+// que la prochaine resynchronisation reparte de la même source.
 var seedZones = []struct {
 	Zone       string
 	Countries  []string
-	Base       int64
-	PerItem    int64
+	Base       float64
+	PerItem    float64
 	MinD, MaxD int
 }{
-	// STRUCTURE reprise de lib/shipping-utils.ts — monter les MONTANTS
-	// exacts du fichier frontend avant la bascule prod.
-	{"local", []string{"SN", "GM"}, 1500, 500, 1, 3}, // même pays / voisin immédiat
+	{"local", []string{"SN", "GM"}, 3, 1, 1, 3}, // ZONE_SHIPPING_RATES.AF.local = 10$ pour le même continent ; local strict (même pays/voisin immédiat) reste moins cher, valeur à confirmer avec le fondateur
 	{"continent", []string{
 		// Afrique de l'Ouest
 		"CI", "ML", "BF", "GN", "BJ", "TG", "NE", "MR", "GW", "SL", "LR", "GH", "CV",
@@ -132,7 +139,7 @@ var seedZones = []struct {
 		// Afrique de l'Est & australe
 		"KE", "ET", "UG", "TZ", "RW", "BI", "DJ", "MG", "MU", "SC", "MW", "ZM", "ZW",
 		"BW", "NA", "ZA", "MZ", "AO", "CD",
-	}, 4500, 1000, 5, 10},
+	}, 12, 5, 5, 10}, // ZONE_SHIPPING_RATES.AF.standardMin = 12$
 	{"international", []string{
 		// Europe
 		"FR", "BE", "GB", "DE", "ES", "IT", "PT", "NL", "CH", "LU", "AT", "SE",
@@ -144,7 +151,7 @@ var seedZones = []struct {
 		"KR", "SG", "MY", "TH", "ID", "PH", "VN",
 		// Océanie
 		"AU", "NZ",
-	}, 9000, 2000, 7, 21},
+	}, 27, 10, 7, 21}, // moyenne standardMin EU(25)/NA(25)/SA(25)/AS(25)/OC(30) ≈ 27$
 }
 
 type server struct{ db *pgxpool.Pool }
@@ -200,7 +207,7 @@ func (s *server) seed(ctx context.Context) error {
 	for _, z := range seedZones {
 		countries, _ := json.Marshal(z.Countries)
 		if _, err := s.db.Exec(ctx, `
-			INSERT INTO shipping_zones (zone, countries, base_rate_xof, per_item_xof, min_days, max_days)
+			INSERT INTO shipping_zones (zone, countries, base_rate_usd, per_item_usd, min_days, max_days)
 			VALUES ($1,$2,$3,$4,$5,$6)
 			ON CONFLICT (zone) DO NOTHING`,
 			z.Zone, countries, z.Base, z.PerItem, z.MinD, z.MaxD); err != nil {
@@ -238,7 +245,7 @@ func (s *server) seedDomesticTiers(ctx context.Context) error {
 	}
 	for _, t := range defaultDomesticTiers {
 		if _, err := s.db.Exec(ctx, `
-			INSERT INTO domestic_tiers (max_distance_km, price_xof) VALUES ($1,$2)`,
+			INSERT INTO domestic_tiers (max_distance_km, price_usd) VALUES ($1,$2)`,
 			t.MaxKM, t.Price); err != nil {
 			return err
 		}
@@ -248,8 +255,8 @@ func (s *server) seedDomesticTiers(ctx context.Context) error {
 
 func (s *server) listRates(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `
-		SELECT zone, countries, base_rate_xof, per_item_xof, min_days, max_days
-		FROM shipping_zones ORDER BY base_rate_xof`)
+		SELECT zone, countries, base_rate_usd, per_item_usd, min_days, max_days
+		FROM shipping_zones ORDER BY base_rate_usd`)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -259,16 +266,16 @@ func (s *server) listRates(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var zone string
 		var countries []byte
-		var base, perItem int64
+		var base, perItem float64
 		var minD, maxD int
 		_ = rows.Scan(&zone, &countries, &base, &perItem, &minD, &maxD)
 		zones = append(zones, map[string]any{
 			"zone": zone, "countries": json.RawMessage(countries),
-			"base_rate_xof": base, "per_item_xof": perItem,
+			"base_rate_usd": base, "per_item_usd": perItem,
 			"min_days": minD, "max_days": maxD,
 		})
 	}
-	kit.JSON(w, 200, map[string]any{"zones": zones, "currency": "XOF"})
+	kit.JSON(w, 200, map[string]any{"zones": zones, "currency": "USD"})
 }
 
 // quote — calcul EXPLICITE et détaillé : base + n × per_item.
@@ -287,10 +294,10 @@ func (s *server) quote(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("pays %q absent des zones de livraison — ajouter le pays dans zone_countries pour le desservir", country))
 		return
 	}
-	var base, perItem int64
+	var base, perItem float64
 	var minD, maxD int
 	_ = s.db.QueryRow(r.Context(), `
-		SELECT base_rate_xof, per_item_xof, min_days, max_days FROM shipping_zones WHERE zone = $1`, zone,
+		SELECT base_rate_usd, per_item_usd, min_days, max_days FROM shipping_zones WHERE zone = $1`, zone,
 	).Scan(&base, &perItem, &minD, &maxD)
 
 	n := int64(1)
@@ -298,10 +305,10 @@ func (s *server) quote(w http.ResponseWriter, r *http.Request) {
 	if n < 1 {
 		n = 1
 	}
-	total := base + n*perItem
+	total := base + float64(n)*perItem
 	kit.JSON(w, 200, map[string]any{
-		"zone": zone, "total_xof": total, "min_days": minD, "max_days": maxD,
-		"breakdown": fmt.Sprintf("base %d XOF + %d article(s) × %d XOF", base, n, perItem),
+		"zone": zone, "total_usd": total, "min_days": minD, "max_days": maxD,
+		"breakdown": fmt.Sprintf("base %.2f $ + %d article(s) × %.2f $", base, n, perItem),
 	})
 }
 
@@ -355,7 +362,7 @@ func (s *server) setExchangeRate(w http.ResponseWriter, r *http.Request) {
 // ---------- Livraison nationale Sénégal (Haversine) ----------
 
 func (s *server) listDomesticTiers(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `SELECT id, max_distance_km, price_xof FROM domestic_tiers ORDER BY max_distance_km`)
+	rows, err := s.db.Query(r.Context(), `SELECT id, max_distance_km, price_usd FROM domestic_tiers ORDER BY max_distance_km`)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -363,11 +370,12 @@ func (s *server) listDomesticTiers(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	tiers := []map[string]any{}
 	for rows.Next() {
-		var id, price int64
+		var id int64
+		var price float64
 		var maxKM float64
 		_ = rows.Scan(&id, &maxKM, &price)
 		tiers = append(tiers, map[string]any{
-			"id": id, "max_distance_km": maxKM, "price_xof": price,
+			"id": id, "max_distance_km": maxKM, "price_usd": price,
 		})
 	}
 	kit.JSON(w, 200, map[string]any{"tiers": tiers})
@@ -376,24 +384,24 @@ func (s *server) listDomesticTiers(w http.ResponseWriter, r *http.Request) {
 func (s *server) setDomesticTier(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		MaxDistanceKM float64 `json:"max_distance_km"`
-		PriceXOF      int64   `json:"price_xof"`
+		PriceUSD      float64 `json:"price_usd"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
 		return
 	}
-	if body.MaxDistanceKM <= 0 || body.PriceXOF < 0 {
-		kit.Fail(w, 400, "invalid_tier", "max_distance_km (> 0) et price_xof (>= 0) obligatoires")
+	if body.MaxDistanceKM <= 0 || body.PriceUSD < 0 {
+		kit.Fail(w, 400, "invalid_tier", "max_distance_km (> 0) et price_usd (>= 0) obligatoires")
 		return
 	}
 	var id int64
 	if err := s.db.QueryRow(r.Context(), `
-		INSERT INTO domestic_tiers (max_distance_km, price_xof) VALUES ($1,$2) RETURNING id`,
-		body.MaxDistanceKM, body.PriceXOF).Scan(&id); err != nil {
+		INSERT INTO domestic_tiers (max_distance_km, price_usd) VALUES ($1,$2) RETURNING id`,
+		body.MaxDistanceKM, body.PriceUSD).Scan(&id); err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	kit.JSON(w, 201, map[string]any{"id": id, "max_distance_km": body.MaxDistanceKM, "price_xof": body.PriceXOF})
+	kit.JSON(w, 201, map[string]any{"id": id, "max_distance_km": body.MaxDistanceKM, "price_usd": body.PriceUSD})
 }
 
 func (s *server) getVendorShippingAddress(w http.ResponseWriter, r *http.Request) {
@@ -471,9 +479,10 @@ func (s *server) calculateDomestic(w http.ResponseWriter, r *http.Request) {
 	}
 	distanceKM := haversineKM(vLat, vLng, body.DestLat, body.DestLng)
 
-	var tierID, price int64
+	var tierID int64
+	var price float64
 	err = s.db.QueryRow(r.Context(), `
-		SELECT id, price_xof FROM domestic_tiers
+		SELECT id, price_usd FROM domestic_tiers
 		WHERE max_distance_km >= $1 ORDER BY max_distance_km ASC LIMIT 1`, distanceKM,
 	).Scan(&tierID, &price)
 	if err != nil {
@@ -483,7 +492,7 @@ func (s *server) calculateDomestic(w http.ResponseWriter, r *http.Request) {
 	}
 	kit.JSON(w, 200, map[string]any{
 		"distance_km": math.Round(distanceKM*10) / 10,
-		"price_xof":   price,
+		"price_usd":   price,
 		"tier_id":     tierID,
 	})
 }

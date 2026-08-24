@@ -119,16 +119,37 @@ func (s *server) listStores(w http.ResponseWriter, r *http.Request) {
 		var rating float64
 		var count int
 		_ = rows.Scan(&id, &name, &slug, &logo, &banner, &country, &city, &rating, &count)
-		items = append(items, map[string]any{
-			"id": id, "name": name, "slug": slug, "logo_url": logo, "banner_url": banner,
-			"country": country, "city": city, "verified": true,
-			"rating_avg": rating, "product_count": count,
-		})
+		items = append(items, vendorToDokanShape(id, name, slug, logo, banner, country, city, rating, count, true))
 	}
 	kit.JSON(w, 200, map[string]any{
-		"items": items, "page": page, "page_size": pageSize,
+		// items/page/page_size/total/has_more : forme native du service.
+		// stores : alias attendu par app/api/stores/route.ts (frontend
+		// actuel, qui lit aussi bien {stores:[...]} que le tableau brut).
+		"items": items, "stores": items,
+		"page": page, "page_size": pageSize,
 		"total": total, "has_more": int64(page*pageSize) < total,
 	})
+}
+
+// vendorToDokanShape — même forme de champs que dokan/v1/stores que le
+// frontend attend aujourd'hui (app/api/stores/route.ts) : gravatar/banner
+// à plat, rating en objet imbriqué {rating}, enabled au lieu de verified,
+// address.country, products_count. Objectif : que la route Next.js
+// puisse lire cette réponse sans réécriture, une fois pointée sur
+// vendor-svc au lieu de dokan/v1/stores.
+func vendorToDokanShape(id int64, name, slug, logo, banner, country, city string, rating float64, productCount int, verified bool) map[string]any {
+	return map[string]any{
+		"id": id, "store_name": name, "name": name, "slug": slug,
+		"gravatar": logo, "logo_url": logo, "banner": banner, "banner_url": banner,
+		"country": country, "city": city,
+		"address":        map[string]any{"country": country, "city": city},
+		"enabled":        verified,
+		"verified":       verified,
+		"rating":         map[string]any{"rating": rating, "count": 0},
+		"rating_avg":     rating,
+		"products_count": productCount,
+		"product_count":  productCount,
+	}
 }
 
 // vendorProducts — délégation à catalog-svc : vendor-svc ne possède pas
@@ -193,10 +214,10 @@ func (s *server) updateProfile(w http.ResponseWriter, r *http.Request) {
 	kit.Publish(s.kafka, "vendor.updated", fmt.Sprint(id), map[string]any{
 		"vendor_id": id, "at": time.Now().UTC().Format(time.RFC3339),
 	})
-	kit.JSON(w, 200, map[string]any{
-		"id": id, "name": name, "slug": slug, "logo_url": logo, "banner_url": banner,
-		"country": country, "city": city, "phone": phone, "email": email, "verified": verified,
-	})
+	out := vendorToDokanShape(id, name, slug, logo, banner, country, city, 0, 0, verified)
+	out["phone"] = phone
+	out["email"] = email
+	kit.JSON(w, 200, out)
 }
 
 // vendorOrders — même principe : les commandes appartiennent à order-svc.

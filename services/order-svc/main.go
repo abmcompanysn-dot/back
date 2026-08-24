@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -35,9 +36,9 @@ CREATE TABLE IF NOT EXISTS orders (
   parent_order_id BIGINT,                    -- regroupement côté acheteur
   status          TEXT NOT NULL DEFAULT 'pending_payment',
   lines           JSONB NOT NULL DEFAULT '[]',
-  subtotal_xof    BIGINT NOT NULL DEFAULT 0,
-  shipping_xof    BIGINT NOT NULL DEFAULT 0,
-  total_xof       BIGINT NOT NULL DEFAULT 0,
+  subtotal_usd    DOUBLE PRECISION NOT NULL DEFAULT 0, -- USD réel (voir catalog-svc)
+  shipping_usd    DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_usd       DOUBLE PRECISION NOT NULL DEFAULT 0,
   coupon_code     TEXT,
   shipping_address JSONB,
   billing_address  JSONB,
@@ -60,18 +61,19 @@ CREATE TABLE IF NOT EXISTS coupons (
 `
 
 type server struct {
-	db      *pgxpool.Pool
-	kafka   sarama.SyncProducer
-	timeout time.Duration
+	db          *pgxpool.Pool
+	kafka       sarama.SyncProducer
+	timeout     time.Duration
+	shippingURL string
 }
 
 type line struct {
-	ProductID   int64  `json:"product_id"`
-	VariationID int64  `json:"variation_id"`
-	VendorID    int64  `json:"vendor_id"`
-	Name        string `json:"name"`
-	Quantity    int    `json:"quantity"`
-	UnitPrice   int64  `json:"unit_price_xof"`
+	ProductID   int64   `json:"product_id"`
+	VariationID int64   `json:"variation_id"`
+	VendorID    int64   `json:"vendor_id"`
+	Name        string  `json:"name"`
+	Quantity    int     `json:"quantity"`
+	UnitPrice   float64 `json:"unit_price_usd"`
 }
 
 func main() {
@@ -90,9 +92,10 @@ func main() {
 
 	mins, _ := strconv.Atoi(kit.Env("PAYMENT_TIMEOUT_MINUTES", "30"))
 	s := &server{
-		db:      db,
-		kafka:   kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		timeout: time.Duration(mins) * time.Minute,
+		db:          db,
+		kafka:       kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		timeout:     time.Duration(mins) * time.Minute,
+		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
 	}
 
 	// Reaper : le cas d'échec partiel est géré, pas tu.
@@ -160,24 +163,36 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Devise de livraison résolue AVANT la transaction : shipping-svc est
+	// synchrone au checkout (voir en-tête shipping-svc/main.go), jamais
+	// bloquant côté DB si indisponible — la commande passe alors avec
+	// shipping_usd=0 plutôt que d'échouer entièrement (frais recalculables
+	// après coup, contrairement à un prix produit qui ne doit jamais dériver).
+	destCountry := destCountryFrom(body.ShippingAddress)
+
 	created := []map[string]any{}
 	seq := 1
 	for vendorID, lines := range byVendor {
-		var subtotal int64
+		var subtotal float64
+		itemCount := 0
 		for _, l := range lines {
-			subtotal += l.UnitPrice * int64(l.Quantity)
+			subtotal += l.UnitPrice * float64(l.Quantity)
+			itemCount += l.Quantity
 		}
+		shippingUSD := s.quoteShippingUSD(ctx, destCountry, itemCount)
+		total := subtotal + shippingUSD
+
 		linesJSON, _ := json.Marshal(lines)
 		var id int64
 		orderRef := fmt.Sprintf("%s-%d", ref, seq)
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO orders (reference, customer_id, vendor_id, parent_order_id, status,
-			                    lines, subtotal_xof, total_xof, coupon_code,
+			                    lines, subtotal_usd, shipping_usd, total_usd, coupon_code,
 			                    shipping_address, billing_address, payment_method)
-			VALUES ($1,$2,$3,$4,'pending_payment',$5,$6,$6,$7,$8,$9,$10)
+			VALUES ($1,$2,$3,$4,'pending_payment',$5,$6,$7,$8,$9,$10,$11,$12)
 			RETURNING id`,
 			orderRef, body.CustomerID, vendorID, parentID,
-			linesJSON, subtotal, body.CouponCode,
+			linesJSON, subtotal, shippingUSD, total, body.CouponCode,
 			body.ShippingAddress, body.BillingAddress, body.PaymentMethod,
 		).Scan(&id); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
@@ -185,7 +200,8 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 		}
 		created = append(created, map[string]any{
 			"id": id, "reference": orderRef, "vendor_id": vendorID,
-			"status": "pending_payment", "subtotal_xof": subtotal, "total_xof": subtotal,
+			"status": "pending_payment", "subtotal_usd": subtotal,
+			"shipping_usd": shippingUSD, "total_usd": total,
 		})
 		seq++
 	}
@@ -199,7 +215,7 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 	for _, o := range created {
 		kit.Publish(s.kafka, "order.created", fmt.Sprint(o["id"]), map[string]any{
 			"order_id": o["id"], "reference": o["reference"], "vendor_id": o["vendor_id"],
-			"customer_id": body.CustomerID, "total_xof": o["total_xof"],
+			"customer_id": body.CustomerID, "total_usd": o["total_usd"],
 			"payment_method": body.PaymentMethod,
 			"at":             time.Now().UTC().Format(time.RFC3339),
 		})
@@ -237,7 +253,7 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, reference, customer_id, vendor_id, status, total_xof, created_at
+		SELECT id, reference, customer_id, vendor_id, status, total_usd, created_at
 		FROM orders `+where+` ORDER BY id DESC
 		LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize), args...)
 	if err != nil {
@@ -247,13 +263,14 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, cust, vendor, total int64
+		var id, cust, vendor int64
+		var total float64
 		var ref, status string
 		var at time.Time
 		_ = rows.Scan(&id, &ref, &cust, &vendor, &status, &total, &at)
 		items = append(items, map[string]any{
 			"id": id, "reference": ref, "customer_id": cust, "vendor_id": vendor,
-			"status": status, "total_xof": total, "created_at": at.UTC().Format(time.RFC3339),
+			"status": status, "total_usd": total, "created_at": at.UTC().Format(time.RFC3339),
 		})
 	}
 	kit.JSON(w, 200, map[string]any{
@@ -266,9 +283,10 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	row := s.db.QueryRow(r.Context(), `
 		SELECT id, reference, customer_id, vendor_id, parent_order_id, status, lines,
-		       subtotal_xof, shipping_xof, total_xof, coupon_code, created_at, updated_at
+		       subtotal_usd, shipping_usd, total_usd, coupon_code, created_at, updated_at
 		FROM orders WHERE id = $1`, id)
-	var oid, cust, vendor, parent, subtotal, shipping, total int64
+	var oid, cust, vendor, parent int64
+	var subtotal, shipping, total float64
 	var ref, status, coupon string
 	var lines []byte
 	var createdAt, updatedAt time.Time
@@ -280,11 +298,56 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{
 		"id": oid, "reference": ref, "customer_id": cust, "vendor_id": vendor,
 		"parent_order_id": parent, "status": status, "lines": json.RawMessage(lines),
-		"subtotal_xof": subtotal, "shipping_xof": shipping, "total_xof": total,
+		"subtotal_usd": subtotal, "shipping_usd": shipping, "total_usd": total,
 		"coupon_code": coupon,
 		"created_at":  createdAt.UTC().Format(time.RFC3339),
 		"updated_at":  updatedAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// destCountryFrom — extrait le code pays ISO alpha-2 de l'adresse de
+// livraison (JSON libre côté frontend), pour interroger shipping-svc.
+func destCountryFrom(shippingAddress json.RawMessage) string {
+	var addr struct {
+		Country string `json:"country"`
+	}
+	_ = json.Unmarshal(shippingAddress, &addr)
+	return addr.Country
+}
+
+// quoteShippingUSD — appel SYNCHRONE à shipping-svc au checkout (voir
+// en-tête shipping-svc/main.go). Ne bloque jamais la commande : si le
+// pays est inconnu ou shipping-svc injoignable, renvoie 0 plutôt que de
+// faire échouer toute la commande — les frais restent ajustables après
+// coup (contrairement à un prix produit, qui ne doit jamais dériver).
+func (s *server) quoteShippingUSD(ctx context.Context, country string, itemCount int) float64 {
+	if country == "" {
+		return 0
+	}
+	url := fmt.Sprintf("%s/shipping-rates/quote?country=%s&items=%d", s.shippingURL, country, itemCount)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return 0
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0
+	}
+	var out struct {
+		TotalUSD float64 `json:"total_usd"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return 0
+	}
+	return out.TotalUSD
 }
 
 // confirmPayment — appelé en interne par payment-svc après

@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS products (
   name        TEXT NOT NULL,
   slug        TEXT,
   description TEXT DEFAULT '',
-  price_xof   BIGINT NOT NULL DEFAULT 0,
-  currency    TEXT NOT NULL DEFAULT 'XOF',
+  price_usd   DOUBLE PRECISION NOT NULL DEFAULT 0, -- USD réel, comme le catalogue WooCommerce source (voir CLAUDE.md frontend : _price n'est PAS en FCFA)
+  currency    TEXT NOT NULL DEFAULT 'USD',
   status      TEXT NOT NULL DEFAULT 'active',
   images      JSONB NOT NULL DEFAULT '[]',
   is_variable BOOLEAN NOT NULL DEFAULT FALSE,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS product_variations (
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   sku        TEXT,
   attributes JSONB NOT NULL DEFAULT '{}',
-  price_xof  BIGINT NOT NULL DEFAULT 0,
+  price_usd  DOUBLE PRECISION NOT NULL DEFAULT 0,
   stock      INT NOT NULL DEFAULT 0,
   image_url  TEXT DEFAULT ''
 );
@@ -158,7 +158,7 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_xof, status, is_variable
+	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, status, is_variable, images
 	          FROM products ` + where +
 		fmt.Sprintf(" ORDER BY id LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
 	rows, err := s.db.Query(r.Context(), query, args...)
@@ -170,24 +170,70 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, vendorID, categoryID, price int64
+		var id, vendorID, categoryID int64
+		var price float64
 		var trid, l, name, slug, status string
 		var isVar bool
-		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &status, &isVar); err != nil {
+		var images []byte
+		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &status, &isVar, &images); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
-		items = append(items, map[string]any{
-			"id": id, "trid": trid, "lang": l, "vendor_id": vendorID, "category_id": categoryID,
-			"name": name, "slug": slug, "price_xof": price, "currency": "XOF",
-			"status": status, "is_variable": isVar,
-		})
+		items = append(items, productToWooShape(id, trid, l, vendorID, categoryID, name, slug, "", price, status, isVar, images, nil))
 	}
 
 	kit.JSON(w, 200, map[string]any{
-		"items": items, "page": page, "page_size": pageSize,
+		// items/page/page_size/total/has_more : forme native du service.
+		// products/total_pages : alias pour compatibilité avec le frontend
+		// actuel qui lit la pagination WooCommerce (x-wp-total en header,
+		// pas dans le body — voir aussi kit.Run côté headers HTTP).
+		"items": items, "products": items,
+		"page": page, "page_size": pageSize,
 		"total": total, "has_more": int64(page*pageSize) < total,
+		"total_pages": (total + int64(pageSize) - 1) / int64(pageSize),
 	})
+}
+
+// productToWooShape — même forme de champs que la réponse WooCommerce REST
+// que le frontend attend aujourd'hui (lib/woocommerce.ts, lib/woo-server.ts) :
+// price en STRING décimale, images en objets {src}, categories en tableau
+// d'objets. Objectif : que app/api/products/route.ts puisse lire cette
+// réponse sans réécriture, une fois pointé sur catalog-svc au lieu de
+// wc/v3/products. Le prix est en USD réel (voir schema ci-dessus).
+func productToWooShape(id int64, trid, lang string, vendorID, categoryID int64, name, slug, description string, priceUSD float64, status string, isVariable bool, imagesJSON []byte, variations []map[string]any) map[string]any {
+	priceStr := strconv.FormatFloat(priceUSD, 'f', 2, 64)
+
+	var rawImages []string
+	_ = json.Unmarshal(imagesJSON, &rawImages)
+	images := make([]map[string]any, 0, len(rawImages))
+	for _, url := range rawImages {
+		images = append(images, map[string]any{"src": url})
+	}
+	var mainImage string
+	if len(rawImages) > 0 {
+		mainImage = rawImages[0]
+	}
+
+	out := map[string]any{
+		"id": id, "trid": trid, "lang": lang,
+		"vendor_id": vendorID, "category_id": categoryID,
+		"name": name, "slug": slug, "description": description,
+		"price": priceStr, "regular_price": priceStr, "sale_price": "",
+		"price_usd": priceUSD, "currency": "USD",
+		"image": mainImage, "images": images,
+		"status": status, "type": variableOrSimple(isVariable), "is_variable": isVariable,
+	}
+	if variations != nil {
+		out["variations"] = variations
+	}
+	return out
+}
+
+func variableOrSimple(isVariable bool) string {
+	if isVariable {
+		return "variable"
+	}
+	return "simple"
 }
 
 func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
@@ -195,10 +241,11 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	lang := defLang(r.URL.Query().Get("lang"))
 	row := s.db.QueryRow(r.Context(), `
 		SELECT p.id, p.trid, p.lang, p.vendor_id, p.category_id, p.name, p.slug,
-		       p.description, p.price_xof, p.status, p.images, p.is_variable
+		       p.description, p.price_usd, p.status, p.images, p.is_variable
 		FROM products p WHERE p.id = $1 AND p.lang = $2`, id, lang)
 
-	var pID, vendorID, catID, price int64
+	var pID, vendorID, catID int64
+	var price float64
 	var trid, l, name, slug, desc, status string
 	var images []byte
 	var isVar bool
@@ -218,33 +265,36 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, lang FROM products WHERE trid = $1 AND lang <> $2 LIMIT 1`, trid, l,
 	).Scan(&linkedID, &linkedLang)
 
-	variations := []map[string]any{}
+	var variations []map[string]any
 	if isVar {
+		variations = []map[string]any{}
 		rows, _ := s.db.Query(r.Context(),
-			`SELECT id, sku, attributes, price_xof, stock, image_url FROM product_variations WHERE product_id = $1 ORDER BY id`, id)
+			`SELECT id, sku, attributes, price_usd, stock, image_url FROM product_variations WHERE product_id = $1 ORDER BY id`, id)
 		if rows != nil {
 			defer rows.Close()
 			for rows.Next() {
-				var vid, vprice int64
+				var vid int64
+				var vprice float64
 				var sku, img string
 				var attrs []byte
 				var stock int
 				_ = rows.Scan(&vid, &sku, &attrs, &vprice, &stock, &img)
 				variations = append(variations, map[string]any{
 					"id": vid, "sku": sku, "attributes": json.RawMessage(attrs),
-					"price_xof": vprice, "stock": stock, "image_url": img,
+					"price": strconv.FormatFloat(vprice, 'f', 2, 64), "price_usd": vprice,
+					"stock": stock, "in_stock": stock > 0, "image_url": img,
 				})
 			}
 		}
 	}
 
-	kit.JSON(w, 200, map[string]any{
-		"id": pID, "trid": trid, "lang": l, "vendor_id": vendorID, "category_id": catID,
-		"name": name, "slug": slug, "description": desc, "price_xof": price, "currency": "XOF",
-		"status": status, "images": json.RawMessage(images), "is_variable": isVar,
-		"variations": variations,
-		"linked":     map[string]any{"id": linkedID, "lang": linkedLang},
-	})
+	out := productToWooShape(pID, trid, l, vendorID, catID, name, slug, desc, price, status, isVar, images, variations)
+	out["linked"] = map[string]any{"id": linkedID, "lang": linkedLang}
+	// Compat WPML : le frontend lit p.translations pour le switch FR/EN.
+	if linkedID != 0 {
+		out["translations"] = map[string]any{linkedLang: linkedID}
+	}
+	kit.JSON(w, 200, out)
 }
 
 // similar — l'intégration Vectorize existante reste branchée ici.
@@ -256,8 +306,13 @@ func (s *server) similar(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) listCategories(w http.ResponseWriter, r *http.Request) {
 	lang := defLang(r.URL.Query().Get("lang"))
-	rows, err := s.db.Query(r.Context(),
-		`SELECT id, trid, parent_id, name, slug, image_url FROM categories WHERE lang = $1 ORDER BY id`, lang)
+	// LEFT JOIN products actifs pour compter — le frontend trie les
+	// catégories par popularité (productCount), le compte doit donc
+	// être exact à la lecture, pas dénormalisé/en retard.
+	rows, err := s.db.Query(r.Context(), `
+		SELECT c.id, c.trid, c.parent_id, c.name, c.slug, c.image_url,
+		       (SELECT count(*) FROM products p WHERE p.category_id = c.id AND p.lang = c.lang AND p.status = 'active')
+		FROM categories c WHERE c.lang = $1 ORDER BY c.id`, lang)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -265,15 +320,20 @@ func (s *server) listCategories(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, parent int64
+		var id, parent, count int64
 		var trid, name, slug, img string
-		_ = rows.Scan(&id, &trid, &parent, &name, &slug, &img)
+		_ = rows.Scan(&id, &trid, &parent, &name, &slug, &img, &count)
 		items = append(items, map[string]any{
-			"id": id, "trid": trid, "parent_id": parent,
-			"name": name, "slug": slug, "image_url": img,
+			"id": id, "trid": trid, "parent_id": parent, "parent": parent,
+			"name": name, "slug": slug,
+			"image": map[string]any{"src": img}, "image_url": img,
+			"productCount": count, "count": count,
+			"isRoot": parent == 0,
 		})
 	}
-	kit.JSON(w, 200, map[string]any{"roots": items, "lang": lang})
+	// roots : forme native du service. categories : alias attendu par
+	// app/api/categories/route.ts (frontend actuel).
+	kit.JSON(w, 200, map[string]any{"roots": items, "categories": items, "lang": lang})
 }
 
 func (s *server) suggestions(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +368,7 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 		VendorID   int64            `json:"vendor_id"`
 		NameFR     string           `json:"name_fr"`
 		NameEN     string           `json:"name_en"`
-		PriceXOF   int64            `json:"price_xof"`
+		PriceUSD   float64          `json:"price_usd"`
 		CategoryID int64            `json:"category_id"`
 		Images     []string         `json:"images"`
 		IsVariable bool             `json:"is_variable"`
@@ -337,9 +397,9 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	insertLang := func(lang, name string) (int64, error) {
 		var id int64
 		err := tx.QueryRow(ctx, `
-			INSERT INTO products (trid, lang, vendor_id, category_id, name, slug, price_xof, images, is_variable)
+			INSERT INTO products (trid, lang, vendor_id, category_id, name, slug, price_usd, images, is_variable)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-			trid, lang, body.VendorID, body.CategoryID, name, slugify(name), body.PriceXOF, imagesJSON, body.IsVariable,
+			trid, lang, body.VendorID, body.CategoryID, name, slugify(name), body.PriceUSD, imagesJSON, body.IsVariable,
 		).Scan(&id)
 		return id, err
 	}
@@ -360,9 +420,9 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	for _, v := range body.Variations {
 		attrs, _ := json.Marshal(v["attributes"])
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO product_variations (product_id, sku, attributes, price_xof, stock, image_url)
+			INSERT INTO product_variations (product_id, sku, attributes, price_usd, stock, image_url)
 			VALUES ($1,$2,$3,$4,$5,$6)`,
-			idFR, v["sku"], attrs, toInt(v["price_xof"]), toInt(v["stock"]), v["image_url"]); err != nil {
+			idFR, v["sku"], attrs, toFloat(v["price_usd"]), toInt(v["stock"]), v["image_url"]); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -404,6 +464,15 @@ func toInt(v any) int64 {
 		return int64(t)
 	case int64:
 		return t
+	}
+	return 0
+}
+func toFloat(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case int64:
+		return float64(t)
 	}
 	return 0
 }

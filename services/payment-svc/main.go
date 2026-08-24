@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -36,8 +37,8 @@ CREATE TABLE IF NOT EXISTS payments (
   provider     TEXT NOT NULL CHECK (provider IN ('stripe','paydunya')),
   provider_ref TEXT DEFAULT '',
   redirect_url TEXT DEFAULT '',
-  amount_xof   BIGINT NOT NULL DEFAULT 0,
-  currency     TEXT NOT NULL DEFAULT 'XOF',
+  amount_usd   DOUBLE PRECISION NOT NULL DEFAULT 0, -- USD réel (voir catalog-svc) ; converti en XOF uniquement à l'appel PayDunya
+  currency     TEXT NOT NULL DEFAULT 'USD',
   status       TEXT NOT NULL DEFAULT 'initiated',
   method       TEXT DEFAULT '',
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -48,9 +49,10 @@ CREATE INDEX IF NOT EXISTS idx_payments_ref ON payments (provider_ref);
 `
 
 type server struct {
-	db       *pgxpool.Pool
-	producer sarama.SyncProducer
-	orderURL string
+	db          *pgxpool.Pool
+	producer    sarama.SyncProducer
+	orderURL    string
+	shippingURL string // source des exchange-rates pour la conversion PayDunya (USD -> XOF)
 }
 
 func main() {
@@ -68,9 +70,10 @@ func main() {
 	}
 
 	s := &server{
-		db:       db,
-		producer: kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		orderURL: kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		db:          db,
+		producer:    kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
 	}
 
 	go s.consumeOrders(log)
@@ -102,10 +105,10 @@ func main() {
 /* ---------- Consommation order.created ---------- */
 
 type orderCreatedEvent struct {
-	OrderID       int64  `json:"order_id"`
-	Reference     string `json:"reference"`
-	TotalXOF      int64  `json:"total_xof"`
-	PaymentMethod string `json:"payment_method"`
+	OrderID       int64   `json:"order_id"`
+	Reference     string  `json:"reference"`
+	TotalUSD      float64 `json:"total_usd"`
+	PaymentMethod string  `json:"payment_method"`
 }
 
 func (s *server) consumeOrders(log *slog.Logger) {
@@ -149,9 +152,9 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 	}
 	var id int64
 	err := s.db.QueryRow(ctx, `
-		INSERT INTO payments (order_id, provider, amount_xof, status)
+		INSERT INTO payments (order_id, provider, amount_usd, status)
 		VALUES ($1, $2, $3, 'initiated')
-		ON CONFLICT DO NOTHING RETURNING id`, ev.OrderID, provider, ev.TotalXOF).Scan(&id)
+		ON CONFLICT DO NOTHING RETURNING id`, ev.OrderID, provider, ev.TotalUSD).Scan(&id)
 	if err != nil {
 		log.Warn("paiement déjà initié", "order_id", ev.OrderID)
 		return
@@ -162,7 +165,7 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 	case "stripe":
 		ref, redirect, err = createStripeCheckout(ev)
 	case "paydunya":
-		ref, redirect, err = createPayDunyaInvoice(ev)
+		ref, redirect, err = s.createPayDunyaInvoice(ctx, ev)
 	}
 	if err != nil {
 		// EXPLICITE : le paiement est marqué failed, l'événement part sur Kafka.
@@ -187,11 +190,15 @@ func createStripeCheckout(ev orderCreatedEvent) (ref, redirect string, err error
 		return "", "", fmt.Errorf("STRIPE_SECRET_KEY absente")
 	}
 	front := kit.Env("STOREFRONT_URL", "http://localhost:3000")
+	// Stripe attend unit_amount dans la plus PETITE unité de la devise.
+	// USD a 2 décimales (cents) — contrairement au XOF (zéro décimale)
+	// utilisé auparavant ici, qui n'aurait pas eu besoin de ce ×100.
+	amountCents := int64(math.Round(ev.TotalUSD * 100))
 	form := url.Values{}
 	form.Set("mode", "payment")
 	form.Set("line_items[0][quantity]", "1")
-	form.Set("line_items[0][price_data][currency]", "xof")
-	form.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(ev.TotalXOF, 10)) // XOF : zéro décimale
+	form.Set("line_items[0][price_data][currency]", "usd")
+	form.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(amountCents, 10))
 	form.Set("line_items[0][price_data][product_data][name]", "Commande MIAD "+ev.Reference)
 	form.Set("client_reference_id", strconv.FormatInt(ev.OrderID, 10))
 	form.Set("success_url", front+"/checkout/success?order="+strconv.FormatInt(ev.OrderID, 10))
@@ -220,20 +227,31 @@ func createStripeCheckout(ev orderCreatedEvent) (ref, redirect string, err error
 	return doc.ID, doc.URL, nil
 }
 
-func createPayDunyaInvoice(ev orderCreatedEvent) (ref, redirect string, err error) {
+// createPayDunyaInvoice — PayDunya (Wave, Orange Money) facture en XOF,
+// devise locale UEMOA de ses moyens de paiement mobile ; le stockage
+// interne reste en USD (source de vérité), converti ici uniquement pour
+// cet appel via le taux exposé par shipping-svc (exchange_rates,
+// source UNIQUE — voir shipping-svc/main.go).
+func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent) (ref, redirect string, err error) {
 	priv := kit.Env("PAYDUNYA_API_KEY_PRIVATE", "")
 	pub := kit.Env("PAYDUNYA_API_KEY_PUBLIC", "")
 	master := kit.Env("PAYDUNYA_MASTER_KEY", "")
 	if priv == "" {
 		return "", "", fmt.Errorf("PAYDUNYA_API_KEY_PRIVATE absente")
 	}
+	rateXOF, err := s.fetchExchangeRate(ctx, "XOF")
+	if err != nil {
+		return "", "", fmt.Errorf("taux XOF indisponible pour la conversion PayDunya: %w", err)
+	}
+	amountXOF := int64(math.Round(ev.TotalUSD * rateXOF))
+
 	front := kit.Env("STOREFRONT_URL", "http://localhost:3000")
 	payload := map[string]any{
 		"invoice": map[string]any{
-			"total_amount": ev.TotalXOF,
+			"total_amount": amountXOF,
 			"description":  "Commande MIAD " + ev.Reference,
 			"items": []map[string]any{{
-				"name": "Commande " + ev.Reference, "quantity": 1, "unit_price": ev.TotalXOF,
+				"name": "Commande " + ev.Reference, "quantity": 1, "unit_price": amountXOF,
 			}},
 		},
 		"actions": map[string]any{
@@ -270,6 +288,40 @@ func createPayDunyaInvoice(ev orderCreatedEvent) (ref, redirect string, err erro
 		return "", "", fmt.Errorf("PayDunya: %s (%s)", doc.ResponseText, doc.ResponseCode)
 	}
 	return doc.Token, base + "/checkout-api/v1/checkout/invoice/" + doc.Token, nil
+}
+
+// fetchExchangeRate — lit shipping-svc/exchange-rates (source UNIQUE des
+// taux, voir shipping-svc/main.go). Échec EXPLICITE si indisponible :
+// jamais de taux par défaut codé en dur ici, qui divergerait de la
+// table exchange_rates au premier ajustement admin.
+func (s *server) fetchExchangeRate(ctx context.Context, currency string) (float64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.shippingURL+"/exchange-rates", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("shipping-svc injoignable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return 0, fmt.Errorf("shipping-svc a répondu %d", resp.StatusCode)
+	}
+	var body struct {
+		Rates []struct {
+			Currency   string  `json:"currency"`
+			RatePerUSD float64 `json:"rate_per_usd"`
+		} `json:"rates"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return 0, err
+	}
+	for _, r := range body.Rates {
+		if r.Currency == currency {
+			return r.RatePerUSD, nil
+		}
+	}
+	return 0, fmt.Errorf("taux %s absent de exchange_rates", currency)
 }
 
 /* ---------- Webhooks ---------- */
@@ -423,10 +475,10 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row := s.db.QueryRow(r.Context(), `
-		SELECT provider, amount_xof, status, redirect_url, provider_ref
+		SELECT provider, amount_usd, status, redirect_url, provider_ref
 		FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1`, body.OrderID)
 	var provider, status, redirect, ref string
-	var amount int64
+	var amount float64
 	if err := row.Scan(&provider, &amount, &status, &redirect, &ref); err != nil {
 		kit.Fail(w, 404, "payment_not_found",
 			fmt.Sprintf("aucun paiement pour la commande %d — order.created a-t-il été consommé ?", body.OrderID))
@@ -435,7 +487,7 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{
 		"payment": map[string]any{
 			"order_id": body.OrderID, "provider": provider, "provider_ref": ref,
-			"amount_xof": amount, "currency": "XOF", "status": status,
+			"amount_usd": amount, "currency": "USD", "status": status,
 		},
 		"redirect_url": redirect,
 	})
@@ -453,7 +505,7 @@ func (s *server) listPayments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, order_id, provider, amount_xof, status, method, created_at FROM payments
+		SELECT id, order_id, provider, amount_usd, status, method, created_at FROM payments
 		ORDER BY id DESC LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize))
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -462,13 +514,14 @@ func (s *server) listPayments(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, orderID, amount int64
+		var id, orderID int64
+		var amount float64
 		var provider, status, method string
 		var at time.Time
 		_ = rows.Scan(&id, &orderID, &provider, &amount, &status, &method, &at)
 		items = append(items, map[string]any{
 			"id": id, "order_id": orderID, "provider": provider,
-			"amount_xof": amount, "currency": "XOF", "status": status, "method": method,
+			"amount_usd": amount, "currency": "USD", "status": status, "method": method,
 			"created_at": at.UTC().Format(time.RFC3339),
 		})
 	}
@@ -482,9 +535,10 @@ func (s *server) getPayment(w http.ResponseWriter, r *http.Request) {
 	var orderID int64
 	fmt.Sscanf(r.PathValue("order_id"), "%d", &orderID)
 	row := s.db.QueryRow(r.Context(), `
-		SELECT id, order_id, provider, provider_ref, amount_xof, currency, status, method, created_at
+		SELECT id, order_id, provider, provider_ref, amount_usd, currency, status, method, created_at
 		FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1`, orderID)
-	var id, amount int64
+	var id int64
+	var amount float64
 	var provider, ref, currency, status, method string
 	var at time.Time
 	if err := row.Scan(&id, &orderID, &provider, &ref, &amount, &currency, &status, &method, &at); err != nil {
@@ -493,7 +547,7 @@ func (s *server) getPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	kit.JSON(w, 200, map[string]any{
 		"id": id, "order_id": orderID, "provider": provider, "provider_ref": ref,
-		"amount_xof": amount, "currency": currency, "status": status, "method": method,
+		"amount_usd": amount, "currency": currency, "status": status, "method": method,
 		"created_at": at.UTC().Format(time.RFC3339),
 	})
 }

@@ -129,7 +129,7 @@ async function renderView(tab) {
           `<tr><td>${k}</td><td class="status-${v}">${v}</td></tr>`).join('')}</tbody></table>`;
     } else if (tab === 'Commandes') {
       const d = await api('/admin/api/orders');
-      view.innerHTML = table(d.items, ['id','reference','vendor_id','status','total_xof','created_at']);
+      view.innerHTML = table(d.items, ['id','reference','vendor_id','status','total_usd','created_at']);
     } else if (tab === 'Produits') {
       const d = await api('/admin/api/products');
       view.innerHTML = table(d.items, ['id','name','vendor_id','price','lang']);
@@ -141,7 +141,7 @@ async function renderView(tab) {
       view.innerHTML = table(d.items, ['id','email','phone','preferred_lang','created_at']);
     } else if (tab === 'Paiements') {
       const d = await api('/admin/api/payments');
-      view.innerHTML = table(d.items, ['id','order_id','provider','status','amount_xof','created_at']);
+      view.innerHTML = table(d.items, ['id','order_id','provider','status','amount_usd','created_at']);
     } else if (tab === 'Livraison') {
       view.innerHTML = `
         <p>Devis interactif — zone internationale (POST vers shipping-svc à intégrer ici).</p>
