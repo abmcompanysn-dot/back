@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { callHeadlessAdmin } from '@/lib/miad-admin-api'
 
-export const runtime = 'edge';
+export const runtime = 'edge'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -12,14 +12,14 @@ export async function GET(request: Request) {
   const result = await callHeadlessAdmin<any[]>(request, {
     role: 'admin',
     action: 'orders.admin.list',
-    path: '/wp-json/wc/v3/orders',
-    auth: 'wc-basic',
-    query: { per_page: perPage, page, status },
+    path: '/admin/api/orders',
+    query: { page_size: perPage, page, status: status === 'any' ? undefined : status },
   })
 
   if (!result.ok) {
-    return NextResponse.json({ error: result.error, wpStatus: result.wpStatus, wpBody: result.wpBody }, { status: result.status })
+    return NextResponse.json({ error: result.error, upstreamStatus: result.upstreamStatus, upstreamBody: result.upstreamBody }, { status: result.status })
   }
 
-  return NextResponse.json({ orders: Array.isArray(result.data) ? result.data : [] })
+  const items = (result.data as any)?.items
+  return NextResponse.json({ orders: Array.isArray(items) ? items : [] })
 }

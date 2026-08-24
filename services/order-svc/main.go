@@ -110,6 +110,8 @@ func main() {
 		mux.HandleFunc("GET /orders/{id}", s.getOrder)
 		mux.HandleFunc("GET /orders/parent/{parent_id}", s.getParentOrder)
 		mux.HandleFunc("POST /orders/{id}/confirm", s.confirmPayment)
+		mux.HandleFunc("PUT /orders/{id}/status", s.updateOrderStatus)
+		mux.HandleFunc("PUT /orders/parent/{parent_id}/shipping-address", s.updateShippingAddress)
 	})
 }
 
@@ -459,6 +461,114 @@ func (s *server) confirmPayment(w http.ResponseWriter, r *http.Request) {
 		"order_id": id, "status": "paid", "at": time.Now().UTC().Format(time.RFC3339),
 	})
 	kit.JSON(w, 200, map[string]any{"id": id, "status": "paid"})
+}
+
+// updateOrderStatus — changement de statut manuel (admin/représentant),
+// distinct de confirmPayment (déclenché par payment-svc). Pas de contrôle
+// de rôle ici : admin-svc filtre déjà par JWT en amont avant de relayer.
+var validOrderStatuses = map[string]bool{
+	"pending_payment": true, "paid": true, "processing": true,
+	"shipped": true, "delivered": true, "cancelled": true, "refunded": true,
+	"payment_expired": true,
+}
+
+func (s *server) updateOrderStatus(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if !validOrderStatuses[body.Status] {
+		kit.Fail(w, 400, "invalid_status", fmt.Sprintf("statut %q inconnu", body.Status))
+		return
+	}
+	res, err := s.db.Exec(r.Context(),
+		"UPDATE orders SET status = $2, updated_at = now() WHERE id = $1", id, body.Status)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if res.RowsAffected() == 0 {
+		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande %d introuvable", id))
+		return
+	}
+	kit.Publish(s.kafka, "order.status_changed", fmt.Sprint(id), map[string]any{
+		"order_id": id, "status": body.Status, "at": time.Now().UTC().Format(time.RFC3339),
+	})
+	kit.JSON(w, 200, map[string]any{"id": id, "status": body.Status})
+}
+
+// editableShippingStatuses — statuts pour lesquels le client peut encore
+// corriger son adresse de livraison, avant que la commande ne soit
+// physiquement prise en charge/expédiée.
+var editableShippingStatuses = map[string]bool{
+	"pending_payment": true, "paid": true, "processing": true,
+}
+
+// updateShippingAddress — permet au CLIENT propriétaire d'une commande
+// groupée (pas seulement admin/représentant) de corriger son adresse de
+// livraison après l'achat, tant qu'aucune sous-commande n'est encore
+// expédiée. Met à jour TOUTES les sous-commandes du groupe (même adresse
+// dupliquée sur chacune à la création, voir createOrder).
+func (s *server) updateShippingAddress(w http.ResponseWriter, r *http.Request) {
+	parentID := atoi(r.PathValue("parent_id"))
+	var body struct {
+		CustomerID      int64           `json:"customer_id"`
+		ShippingAddress json.RawMessage `json:"shipping_address"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.CustomerID == 0 || len(body.ShippingAddress) == 0 {
+		kit.Fail(w, 400, "missing_fields", "customer_id et shipping_address sont obligatoires")
+		return
+	}
+
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, customer_id, status FROM orders WHERE parent_order_id = $1", parentID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id, custID int64
+		var status string
+		if err := rows.Scan(&id, &custID, &status); err != nil {
+			rows.Close()
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		if custID != body.CustomerID {
+			rows.Close()
+			kit.Fail(w, 403, "not_owner", "cette commande ne vous appartient pas")
+			return
+		}
+		if !editableShippingStatuses[status] {
+			rows.Close()
+			kit.Fail(w, 409, "not_editable", "cette commande est déjà en cours d'expédition et ne peut plus être modifiée")
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande groupée %d introuvable", parentID))
+		return
+	}
+
+	if _, err := s.db.Exec(r.Context(),
+		"UPDATE orders SET shipping_address = $2, updated_at = now() WHERE id = ANY($1)",
+		ids, body.ShippingAddress,
+	); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"success": true, "shipping_address": json.RawMessage(body.ShippingAddress)})
 }
 
 // expireUnpaidLoop — gestion explicite du cas "commande créée,

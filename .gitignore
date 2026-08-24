@@ -1,5 +1,8 @@
 # Dependencies
-vendor/
+# Ancré à la racine (/vendor/) : sans le slash de tête, ce motif capturait
+# aussi frontend/app/api/vendor/ (dossier de routes Next.js, pas le vendor/
+# Go) — tout ce dossier était invisible pour git, découvert le 2026-08-24.
+/vendor/
 node_modules/
 
 # Build React (admin-svc/webui) — généré par npm run build, embarqué

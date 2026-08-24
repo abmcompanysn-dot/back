@@ -1,22 +1,11 @@
 import { NextResponse } from 'next/server'
-import { callHeadlessAdmin } from '@/lib/miad-admin-api'
 
-export const runtime = 'edge';
+export const runtime = 'edge'
 
-export async function GET(
-  req: Request,
-  { params }: { params: Promise<{ sessionId: string }> }
-) {
-  const { sessionId } = await params
-
-  const result = await callHeadlessAdmin(req, {
-    role: 'admin',
-    action: 'analytics.session',
-    path: `/wp-json/miad-analytics/v1/session/${encodeURIComponent(sessionId)}`,
-  })
-
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error, wpStatus: result.wpStatus, wpBody: result.wpBody }, { status: result.status })
-  }
-  return NextResponse.json(result.data)
+// Analytics visiteurs différé côté backend Go (voir plan de migration, A.11).
+export async function GET() {
+  return NextResponse.json(
+    { error: 'Analytics non disponibles pour le moment', code: 'not_implemented' },
+    { status: 501 }
+  )
 }

@@ -110,6 +110,7 @@ func main() {
 		mux.HandleFunc("POST /push/subscribe", s.pushSubscribe)
 		mux.HandleFunc("GET /push/stats", s.pushStats)
 		mux.HandleFunc("POST /push/send", s.pushSendManual)
+		mux.HandleFunc("POST /push/broadcast", s.pushBroadcast)
 	})
 }
 
@@ -355,6 +356,53 @@ func (s *server) pushSendManual(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	kit.JSON(w, 200, map[string]any{"sent": sent, "failed": failed})
+}
+
+// pushBroadcast — diffuse à TOUS les appareils abonnés (usage admin
+// uniquement, filtré en amont par admin-svc via JWT role=admin), pas un
+// customer_id précis comme pushSendManual.
+func (s *server) pushBroadcast(w http.ResponseWriter, r *http.Request) {
+	if s.fcm == nil {
+		kit.Fail(w, 503, "fcm_not_configured", "FIREBASE_SERVICE_ACCOUNT_JSON absent")
+		return
+	}
+	var body struct {
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Title == "" || body.Message == "" {
+		kit.Fail(w, 400, "missing_fields", "title et message obligatoires")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), "SELECT fcm_token FROM push_subscriptions")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	tokens := []string{}
+	for rows.Next() {
+		var t string
+		_ = rows.Scan(&t)
+		tokens = append(tokens, t)
+	}
+	rows.Close()
+	if len(tokens) == 0 {
+		kit.Fail(w, 404, "no_subscription", "aucun appareil abonné aux notifications push")
+		return
+	}
+	sent, failed := 0, 0
+	for _, token := range tokens {
+		if err := s.fcm.send(r.Context(), token, body.Title, body.Message); err != nil {
+			failed++
+		} else {
+			sent++
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"sent": sent, "failed": failed, "total": len(tokens)})
 }
 
 /* ---------- Firebase Cloud Messaging (Admin SDK, HTTP v1) ----------

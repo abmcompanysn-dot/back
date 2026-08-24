@@ -1,36 +1,33 @@
 import { NextResponse } from 'next/server'
-import { callHeadlessAdmin } from '@/lib/miad-admin-api'
+import { FULFILLMENT_SVC_URL } from '@/lib/miad-server-auth'
 
-export const runtime = 'edge';
+export const runtime = 'edge'
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null)
-  const { orderId, trackingNumber, carrier, events } = body || {}
+  const { orderId, trackingNumber, carrier } = body || {}
 
   if (!orderId || !trackingNumber) {
     return NextResponse.json({ error: 'orderId et trackingNumber requis' }, { status: 400 })
   }
 
-  const metaData: any[] = [
-    { key: '_miad_tracking_number', value: String(trackingNumber) },
-    { key: '_miad_carrier', value: carrier || 'DHL' },
-  ]
-  if (events && Array.isArray(events)) {
-    metaData.push({ key: '_miad_tracking_events', value: JSON.stringify(events) })
-  }
-
-  const result = await callHeadlessAdmin(request, {
-    role: 'admin-or-rep',
-    action: 'orders.tracking.update',
-    method: 'PUT',
-    path: `/wp-json/wc/v3/orders/${orderId}`,
-    auth: 'wc-basic',
-    body: { meta_data: metaData },
+  const res = await fetch(`${FULFILLMENT_SVC_URL}/shipments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      order_id: Number(orderId),
+      tracking_number: String(trackingNumber),
+      carrier: carrier || 'dhl',
+    }),
   })
 
-  if (!result.ok) {
-    return NextResponse.json({ error: 'Erreur de mise à jour WooCommerce', wpStatus: result.wpStatus, wpBody: result.wpBody }, { status: result.status === 200 ? 500 : result.status })
+  if (!res.ok) {
+    const upstreamBody = await res.text().catch(() => '')
+    return NextResponse.json(
+      { error: 'Erreur de mise à jour du suivi', upstreamStatus: res.status, upstreamBody },
+      { status: res.status === 200 ? 500 : res.status }
+    )
   }
 
-  return NextResponse.json({ success: true, orderId, trackingNumber, carrier: carrier || 'DHL' })
+  return NextResponse.json({ success: true, orderId, trackingNumber, carrier: carrier || 'dhl' })
 }

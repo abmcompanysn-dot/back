@@ -1,24 +1,14 @@
 import { NextResponse } from 'next/server'
-import { callHeadlessAdmin } from '@/lib/miad-admin-api'
 
-export const runtime = 'edge';
+export const runtime = 'edge'
 
-// Dashboard KPI admin — le rôle WordPress est vérifié côté serveur (jamais un
-// flag client, falsifiable) par callHeadlessAdmin() avant de relayer vers
-// l'endpoint WordPress protégé par secret.
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url)
-  const days = searchParams.get('days') || '7'
-
-  const result = await callHeadlessAdmin(req, {
-    role: 'admin',
-    action: 'analytics.summary',
-    path: '/wp-json/miad-analytics/v1/summary',
-    query: { days },
-  })
-
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error, wpStatus: result.wpStatus, wpBody: result.wpBody }, { status: result.status })
-  }
-  return NextResponse.json(result.data)
+// Analytics visiteurs différé côté backend Go (voir plan de migration,
+// A.11) — aucun service ne persiste de sessions/événements pour l'instant.
+// Erreur EXPLICITE plutôt qu'un échec silencieux tant que ce n'est pas
+// construit.
+export async function GET() {
+  return NextResponse.json(
+    { error: 'Analytics non disponibles pour le moment', code: 'not_implemented' },
+    { status: 501 }
+  )
 }

@@ -121,6 +121,7 @@ func main() {
 
 	kit.Run("fulfillment-svc", kit.Env("PORT_FULFILLMENT", "8090"), log, health, func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /shipments", s.listShipments)
+		mux.HandleFunc("POST /shipments", s.createManualShipment)
 		mux.HandleFunc("GET /shipments/order/{order_id}", s.getShipmentByOrder)
 		mux.HandleFunc("POST /tracking/{shipment_id}/event", s.addManualEvent)
 		mux.HandleFunc("GET /tracking/search/{number}", s.trackByNumber)
@@ -257,6 +258,44 @@ func (s *server) listShipments(w http.ResponseWriter, r *http.Request) {
 		"items": items, "page": page, "page_size": pageSize,
 		"total": total, "has_more": int64(page*pageSize) < total,
 	})
+}
+
+// createManualShipment — saisie manuelle d'un numéro de suivi côté
+// admin/représentant (transporteur autre que DHL, ou création a posteriori),
+// distincte de dhlCreateShipment qui appelle l'API DHL en direct. Upsert sur
+// order_id : un ordre n'a qu'une expédition active à la fois.
+func (s *server) createManualShipment(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OrderID        int64  `json:"order_id"`
+		TrackingNumber string `json:"tracking_number"`
+		Carrier        string `json:"carrier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.OrderID == 0 || body.TrackingNumber == "" {
+		kit.Fail(w, 400, "missing_fields", "order_id et tracking_number sont obligatoires")
+		return
+	}
+	if body.Carrier == "" {
+		body.Carrier = "dhl"
+	}
+
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO shipments (order_id, carrier, tracking_number, status)
+		VALUES ($1, $2, $3, 'in_transit')
+		ON CONFLICT (tracking_number) DO UPDATE SET carrier = $2
+		RETURNING id`,
+		body.OrderID, body.Carrier, body.TrackingNumber,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	s.recordEvent(r.Context(), id, "in_transit", "Numéro de suivi ajouté manuellement", "", "manual")
+	kit.JSON(w, 201, map[string]any{"id": id, "order_id": body.OrderID, "tracking_number": body.TrackingNumber})
 }
 
 func (s *server) getShipmentByOrder(w http.ResponseWriter, r *http.Request) {

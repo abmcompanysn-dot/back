@@ -1,86 +1,161 @@
 /**
- * Server-side helpers for authenticating Next.js → WordPress calls.
+ * Authentification serveur — vérifie le JWT HS256 émis par auth-svc
+ * (backend Go) directement côté edge via Web Crypto, sans aller-retour
+ * réseau pour la simple vérification de rôle. Remplace les deux
+ * mécanismes WordPress incompatibles (jetons miad_* et wp-json/jwt-auth)
+ * qui n'ont plus cours depuis la migration vers le backend Go.
  *
- * For miad_ session tokens (OTP login): sends X-Headless-Secret + X-Miad-Session
- * so the JWT Auth WordPress plugin never intercepts the token.
- *
- * For JWT tokens (Gmail/Firebase login): sends the standard Authorization header.
+ * fetchWpUser/isAdmin/isRep gardent leur nom et leur signature (utilisés
+ * tels quels par ~14 routes app/api/**) pour limiter le nombre de fichiers
+ * à toucher lors de la migration — seul leur contenu change.
  */
 
 import { requireEnv } from './require-env'
 
-export const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
-export const INTERNAL_SECRET = requireEnv('INTERNAL_API_SECRET')
+export const CATALOG_SVC_URL = requireEnv('CATALOG_SVC_URL')
+export const VENDOR_SVC_URL = requireEnv('VENDOR_SVC_URL')
+export const ORDER_SVC_URL = requireEnv('ORDER_SVC_URL')
+export const PAYMENT_SVC_URL = requireEnv('PAYMENT_SVC_URL')
+export const SHIPPING_SVC_URL = requireEnv('SHIPPING_SVC_URL')
+export const AUTH_SVC_URL = requireEnv('AUTH_SVC_URL')
+export const NOTIFICATION_SVC_URL = requireEnv('NOTIFICATION_SVC_URL')
+export const EMAIL_SVC_URL = requireEnv('EMAIL_SVC_URL')
+export const FULFILLMENT_SVC_URL = requireEnv('FULFILLMENT_SVC_URL')
+export const LOYALTY_SVC_URL = requireEnv('LOYALTY_SVC_URL')
+export const ADMIN_SVC_URL = requireEnv('ADMIN_SVC_URL')
+const JWT_SECRET = requireEnv('JWT_SECRET')
 
-export const REP_ROLES = [
-  'miad_representative', 'miad_representant', 'representant', 'miad_rep', 'miad_agent',
-  'miad_super_rep',
-]
+export const REP_ROLES = ['representative']
 
-/**
- * Headers for WordPress calls.
- *
- * For miad_ tokens we send BOTH:
- *   - X-Miad-Session  → picked up by Method 2 in miad_get_user_from_token() (new PHP)
- *   - Authorization   → picked up by Method 1, which works once the
- *                       rest_authentication_errors bypass at PHP_INT_MAX is active (old PHP)
- * Either mechanism is sufficient; having both makes the system robust across deploy states.
- */
-export function wpHeaders(token: string): Record<string, string> {
-  if (token.startsWith('miad_')) {
-    // No Authorization header — JWT Auth only intercepts Bearer tokens.
-    // X-Headless-Secret + X-Miad-Session is the server-to-server channel
-    // that bypasses JWT Auth completely (Method 2 in PHP).
-    return {
-      'X-Headless-Secret': INTERNAL_SECRET,
-      'X-Miad-Session': token,
-      'Content-Type': 'application/json',
-      'User-Agent': 'MIAD-Headless-Client',
-    }
-  }
+interface JWTClaims {
+  sub: number | string
+  role: string
+  email?: string
+  vendor_id?: number | null
+  provider?: string
+  exp: number
+  [key: string]: unknown
+}
+
+/** En-tête d'autorisation unique — un seul mécanisme (JWT HS256 auth-svc). */
+export function authHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
-    'X-Headless-Secret': INTERNAL_SECRET,
     'Content-Type': 'application/json',
-    'User-Agent': 'MIAD-Headless-Client',
   }
 }
 
-/**
- * Returns the correct "who am I?" endpoint for the token type.
- * miad_ → /miad/v1/me  (reads X-Miad-Session, no JWT Auth)
- * JWT  → /wp/v2/users/me
- */
-export function meUrl(token: string): string {
-  return token.startsWith('miad_')
-    ? `${WOO_URL}/wp-json/miad/v1/me`
-    : `${WOO_URL}/wp-json/wp/v2/users/me?context=edit`
+// Alias conservé pour les ~14 fichiers app/api/** qui importent encore
+// wpHeaders sans avoir été réécrits individuellement (Pattern 1/2 de la
+// migration) — même comportement qu'authHeaders, juste l'ancien nom.
+export const wpHeaders = authHeaders
+
+function base64UrlToBytes(b64url: string): Uint8Array {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(b64url.length / 4) * 4, '=')
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
+}
+
+function base64UrlToString(b64url: string): string {
+  return new TextDecoder().decode(base64UrlToBytes(b64url))
+}
+
+let cachedKey: Promise<CryptoKey> | null = null
+function hmacKey(): Promise<CryptoKey> {
+  if (!cachedKey) {
+    cachedKey = crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify'],
+    )
+  }
+  return cachedKey
 }
 
 /**
- * Fetch the WordPress user profile for a given token.
- * Returns null if invalid / expired.
+ * Vérifie la signature HS256 et l'expiration d'un JWT émis par auth-svc,
+ * entièrement côté edge (Web Crypto) — pas d'appel réseau pour un simple
+ * contrôle de rôle. Renvoie les claims si valides, null sinon.
  */
-export async function fetchWpUser(token: string): Promise<any | null> {
+export async function verifyJWT(token: string): Promise<JWTClaims | null> {
   try {
-    const res = await fetch(meUrl(token), { headers: wpHeaders(token), cache: 'no-store' })
-    if (!res.ok) return null
-    const data = await res.json().catch(() => null)
-    if (!data) return null
-    // Normalise roles array
-    return { ...data, roles: data.roles || (data.role ? [data.role] : []) }
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const [header, payload, signature] = parts
+
+    const key = await hmacKey()
+    const valid = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      base64UrlToBytes(signature),
+      new TextEncoder().encode(`${header}.${payload}`),
+    )
+    if (!valid) return null
+
+    const claims = JSON.parse(base64UrlToString(payload)) as JWTClaims
+    if (typeof claims.exp === 'number' && Date.now() / 1000 > claims.exp) return null
+    return claims
   } catch {
     return null
   }
 }
 
-export function isAdmin(user: any): boolean {
-  const roles: string[] = user?.roles || []
-  return roles.includes('administrator') || user?.role === 'admin'
+/**
+ * fetchWpUser — nom conservé pour compatibilité avec les ~14 appelants
+ * existants. Ne fait plus d'appel réseau (le rôle est déjà dans le JWT) :
+ * vérifie juste la signature et renvoie un objet compatible avec l'usage
+ * actuel (isAdmin/isRep lisent `.role`).
+ */
+export async function fetchWpUser(token: string): Promise<JWTClaims | null> {
+  return verifyJWT(token)
 }
 
-export function isRep(user: any): boolean {
-  const roles: string[] = user?.roles || []
-  const role: string = user?.role || ''
-  return REP_ROLES.includes(role) || roles.some(r => REP_ROLES.includes(r))
+export function isAdmin(user: JWTClaims | null): boolean {
+  return user?.role === 'admin'
+}
+
+// Un vendeur est un customer avec vendor_id non nul dans son JWT (voir
+// A.10 côté auth-svc) — pas un rôle séparé.
+export function isVendor(user: JWTClaims | null): boolean {
+  return user?.role === 'customer' && user?.vendor_id != null
+}
+
+/**
+ * isRep — le rôle représentant n'est pas un claim JWT (loyalty-svc est la
+ * source de vérité, résolu par email — auth-svc n'a pas de claim
+ * representative_id dédié) : nécessite un appel réseau, contrairement à
+ * isAdmin/isVendor. Fonction ASYNCHRONE : tout appelant doit faire
+ * `await isRep(user)`, jamais `isRep(user)` seul (une Promise est
+ * toujours truthy — `if (!isRep(user))` sans await ne rejetterait jamais
+ * personne). Voir fetchRepresentative pour récupérer aussi les données
+ * complètes en un seul appel si la route en a besoin de toute façon.
+ */
+export async function isRep(user: JWTClaims | null): Promise<boolean> {
+  return (await fetchRepresentative(user)) !== null
+}
+
+export interface Representative {
+  id: number
+  name: string
+  email: string
+  country: string
+  is_super_rep: boolean
+  commission_pct: number
+}
+
+export async function fetchRepresentative(user: JWTClaims | null): Promise<Representative | null> {
+  if (!user?.email) return null
+  try {
+    const res = await fetch(`${LOYALTY_SVC_URL}/representative/by-email/${encodeURIComponent(user.email)}`, {
+      cache: 'no-store',
+    })
+    if (!res.ok) return null
+    return (await res.json()) as Representative
+  } catch {
+    return null
+  }
 }

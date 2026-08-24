@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { callHeadlessAdmin } from '@/lib/miad-admin-api'
 
-export const runtime = 'edge';
+export const runtime = 'edge'
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -9,11 +9,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const result = await callHeadlessAdmin(request, {
     role: 'admin-or-rep',
     action: 'orders.get',
-    path: `/wp-json/wc/v3/orders/${id}`,
-    auth: 'wc-basic',
+    path: `/admin/api/orders/parent/${id}`,
   })
 
-  if (!result.ok) return NextResponse.json({ error: result.error, wpStatus: result.wpStatus, wpBody: result.wpBody }, { status: result.status })
+  if (!result.ok) return NextResponse.json({ error: result.error, upstreamStatus: result.upstreamStatus, upstreamBody: result.upstreamBody }, { status: result.status })
   return NextResponse.json({ order: result.data })
 }
 
@@ -24,11 +23,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     role: 'admin-or-rep',
     action: 'orders.update',
     method: 'PUT',
-    path: `/wp-json/wc/v3/orders/${id}`,
-    auth: 'wc-basic',
-    body,
+    path: `/admin/api/orders/${id}/status`,
+    body: { status: body.status },
   })
 
-  if (!result.ok) return NextResponse.json({ error: result.error, wpStatus: result.wpStatus, wpBody: result.wpBody }, { status: result.status })
+  if (!result.ok) return NextResponse.json({ error: result.error, upstreamStatus: result.upstreamStatus, upstreamBody: result.upstreamBody }, { status: result.status })
   return NextResponse.json({ order: result.data })
 }

@@ -121,9 +121,17 @@ func main() {
 	kit.Run("admin-svc", kit.Env("PORT_ADMIN", "8088"), log, health, func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /admin/api/overview", s.requireAdmin(s.overview))
 		mux.HandleFunc("GET /admin/api/orders", s.requireAdmin(s.proxy(func() string { return s.orderURL + "/orders" })))
-		mux.HandleFunc("GET /admin/api/orders/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
+		mux.HandleFunc("GET /admin/api/orders/{id}", s.requireAdminOrRep(s.proxyPath(func(id string) string {
 			return s.orderURL + "/orders/" + id
 		})))
+		// Vue agrégée "commande unique" (voir order-svc/getParentOrder) —
+		// l'id ici est un parent_order_id, pas un id de sous-commande.
+		mux.HandleFunc("GET /admin/api/orders/parent/{id}", s.requireAdminOrRep(s.proxyPath(func(id string) string {
+			return s.orderURL + "/orders/parent/" + id
+		})))
+		mux.HandleFunc("PUT /admin/api/orders/{id}/status", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPut, s.orderURL+"/orders/"+r.PathValue("id")+"/status")
+		}))
 		mux.HandleFunc("GET /admin/api/products", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/products" })))
 		mux.HandleFunc("GET /admin/api/categories", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/categories" })))
 		mux.HandleFunc("GET /admin/api/vendors", s.requireAdmin(s.proxy(func() string { return s.vendorURL + "/stores" })))
@@ -133,7 +141,20 @@ func main() {
 		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
 		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdminOrRep(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
+		mux.HandleFunc("POST /admin/api/representative/messages/{id}/reply", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.loyaltyURL+"/representative/messages/"+r.PathValue("id")+"/reply")
+		}))
+		mux.HandleFunc("PATCH /admin/api/representative/messages/{id}", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.loyaltyURL+"/representative/messages/"+r.PathValue("id"))
+		}))
+		mux.HandleFunc("POST /admin/api/representative/orders/{id}/acknowledge", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.loyaltyURL+"/representative/orders/"+r.PathValue("id")+"/acknowledge")
+		}))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
+		mux.HandleFunc("GET /admin/api/push/stats", s.requireAdmin(s.proxy(func() string { return s.notificationURL + "/push/stats" })))
+		mux.HandleFunc("POST /admin/api/push/broadcast", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.notificationURL+"/push/broadcast")
+		}))
 		mux.HandleFunc("POST /admin/api/media/upload", s.requireAdmin(s.uploadMedia))
 		// Hors /admin/api/ : accessible à un vendeur authentifié (pas
 		// seulement un admin) pour uploader une image produit — même
