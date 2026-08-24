@@ -52,8 +52,11 @@ kubectl -n miad rollout status "deployment/$SVC" --timeout=180s
 
 say "Health-check de $SVC :"
 PORT=$(kubectl -n miad get deploy "$SVC" -o jsonpath='{.spec.template.spec.containers[0].ports[0].containerPort}')
-POD=$(kubectl -n miad get pods -l "app=$SVC" -o jsonpath='{.items[0].metadata.name}')
-kubectl -n miad exec "$POD" -- wget -qO- --timeout=5 "http://localhost:$PORT/system-check" || {
+# "deploy/$SVC" (pas un nom de pod capturé au préalable) : kubectl exec
+# résout le pod courant dynamiquement, évite la fenêtre de course où
+# l'ancien pod vient de disparaître et le nouveau nom n'a pas encore
+# été lu (observé lors du tout premier test de ce script).
+kubectl -n miad exec "deploy/$SVC" -- wget -qO- --timeout=5 "http://localhost:$PORT/system-check" || {
   echo "⚠️  /system-check n'a pas répondu — vérifier les logs : kubectl -n miad logs deploy/$SVC"
   exit 1
 }
