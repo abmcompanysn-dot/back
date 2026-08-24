@@ -17,9 +17,23 @@ metadata:
 data:
   # Adresses internes au cluster — mêmes noms que docker-compose,
   # donc le même .env.example fonctionne dans les deux modes.
-  PGHOST: postgres
-  PGPORT: "5432"
-  PGUSER: miad
+  #
+  # PGHOST/PGPORT/PGUSER retirés le 2026-08-24 : ce ne sont PAS de simples
+  # valeurs documentaires — pgx (client Postgres utilisé par tous les
+  # services Go) applique automatiquement les variables d'environnement
+  # libpq standard (PGHOST/PGPORT/PGUSER/PGPASSWORD) PAR-DESSUS le DSN
+  # explicite passé à pgxpool.ParseConfig(), même quand ce DSN vient
+  # d'ailleurs (ici DATABASE_URL_CATALOG et consorts). Avec PGUSER/PGHOST
+  # présents mais PGPASSWORD absent, la connexion tente une authentification
+  # sans mot de passe utilisable et échoue TOUJOURS ("password authentication
+  # failed"), même avec un DATABASE_URL_* parfaitement correct — confirmé en
+  # diagnostiquant un échec de connexion catalog-svc après rollout : le
+  # mot de passe Postgres réel était bon (vérifié par connexion psql directe
+  # avec authentification scram-sha-256 réussie), mais catalog-svc échouait
+  # quand même. Aucun service ne lit PGHOST/PGPORT/PGUSER individuellement
+  # (chaque service lit uniquement son DATABASE_URL_<service> complet) :
+  # ces 3 clés n'avaient donc aucune utilité et ne faisaient que casser
+  # l'auth pgx en silence à chaque redémarrage de pod.
   REDIS_ADDR: redis:6379
   KAFKA_BROKERS: kafka:9092
   PORT_CATALOG: "8081"
