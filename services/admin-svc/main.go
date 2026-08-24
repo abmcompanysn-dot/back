@@ -132,7 +132,7 @@ func main() {
 		mux.HandleFunc("GET /admin/api/shipping-quote", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping-rates/quote" })))
 		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
-		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
+		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdminOrRep(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
 		mux.HandleFunc("POST /admin/api/media/upload", s.requireAdmin(s.uploadMedia))
 		// Hors /admin/api/ : accessible à un vendeur authentifié (pas
@@ -570,6 +570,42 @@ func (s *server) requireAdminOrVendor(next http.HandlerFunc) http.HandlerFunc {
 			kit.Fail(w, 403, "admin_or_vendor_required", "rôle admin ou compte vendeur requis")
 			return
 		}
+		next(w, r)
+	}
+}
+
+// requireAdminOrRep — pour les routes qu'un représentant authentifié peut
+// aussi utiliser (messagerie client, voir /admin/api/representative/messages),
+// en plus d'un admin. Le rôle représentant n'est pas un claim JWT (comme
+// vendor_id) : loyalty-svc est la source de vérité, résolue par email — donc
+// un appel réseau supplémentaire ici, contrairement à requireAdminOrVendor.
+func (s *server) requireAdminOrRep(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, err := s.verifyJWT(r)
+		if err != nil {
+			kit.Fail(w, 403, "auth_required", err.Error())
+			return
+		}
+		if claims["role"] == "admin" {
+			next(w, r)
+			return
+		}
+		email, _ := claims["email"].(string)
+		if email == "" {
+			kit.Fail(w, 403, "admin_or_rep_required", "rôle admin ou compte représentant requis")
+			return
+		}
+		req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet,
+			s.loyaltyURL+"/representative/by-email/"+email, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			kit.Fail(w, 403, "admin_or_rep_required", "rôle admin ou compte représentant requis")
+			return
+		}
+		resp.Body.Close()
 		next(w, r)
 	}
 }

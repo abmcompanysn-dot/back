@@ -107,6 +107,7 @@ var seedTemplates = []EmailTemplate{
 	{Name: "order_shipped", Label: "Commande expédiée", Subject: "Votre commande #{{.order_id}} a été expédiée !", BodyHTML: orderShippedHTML},
 	{Name: "otp_email", Label: "Code de vérification (OTP)", Subject: "Votre code de vérification MIAD Market", BodyHTML: otpEmailHTML},
 	{Name: "password_reset", Label: "Réinitialisation de mot de passe", Subject: "Réinitialisation de mot de passe", BodyHTML: passwordResetHTML},
+	{Name: "rep_message_notification", Label: "Nouveau message représentant", Subject: "💬 Nouveau message de {{.client_name}} — MIAD Market", BodyHTML: repMessageNotificationHTML},
 }
 
 func seedEmailTemplates(ctx context.Context, db *pgxpool.Pool) error {
@@ -1182,7 +1183,7 @@ const passwordResetHTML = `
               <table role="presentation" style="margin:30px 0;">
                 <tr>
                   <td align="center" style="background-color:#4facfe;padding:15px 30px;border-radius:8px;">
-                    <a href="{{.ResetURL}}" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:bold;">Réinitialiser mon mot de passe →</a>
+                    <a href="{{.reset_url}}" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:bold;">Réinitialiser mon mot de passe →</a>
                   </td>
                 </tr>
               </table>
@@ -1204,6 +1205,45 @@ const passwordResetHTML = `
       </td>
     </tr>
   </table>
+</body>
+</html>
+`
+
+// repMessageNotificationHTML — notifie un représentant qu'un client lui a
+// écrit (formulaire de contact public, voir app/api/messages/route.ts côté
+// frontend). Portage direct du HTML précédemment envoyé en dur depuis
+// Next.js vers wp-json/miad/v1/send-email — même mise en page, désormais un
+// vrai modèle éditable depuis le dashboard admin comme les autres.
+const repMessageNotificationHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nouveau message client</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background-color:#f4f4f4;">
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#111">
+    <div style="background:#1a1a1a;padding:24px 32px;border-radius:12px 12px 0 0">
+      <h1 style="color:#fff;margin:0;font-size:20px;font-weight:900">MIAD Market</h1>
+      <p style="color:rgba(255,255,255,.6);margin:4px 0 0;font-size:13px">Nouveau message client</p>
+    </div>
+    <div style="background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none">
+      <p style="margin:0 0 16px;font-size:15px">Bonjour <strong>{{.rep_name}}</strong>,</p>
+      <p style="margin:0 0 20px;font-size:14px;color:#374151">
+        <strong>{{.client_name}}</strong>{{if .client_email}} ({{.client_email}}){{end}} vous a envoyé un message :
+      </p>
+      <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #1a1a1a;border-radius:8px;padding:16px 20px;margin-bottom:28px">
+        <p style="margin:0;font-size:14px;color:#1f2937;line-height:1.6">"{{.message}}"</p>
+      </div>
+      <a href="{{.dashboard_url}}" style="display:inline-block;background:#1a1a1a;color:#fff;padding:13px 28px;border-radius:10px;text-decoration:none;font-weight:700;font-size:14px">
+        Répondre maintenant →
+      </a>
+    </div>
+    <div style="background:#f3f4f6;padding:16px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e7eb;border-top:none">
+      <p style="margin:0;font-size:11px;color:#9ca3af">MIAD Market · Made in Africa, Shared with the World</p>
+    </div>
+  </div>
 </body>
 </html>
 `
