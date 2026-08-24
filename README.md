@@ -2,12 +2,17 @@
 
 Remplacement complet du backend WordPress / WooCommerce / Dokan / WPML par une
 architecture microservices en Go, déployée sur un **VPS en Kubernetes (k3s)**.
-Le frontend Next.js n'est **pas réécrit** : il continue d'appeler les mêmes
-routes JSON (`app/api/*`), seule l'URL cible change (WooCommerce → passerelle Caddy).
+
+Ce dépôt est un **monorepo** : le backend Go (`services/`, `cmd/`, `proto/`)
+et le frontend Next.js (`frontend/`) vivent côte à côte. Le frontend reste
+hébergé sur **Cloudflare Pages** (aucun changement d'hébergement) — sa
+présence ici sert uniquement à faire évoluer les deux ensemble et à garder
+une seule source de vérité sur l'état de compatibilité entre eux.
 
 > Document de cadrage : sections 1 à 9 du brief « Backend sans WordPress ».
-> Ce dépôt en est l'implémentation : contrats, socle, **8 services**, infra,
-> console d'administration, import WooCommerce et outil de health-check.
+> Ce dépôt en est l'implémentation : contrats, socle, **10 services**, infra,
+> console d'administration, import WooCommerce, outil de health-check, et une
+> première couche de compatibilité avec le frontend existant.
 
 ---
 
@@ -15,39 +20,110 @@ routes JSON (`app/api/*`), seule l'URL cible change (WooCommerce → passerelle 
 
 ```
 proto/miad/<svc>/v1/*.proto     Contrats Protobuf — source de vérité (AVANT la logique)
-services/<svc>/main.go          8 services Go (REST direct ; grpc-gateway après codegen)
+services/<svc>/main.go          10 services Go (REST direct ; grpc-gateway après codegen)
 services/admin-svc/dashboard.html  Console d'administration embarquée (vanilla JS)
 internal/kit/                   Socle commun : config, Postgres, Redis, Kafka, erreurs, santé
 cmd/wc-import/                  Import ponctuel WooCommerce/Dokan → Postgres (phase 2)
+frontend/                       Copie du frontend Next.js (v0-miad-front-end) — déployé sur Cloudflare Pages, pas sur ce VPS
 deploy/Caddyfile                Passerelle externe (remplace l'URL WooCommerce)
-deploy/init-db.sh               Crée les 7 bases au premier démarrage de Postgres
+deploy/init-db.sh               Crée les 9 bases au premier démarrage de Postgres
 deploy/k8s/*.yaml               Manifests Kubernetes (k3s) — mode principal
-docker-compose.yml              Repli local : Postgres + Redis + Kafka + 8 services + Caddy
+docker-compose.yml              Repli local : Postgres + Redis + Kafka + 10 services + Caddy
 scripts/vps-bootstrap.sh        Déploiement VPS en UNE commande (k3s)
-scripts/system-check.sh         Health-check transverse — agrège les 8 services
+scripts/system-check.sh         Health-check transverse — agrège les 10 services
 scripts/system-check-k8s.sh     Équivalent Kubernetes (sonde chaque pod)
 scripts/git-publish.sh          Publie le dépôt sur GitHub en une commande
 ```
 
-## 2. Les 8 services
+## 2. Les 10 services
 
-| Service          | Port  | Base Postgres     | Publie sur Kafka                        | Consomme               |
-|------------------|-------|-------------------|------------------------------------------|------------------------|
-| catalog-svc      | 8081  | miad_catalog      | `product.created`, `product.updated`     | —                      |
-| vendor-svc       | 8082  | miad_vendor       | `vendor.registered`, `vendor.updated`    | —                      |
-| order-svc        | 8083  | miad_order        | `order.created`, `order.status_changed`  | —                      |
-| payment-svc      | 8084  | miad_payment      | `payment.confirmed`, `payment.failed`    | `order.created`        |
-| shipping-svc     | 8085  | miad_shipping     | — (appelé en synchrone au checkout)      | —                      |
-| auth-svc         | 8086  | miad_auth         | `customer.registered`                    | —                      |
-| notification-svc | 8087  | miad_notification | — (consommateur pur)                     | `order.*`, `payment.*` |
-| admin-svc        | 8088  | — (agrégateur)    | —                                        | — (lit via HTTP interne) |
+| Service          | Port  | Base Postgres     | Publie sur Kafka                          | Consomme                    |
+|------------------|-------|-------------------|--------------------------------------------|------------------------------|
+| catalog-svc      | 8081  | miad_catalog      | `product.created`, `product.updated`       | —                             |
+| vendor-svc       | 8082  | miad_vendor       | `vendor.registered`, `vendor.updated`      | —                             |
+| order-svc        | 8083  | miad_order        | `order.created`, `order.status_changed`    | —                             |
+| payment-svc      | 8084  | miad_payment      | `payment.confirmed`, `payment.failed`      | `order.created`               |
+| shipping-svc     | 8085  | miad_shipping     | — (appelé en synchrone au checkout)        | —                             |
+| auth-svc         | 8086  | miad_auth         | `customer.registered`                      | —                             |
+| notification-svc | 8087  | miad_notification | — (consommateur pur)                       | `order.*`, `payment.*`        |
+| admin-svc        | 8088  | — (agrégateur)    | —                                           | — (lit via HTTP interne)      |
+| email-svc        | 8089  | miad_email        | —                                           | `order.*`, `payment.*`, `customer.registered` |
+| fulfillment-svc  | 8090  | miad_fulfillment  | `shipment.created`, `shipment.status_changed` | `order.status_changed`     |
+| loyalty-svc      | 8091  | miad_loyalty      | `coins.awarded`, `message.created`         | —                             |
 
 **Règles structurantes** : une base par service (jamais partagée, pas de FK entre
 bases) · traduction FR/EN par paire de lignes `trid`+`lang` (modèle WPML conservé,
 import sans transformation) · erreurs toujours explicites
 (`{"error":{"code","message"}}`) · health-check natif sur chaque service.
 
-## 3. Console d'administration
+## 3. Prix : USD partout, jamais FCFA en stockage
+
+**Tous les montants en base sont en USD réel** (`price_usd`, `total_usd`,
+`amount_usd`, etc. — `DOUBLE PRECISION`), exactement comme le vrai catalogue
+WooCommerce source (`_price` n'est pas en FCFA, confirmé dans le CLAUDE.md du
+frontend). Aucune conversion n'a lieu à l'écriture ni à la lecture — la
+conversion en devise d'affichage (FCFA, CAD, …) reste une responsabilité du
+frontend, comme aujourd'hui.
+
+Deux endroits font exception, et convertissent explicitement au moment de
+l'appel externe (jamais en stockage) :
+- **Stripe** (`payment-svc`) reçoit un montant en **cents USD** (`total_usd × 100`),
+  puisque l'USD a 2 décimales — contrairement au FCFA (0 décimale) qui
+  aurait été envoyé tel quel.
+- **PayDunya** (`payment-svc`) facture en XOF (devise locale UEMOA de ses
+  moyens de paiement mobile Wave/Orange Money) — converti via le taux lu sur
+  `shipping-svc` (`GET /exchange-rates`, source UNIQUE des taux de change,
+  remplace les 3 constantes dupliquées du PHP historique).
+
+**Valeurs à confirmer avec le fondateur avant bascule prod** (documentées en
+commentaire à chaque endroit concerné dans le code) :
+- `shipping-svc` : le tarif « par article supplémentaire » en livraison zone
+  et le tarif « local strict » (même pays/voisin immédiat) sont des
+  estimations — `lib/shipping-utils.ts` du frontend ne les distingue pas
+  explicitement.
+- `shipping-svc` : les 5 tranches `domestic_tiers` (livraison Sénégal par
+  distance, Haversine) sont un système entièrement nouveau, sans équivalent
+  frontend à resynchroniser — valeurs de départ arbitraires.
+
+## 4. Compatibilité avec le frontend existant
+
+Le frontend (`frontend/`) appelle aujourd'hui WooCommerce/Dokan directement
+(`app/api/*/route.ts`). Trois domaines ont une couche de compatibilité déjà
+posée côté backend, pour que le jour où ces routes pointeront vers ce VPS au
+lieu de WooCommerce, le frontend n'ait pas (ou peu) à changer :
+
+- **Catalogue & boutiques** — `catalog-svc` (`/products`, `/products/{id}`,
+  `/categories`) et `vendor-svc` (`/stores`) renvoient la forme de champs
+  WooCommerce/Dokan (`price` en string décimale, `images[].src`,
+  `regular_price`/`sale_price`, `store_name`/`gravatar`/`address.country`,
+  etc.) **en plus** de leur forme native — les deux coexistent dans la même
+  réponse JSON.
+- **Panier / commande** — `order-svc` continue d'éclater une commande en
+  sous-commandes par vendeur en interne (modèle marketplace multi-vendeur),
+  mais expose `GET /orders/parent/{parent_id}` qui recompose une vue
+  « commande unique » (`id`, `number`, `status` agrégé, `total`, `line_items[]`)
+  pour l'affichage post-checkout / historique client, sans changer le modèle
+  de données interne.
+- **Paiement carte** — `payment-svc` utilise un **PaymentIntent Stripe**
+  (pas une Checkout Session hébergée) : `POST /payments/init` est
+  **synchrone** et renvoie `client_secret` immédiatement, pour que le
+  frontend affiche son propre formulaire de carte (Stripe Elements) sans
+  jamais rediriger l'acheteur hors du site. PayDunya reste en redirection
+  (`redirect_url`), cohérent avec son fonctionnement Wave/Orange Money.
+- **Connexion Google** — `POST /auth/firebase` est ouvert à n'importe quel
+  acheteur (crée un compte `customers` à la volée si l'email Firebase est
+  inconnu, même mécanisme que l'OTP). L'ancien comportement réservé aux
+  admins existe toujours, sur une route distincte :
+  `POST /auth/admin/firebase`.
+
+**Ce qui reste à faire côté frontend** (hors périmètre de ce dépôt Go) pour
+que ces 4 corrections servent réellement : pointer `app/api/orders/route.ts`
+vers `GET /orders/parent/{id}` pour l'affichage post-checkout, remplacer le
+flux de paiement carte actuel par `client_secret` + `Stripe.js`
+`confirmCardPayment()`, et vérifier que le bouton de connexion Google appelle
+bien `/auth/firebase` (pas une route admin).
+
+## 5. Console d'administration
 
 `admin-svc` sert une interface complète sur `GET /admin` — embarquée dans le
 binaire Go (`embed`), en vanilla JS, **zéro build frontend**. Elle interroge
@@ -59,24 +135,42 @@ Produits (FR/EN) · Boutiques · Clients · Paiements (Stripe/PayDunya) · Livra
 
 **Authentification** (auth-svc) :
 - **Acheteur** — `POST /auth/otp/send` → `/auth/otp/verify` (code 6 chiffres en
-  Redis, TTL borné, jamais renvoyé dans la réponse)
+  Redis, TTL borné, jamais renvoyé dans la réponse) ou `POST /auth/firebase`
+  (connexion Google, voir section 4)
 - **Admin** — `POST /auth/admin/login` (email + mot de passe, sel + 10 000 itérations
   SHA-256, seedé depuis `ADMIN_EMAIL`/`ADMIN_PASSWORD`)
-- **Admin via Firebase** — `POST /auth/firebase` (jeton Google vérifié auprès de
-  `oauth2.googleapis.com`, puis email croisé avec la table `admins`)
+- **Admin via Firebase** — `POST /auth/admin/firebase` (jeton Google vérifié
+  auprès de `oauth2.googleapis.com`, puis email croisé avec la table `admins`)
 
-**Paiements réels** : Stripe Checkout Session (`api.stripe.com`) et PayDunya
-invoices (`app.paydunya.com`, Wave / Orange Money en XOF), signatures de webhook
+**Paiements réels** : Stripe PaymentIntent + Elements embarqué (`api.stripe.com`,
+voir section 4) et PayDunya invoices (`app.paydunya.com`, Wave / Orange Money,
+facturées en XOF converti depuis le stockage USD), signatures de webhook
 vérifiées, confirmation propagée via Kafka (`payment.confirmed` → commande `paid`).
 
-## 4. Déploiement sur VPS (Kubernetes — k3s)
+**Tracking & livraison** : `fulfillment-svc` tient une table `shipments` +
+`tracking_events` unifiée (remplace 3 schémas historiques parallèles) et
+intègre DHL Express (devis, création d'expédition, suivi — périmètre réduit
+face aux 5500 lignes du PHP legacy, voir commentaires du fichier).
+`shipping-svc` gère la livraison internationale par zone ET la livraison
+nationale Sénégal par distance (Haversine), volontairement séparées.
+
+**Fidélité & représentants** : `loyalty-svc` tient un ledger complet
+`coin_transactions` (jamais tronqué, contrairement au blob meta historique)
+et le dashboard des représentants pays (messagerie client, acquittement de
+commande).
+
+**Notifications push** : `notification-svc` envoie réellement via Firebase
+Cloud Messaging (Admin SDK, JWT RS256 signé en interne) — pas de relais vers
+le frontend comme sous WordPress.
+
+## 6. Déploiement sur VPS (Kubernetes — k3s)
 
 Choix acté : **k3s** (Kubernetes en un binaire, sans plan de contrôle lourd).
 
 ```bash
 # Sur le VPS, UNE seule commande fait tout :
 # installe k3s → namespace + Secret depuis .env → manifests →
-# build des 8 images → import containerd → rollouts → health-check
+# build des 10 images → import containerd → rollouts → health-check
 git clone https://github.com/abmcompanysn-dot/back.git /opt/miad-backend
 bash /opt/miad-backend/scripts/vps-bootstrap.sh
 
@@ -89,14 +183,19 @@ Scalabilité : `kubectl -n miad scale deploy/catalog-svc --replicas=3`
 (services stateless). `docker-compose.yml` reste disponible en repli local avec
 exactement le même `.env` — rien n'est verrouillé.
 
-**Variables à définir dans `.env` avant le premier boot** :
-`POSTGRES_PASSWORD`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
-`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYDUNYA_API_KEY_*`,
-`FIREBASE_WEB_CLIENT_ID` (optionnel).
+**Variables à définir dans `.env` avant le premier boot** — voir `.env.example`
+pour la liste complète et à jour. En résumé : `POSTGRES_PASSWORD`, `JWT_SECRET`,
+`ADMIN_EMAIL`, `ADMIN_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`PAYDUNYA_API_KEY_*`/`PAYDUNYA_MASTER_KEY`, `DHL_API_*` (optionnel, fulfillment-svc),
+`FIREBASE_SERVICE_ACCOUNT_JSON` (optionnel, push), `FIREBASE_WEB_CLIENT_ID` (optionnel, login Google).
 
-Le frontend Next.js pointe ensuite `app/api/*` vers ce VPS (Caddy, port 80/443).
+**Ce dépôt déploie uniquement le backend.** Le frontend (`frontend/`) reste
+sur Cloudflare Pages — `vps-bootstrap.sh` ne le touche pas. Une fois le VPS
+vérifié et les endpoints de compatibilité (section 4) branchés côté
+frontend, ses routes `app/api/*` pointeront vers ce VPS (Caddy, port 80/443)
+au lieu de WooCommerce.
 
-## 5. Générer les stubs gRPC / grpc-gateway
+## 7. Générer les stubs gRPC / grpc-gateway
 
 Les contrats `.proto` sont écrits ; les stubs Go se génèrent ensuite :
 
@@ -108,17 +207,18 @@ Chaque service remplacera alors ses handlers `net/http` par les serveurs génér
 **même contrat JSON**, zéro changement côté frontend (annotations
 `google.api.http` déjà posées sur chaque RPC).
 
-## 6. Migration WooCommerce (plan en 6 phases)
+## 8. Migration WooCommerce (plan en 6 phases)
 
 1. Socle infra + catalog-svc en lecture seule (ce dépôt démarre ici)
 2. `make import WC_URL=… WC_KEY=… WC_SECRET=…` — lecture `wc/v3/*` + `dokan/v1/stores`,
-   réutilise la logique de `lib/woo-server.ts`
+   réutilise la logique de `lib/woo-server.ts`. Copie directe des prix USD,
+   aucune conversion (voir section 3).
 3. Bascule lecture (`/products`, `/categories`, `/stores`) — écriture encore sur WP
 4. Services d'écriture : order / payment / auth — WP gardé en lecture seule
 5. shipping-svc + notification-svc (consommateurs, risque minimal)
 6. Extinction WordPress après 2 semaines sans incident + archivage MySQL
 
-## 7. Mettre à jour le dépôt (git flow)
+## 9. Mettre à jour le dépôt (git flow)
 
 Le code vit dans le sandbox ; pour que **`origin/main` contienne toutes les
 modifications**, pousse depuis la machine qui a le code :
@@ -144,25 +244,43 @@ Vérifier que tout est bien sur la branche :
 git log origin/main --oneline -5     # doit montrer tes derniers commits
 ```
 
-## 8. État du socle — câblé vs signalé
+## 10. État du socle — câblé vs signalé
 
 Câblé : schémas auto-appliqués · CRUD catalogue (trid/lang, variations, pagination
 explicite) · boutiques + délégations inter-services · éclatement de commande par
-boutique + reaper `payment_expired` · consommation Kafka (payment, notification) ·
-OTP + mot de passe admin + Firebase → JWT HS256 + sessions Redis ·
-paiements Stripe/PayDunya avec signatures · zones/tarifs de livraison ·
-console admin complète · health-check agrégé.
+boutique + reaper `payment_expired` · consommation Kafka (payment, notification,
+fulfillment) · OTP + mot de passe admin + Firebase (clients ET admins) → JWT HS256
++ sessions Redis · paiements Stripe (PaymentIntent + Elements) / PayDunya avec
+signatures · zones/tarifs de livraison + national Sénégal (Haversine) · tracking
+DHL unifié · coins/fidélité (ledger complet) · représentants pays · push FCM
+direct · console admin complète · health-check agrégé · couche de compatibilité
+JSON avec le frontend existant (section 4).
 
 Signalé explicitement dans le code (jamais de 404/500 muets) :
 - `GET /products/{id}/similar` → 501 tant que Vectorize n'est pas rebranché
-- Envoi SMS/email réel : fournisseur à configurer (`SMS_PROVIDER_URL`), sinon journalisé
-- Tarifs de livraison seedés avec la STRUCTURE de `shipping-utils.ts` —
-  **synchroniser les montants exacts avant la bascule**
+- Envoi SMS réel : fournisseur à configurer (`SMS_PROVIDER_URL`), sinon journalisé
+- Push FCM réel : nécessite `FIREBASE_SERVICE_ACCOUNT_JSON`, sinon journalisé sans envoi
+- DHL réel : nécessite `DHL_API_USERNAME`/`DHL_API_PASSWORD`, sinon 503 explicite
+- Tarifs de livraison seedés en USD, resynchronisés avec les VRAIES valeurs de
+  `frontend/lib/shipping-utils.ts` — les montants « par article » et
+  « local strict » restent des estimations à confirmer (voir section 3)
 
-## 9. Cohérence éventuelle — gérée, pas tue
+## 11. Cohérence éventuelle — gérée, pas tue
 
 - **Commande créée sans `payment.confirmed`** : statut `pending_payment` + reaper
   qui passe en `payment_expired` après `PAYMENT_TIMEOUT_MINUTES` (défaut 30).
-- **notification-svc en panne** : offsets Kafka, rattrapage au redémarrage.
+- **notification-svc / fulfillment-svc en panne** : offsets Kafka, rattrapage au redémarrage.
 - **order-svc injoignable à la confirmation** : `payment.confirmed` reste sur Kafka ;
   la mutation de statut est retentée — rien n'est perdu silencieusement.
+- **shipping-svc injoignable au checkout** : `shipping_usd` reste à 0 plutôt que
+  de faire échouer toute la commande — les frais restent ajustables après coup,
+  contrairement à un prix produit qui ne doit jamais dériver.
+
+## 12. Ce qui n'a PAS encore été testé en exécution réelle
+
+Important à savoir avant tout déploiement en confiance : ce dépôt compile
+(`go build ./...`, `go vet ./...`, hors ligne) et a été relu ligne par ligne,
+mais **aucun des 10 services n'a encore tourné avec une vraie base
+Postgres/Redis/Kafka** — ni ici, ni ailleurs. Le premier test d'exécution
+réelle (`docker compose up` ou `vps-bootstrap.sh`) reste à faire avant toute
+bascule de trafic réel depuis miadmarket.com.
