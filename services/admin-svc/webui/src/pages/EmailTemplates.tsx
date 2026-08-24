@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ApiError, api } from '../lib/api'
+import { EmptyState } from '../components/EmptyState'
 
 interface EmailTemplate {
   name: string
@@ -67,13 +68,31 @@ export function EmailTemplates() {
 
   if (loading) return <p>Chargement des modèles…</p>
 
+  if (templates.length === 0) {
+    return (
+      <div>
+        <div className="page-header">
+          <div>
+            <h2>Modèles de messages</h2>
+            <p className="subtitle">Emails transactionnels envoyés automatiquement</p>
+          </div>
+        </div>
+        <EmptyState icon="✉️" title="Aucun modèle disponible" description="Les modèles par défaut n'ont pas encore été initialisés côté serveur." />
+      </div>
+    )
+  }
+
   return (
+    <div>
+      <div className="page-header">
+        <div>
+          <h2>Modèles de messages</h2>
+          <p className="subtitle">Emails transactionnels envoyés automatiquement (commande, paiement, bienvenue…)</p>
+        </div>
+      </div>
+
     <div style={{ display: 'flex', gap: 20 }}>
       <div style={{ width: 220, flexShrink: 0 }}>
-        <h3>Modèles de messages</h3>
-        <p style={{ fontSize: 12, color: '#666' }}>
-          Emails transactionnels envoyés automatiquement (commande, paiement, bienvenue…).
-        </p>
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
           {templates.map((t) => (
             <li key={t.name}>
@@ -146,6 +165,7 @@ export function EmailTemplates() {
           )}
         </div>
       )}
+    </div>
     </div>
   )
 }

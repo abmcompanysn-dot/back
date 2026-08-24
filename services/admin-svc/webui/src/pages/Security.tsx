@@ -54,8 +54,15 @@ export function Security() {
   }
 
   return (
+    <div>
+      <div className="page-header">
+        <div>
+          <h2>Sécurité</h2>
+          <p className="subtitle">Double authentification (2FA) du compte admin</p>
+        </div>
+      </div>
+
     <div className="qr-box">
-      <h3>Double authentification (2FA)</h3>
       <p>Protège la connexion admin avec un code à usage unique, en plus du mot de passe.</p>
 
       <p>
@@ -103,6 +110,7 @@ export function Security() {
       {message && (
         <p style={{ fontSize: 13, color: message.ok ? '#0a7a2f' : '#c02020' }}>{message.text}</p>
       )}
+    </div>
     </div>
   )
 }

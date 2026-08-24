@@ -40,19 +40,73 @@ function AppRoutes() {
         }
       >
         <Route index element={<Overview />} />
-        <Route path="orders" element={<ListView path="/admin/api/orders" columns={ORDER_COLUMNS} />} />
+        <Route
+          path="orders"
+          element={
+            <ListView
+              path="/admin/api/orders"
+              columns={ORDER_COLUMNS}
+              title="Commandes"
+              subtitle="Suivi des commandes multi-boutiques"
+              emptyIcon="🧾"
+              emptyTitle="Aucune commande enregistrée pour le moment"
+              emptyDescription="Les nouvelles commandes de vos clients apparaîtront ici automatiquement."
+            />
+          }
+        />
         <Route
           path="products"
-          element={<ListView path="/admin/api/products" columns={PRODUCT_COLUMNS} />}
+          element={
+            <ListView
+              path="/admin/api/products"
+              columns={PRODUCT_COLUMNS}
+              title="Catalogue"
+              subtitle="Produits publiés par les vendeurs"
+              emptyIcon="🛍️"
+              emptyTitle="Aucun produit dans le catalogue"
+              emptyDescription="Les produits créés par les vendeurs apparaîtront ici."
+            />
+          }
         />
-        <Route path="vendors" element={<ListView path="/admin/api/vendors" columns={VENDOR_COLUMNS} />} />
+        <Route
+          path="vendors"
+          element={
+            <ListView
+              path="/admin/api/vendors"
+              columns={VENDOR_COLUMNS}
+              title="Vendeurs"
+              subtitle="Boutiques de la marketplace"
+              emptyIcon="🏬"
+              emptyTitle="Aucune boutique enregistrée"
+              emptyDescription="Les nouvelles boutiques apparaîtront ici après inscription."
+            />
+          }
+        />
         <Route
           path="customers"
-          element={<ListView path="/admin/api/customers" columns={CUSTOMER_COLUMNS} />}
+          element={
+            <ListView
+              path="/admin/api/customers"
+              columns={CUSTOMER_COLUMNS}
+              title="Clients"
+              subtitle="Comptes acheteurs"
+              emptyIcon="👥"
+              emptyTitle="Aucun client inscrit pour le moment"
+            />
+          }
         />
         <Route
           path="payments"
-          element={<ListView path="/admin/api/payments" columns={PAYMENT_COLUMNS} />}
+          element={
+            <ListView
+              path="/admin/api/payments"
+              columns={PAYMENT_COLUMNS}
+              title="Finances"
+              subtitle="Transactions et paiements"
+              emptyIcon="💳"
+              emptyTitle="Aucune transaction pour le moment"
+            />
+          }
         />
         <Route path="shipping" element={<Shipping />} />
         <Route path="marketing" element={<Marketing />} />

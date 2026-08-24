@@ -1,4 +1,6 @@
 import { useApiData } from '../lib/useApiData'
+import { EmptyState } from '../components/EmptyState'
+import { StatusBadge } from '../components/StatusBadge'
 
 interface SystemData {
   status?: string
@@ -7,17 +9,27 @@ interface SystemData {
 
 export function System() {
   const { data, error, loading } = useApiData<SystemData>('/admin/api/system')
-  if (loading) return <p>Chargement…</p>
-  if (error) return <p className="error-text">Erreur : {error}</p>
-  if (!data) return null
 
   return (
-    <>
-      <p>
-        Statut global :{' '}
-        <b className={data.status === 'ok' ? 'status-ok' : 'status-down'}>{data.status}</b>
-      </p>
-      <pre>{JSON.stringify(data.services, null, 2)}</pre>
-    </>
+    <div>
+      <div className="page-header">
+        <div>
+          <h2>Système</h2>
+          <p className="subtitle">Diagnostic des 11 microservices du backend</p>
+        </div>
+      </div>
+
+      {loading && <p>Chargement…</p>}
+      {error && <EmptyState icon="⚠️" title="Diagnostic indisponible" description={error} />}
+
+      {!loading && !error && data && (
+        <>
+          <p>
+            Statut global : <StatusBadge status={data.status} />
+          </p>
+          <pre>{JSON.stringify(data.services, null, 2)}</pre>
+        </>
+      )}
+    </div>
   )
 }

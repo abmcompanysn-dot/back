@@ -1,40 +1,81 @@
 import { useApiData } from '../lib/useApiData'
 import { DataTable } from '../components/DataTable'
+import { EmptyState } from '../components/EmptyState'
 
 interface ListResponse {
   items?: Array<Record<string, unknown>>
 }
 
+interface Column {
+  key: string
+  label: string
+  badge?: boolean
+}
+
 interface ListViewProps {
   path: string
-  columns: Array<{ key: string; label: string }>
+  columns: Column[]
+  title?: string
+  subtitle?: string
+  emptyIcon?: string
+  emptyTitle?: string
+  emptyDescription?: string
 }
 
-export function ListView({ path, columns }: ListViewProps) {
+export function ListView({ path, columns, title, subtitle, emptyIcon, emptyTitle, emptyDescription }: ListViewProps) {
   const { data, error, loading } = useApiData<ListResponse>(path)
-  if (loading) return <p>Chargement…</p>
-  if (error) return <p className="error-text">Erreur : {error}</p>
-  return <DataTable items={data?.items} columns={columns} />
+
+  return (
+    <div>
+      {title && (
+        <div className="page-header">
+          <div>
+            <h2>{title}</h2>
+            {subtitle && <p className="subtitle">{subtitle}</p>}
+          </div>
+        </div>
+      )}
+
+      {loading && <p>Chargement…</p>}
+      {error && (
+        <EmptyState
+          icon="⚠️"
+          title="Impossible de charger les données"
+          description={error}
+        />
+      )}
+      {!loading && !error && (
+        <DataTable
+          items={data?.items}
+          columns={columns}
+          emptyIcon={emptyIcon}
+          emptyTitle={emptyTitle}
+          emptyDescription={emptyDescription}
+        />
+      )}
+    </div>
+  )
 }
 
-export const ORDER_COLUMNS = [
+export const ORDER_COLUMNS: Column[] = [
   { key: 'id', label: 'id' },
   { key: 'reference', label: 'reference' },
   { key: 'vendor_id', label: 'vendor_id' },
-  { key: 'status', label: 'status' },
+  { key: 'status', label: 'status', badge: true },
   { key: 'total_usd', label: 'total_usd' },
   { key: 'created_at', label: 'created_at' },
 ]
 
-export const PRODUCT_COLUMNS = [
+export const PRODUCT_COLUMNS: Column[] = [
   { key: 'id', label: 'id' },
   { key: 'name', label: 'name' },
   { key: 'vendor_id', label: 'vendor_id' },
   { key: 'price', label: 'price' },
+  { key: 'status', label: 'status', badge: true },
   { key: 'lang', label: 'lang' },
 ]
 
-export const VENDOR_COLUMNS = [
+export const VENDOR_COLUMNS: Column[] = [
   { key: 'id', label: 'id' },
   { key: 'name', label: 'name' },
   { key: 'country', label: 'country' },
@@ -43,7 +84,7 @@ export const VENDOR_COLUMNS = [
   { key: 'product_count', label: 'product_count' },
 ]
 
-export const CUSTOMER_COLUMNS = [
+export const CUSTOMER_COLUMNS: Column[] = [
   { key: 'id', label: 'id' },
   { key: 'email', label: 'email' },
   { key: 'phone', label: 'phone' },
@@ -51,11 +92,11 @@ export const CUSTOMER_COLUMNS = [
   { key: 'created_at', label: 'created_at' },
 ]
 
-export const PAYMENT_COLUMNS = [
+export const PAYMENT_COLUMNS: Column[] = [
   { key: 'id', label: 'id' },
   { key: 'order_id', label: 'order_id' },
   { key: 'provider', label: 'provider' },
-  { key: 'status', label: 'status' },
+  { key: 'status', label: 'status', badge: true },
   { key: 'amount_usd', label: 'amount_usd' },
   { key: 'created_at', label: 'created_at' },
 ]
