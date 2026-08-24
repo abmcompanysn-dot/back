@@ -20,11 +20,31 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/miadmarket/miad-backend/internal/kit"
 )
+
+// admin_action_log est la seule donnée qu'admin-svc possède réellement
+// (tout le reste est agrégé depuis les autres services par HTTP) — d'où
+// une base dédiée juste pour ça, contrairement au reste du fichier qui ne
+// fait que relayer.
+const schema = `
+CREATE TABLE IF NOT EXISTS admin_action_log (
+  id BIGSERIAL PRIMARY KEY,
+  actor_id BIGINT, actor_email TEXT, actor_role TEXT,
+  action TEXT NOT NULL, endpoint TEXT NOT NULL,
+  status TEXT NOT NULL, wp_status INT,
+  ip TEXT DEFAULT '', country TEXT DEFAULT '', user_agent TEXT DEFAULT '',
+  metadata TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_log_created ON admin_action_log (created_at DESC);
+`
 
 //go:embed webui/dist
 var webuiFS embed.FS
@@ -35,6 +55,7 @@ var webuiFS embed.FS
 var webuiStatic, _ = fs.Sub(webuiFS, "webui/dist")
 
 type server struct {
+	db              *pgxpool.Pool
 	jwtSec          []byte
 	catalogURL      string
 	vendorURL       string
@@ -50,9 +71,21 @@ type server struct {
 }
 
 func main() {
+	ctx := context.Background()
 	log := kit.Logger("admin-svc")
 
+	db, err := kit.NewPG(ctx, log, kit.Env("DATABASE_URL_ADMIN", "postgres://miad:miad@postgres:5432/miad_admin?sslmode=disable"))
+	if err != nil {
+		log.Error("démarrage impossible sans Postgres", "err", err)
+		return
+	}
+	if err := kit.Migrate(ctx, db, schema); err != nil {
+		log.Error("migration du schéma impossible", "err", err)
+		return
+	}
+
 	s := &server{
+		db:              db,
 		jwtSec:          []byte(kit.Env("JWT_SECRET", "change-me")),
 		catalogURL:      kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
 		vendorURL:       kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
@@ -79,6 +112,7 @@ func main() {
 	s.media = media
 
 	health := kit.NewHealth()
+	health.Add("postgres", db.Ping)
 	for name, url := range s.allServiceURLs() {
 		u := url
 		health.Add(name, func(ctx context.Context) error { return ping(ctx, u+"/healthz") })
@@ -101,12 +135,25 @@ func main() {
 		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
 		mux.HandleFunc("POST /admin/api/media/upload", s.requireAdmin(s.uploadMedia))
+		// Hors /admin/api/ : accessible à un vendeur authentifié (pas
+		// seulement un admin) pour uploader une image produit — même
+		// handler, même MinIO, contrôle d'accès différent.
+		mux.HandleFunc("POST /media/upload", s.requireAdminOrVendor(s.uploadMedia))
 		mux.HandleFunc("GET /admin/api/email-templates", s.requireAdmin(s.proxy(func() string { return s.emailURL + "/email-templates" })))
 		mux.HandleFunc("GET /admin/api/email-templates/{name}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forward(w, r, s.emailURL+"/email-templates/"+r.PathValue("name"))
 		}))
 		mux.HandleFunc("PUT /admin/api/email-templates/{name}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPut, s.emailURL+"/email-templates/"+r.PathValue("name"))
+		}))
+		mux.HandleFunc("POST /admin/api/action-log", s.requireAdmin(s.logAction))
+		mux.HandleFunc("GET /admin/api/action-log", s.requireAdmin(s.listActionLog))
+		mux.HandleFunc("GET /admin/api/dhl/rate", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/dhl/rate" })))
+		mux.HandleFunc("POST /admin/api/dhl/create-shipment", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.fulfillmentURL+"/dhl/create-shipment")
+		}))
+		mux.HandleFunc("GET /admin/api/dhl/tracking/{tracking_number}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forward(w, r, s.fulfillmentURL+"/dhl/tracking/"+r.PathValue("tracking_number"))
 		}))
 
 		// SPA React : sert les assets embarqués, retombe sur index.html
@@ -225,6 +272,106 @@ func (s *server) proxyPath(target func(id string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		forward(w, r, target(r.PathValue("id")))
 	}
+}
+
+// logAction — enregistre une action admin (remplace l'ancien
+// wp-json/miad/v1/admin-action-log). Interne : appelé par le frontend
+// après une action admin significative (édition produit, changement de
+// statut commande, etc.) — pas automatique côté Go pour l'instant.
+func (s *server) logAction(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ActorID    int64  `json:"actor_id"`
+		ActorEmail string `json:"actor_email"`
+		ActorRole  string `json:"actor_role"`
+		Action     string `json:"action"`
+		Endpoint   string `json:"endpoint"`
+		Status     string `json:"status"`
+		WPStatus   int    `json:"wp_status"`
+		IP         string `json:"ip"`
+		Country    string `json:"country"`
+		UserAgent  string `json:"user_agent"`
+		Metadata   string `json:"metadata"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Action == "" || body.Endpoint == "" || body.Status == "" {
+		kit.Fail(w, 400, "missing_fields", "action, endpoint et status sont obligatoires")
+		return
+	}
+	_, err := s.db.Exec(r.Context(), `
+		INSERT INTO admin_action_log (actor_id, actor_email, actor_role, action, endpoint, status, wp_status, ip, country, user_agent, metadata)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		body.ActorID, body.ActorEmail, body.ActorRole, body.Action, body.Endpoint,
+		body.Status, body.WPStatus, body.IP, body.Country, body.UserAgent, body.Metadata)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]string{"status": "logged"})
+}
+
+func (s *server) listActionLog(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(kit.EnvOr(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(q.Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	args := []any{}
+	where := "WHERE TRUE"
+	if v := q.Get("status"); v != "" {
+		where += fmt.Sprintf(" AND status = $%d", len(args)+1)
+		args = append(args, v)
+	}
+	if v := q.Get("action"); v != "" {
+		where += fmt.Sprintf(" AND action = $%d", len(args)+1)
+		args = append(args, v)
+	}
+
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM admin_action_log "+where, args...).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	query := `SELECT id, actor_id, actor_email, actor_role, action, endpoint, status, wp_status, ip, country, user_agent, metadata, created_at
+	          FROM admin_action_log ` + where +
+		fmt.Sprintf(" ORDER BY created_at DESC LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), query, args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var actorID *int64
+		var actorEmail, actorRole, action, endpoint, status, ip, country, userAgent, metadata string
+		var wpStatus *int
+		var createdAt time.Time
+		if err := rows.Scan(&id, &actorID, &actorEmail, &actorRole, &action, &endpoint, &status, &wpStatus, &ip, &country, &userAgent, &metadata, &createdAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "actor_id": actorID, "actor_email": actorEmail, "actor_role": actorRole,
+			"action": action, "endpoint": endpoint, "status": status, "wp_status": wpStatus,
+			"ip": ip, "country": country, "user_agent": userAgent, "metadata": metadata,
+			"created_at": createdAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
 }
 
 // uploadMedia reçoit un fichier multipart (champ "file") depuis le
@@ -393,43 +540,70 @@ func ping(ctx context.Context, url string) error {
 
 func (s *server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := s.verifyAdminJWT(r); err != nil {
-			kit.Fail(w, 403, "admin_required", err.Error())
+		claims, err := s.verifyJWT(r)
+		if err != nil || claims["role"] != "admin" {
+			msg := "rôle admin requis"
+			if err != nil {
+				msg = err.Error()
+			}
+			kit.Fail(w, 403, "admin_required", msg)
 			return
 		}
 		next(w, r)
 	}
 }
 
-func (s *server) verifyAdminJWT(r *http.Request) error {
+// requireAdminOrVendor — pour les routes qu'un vendeur authentifié peut
+// aussi utiliser (ex: upload d'image produit), en plus d'un admin. Un
+// vendeur est un customer avec vendor_id non nul dans son JWT (voir A.10
+// du plan de migration côté auth-svc) — pas un rôle séparé.
+func (s *server) requireAdminOrVendor(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, err := s.verifyJWT(r)
+		if err != nil {
+			kit.Fail(w, 403, "auth_required", err.Error())
+			return
+		}
+		isAdmin := claims["role"] == "admin"
+		_, hasVendorID := claims["vendor_id"].(float64)
+		if !isAdmin && !hasVendorID {
+			kit.Fail(w, 403, "admin_or_vendor_required", "rôle admin ou compte vendeur requis")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// verifyJWT vérifie signature + expiration d'un JWT HS256 émis par
+// auth-svc et renvoie ses claims — factorisé pour requireAdmin ET
+// requireAdminOrVendor (même vérification de signature, contrôle de
+// rôle différent selon l'appelant).
+func (s *server) verifyJWT(r *http.Request) (map[string]any, error) {
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(h, prefix) {
-		return fmt.Errorf("Authorization: Bearer <jwt> attendu")
+		return nil, fmt.Errorf("Authorization: Bearer <jwt> attendu")
 	}
 	parts := strings.Split(h[len(prefix):], ".")
 	if len(parts) != 3 {
-		return fmt.Errorf("JWT malformé")
+		return nil, fmt.Errorf("JWT malformé")
 	}
 	mac := hmac.New(sha256.New, s.jwtSec)
 	mac.Write([]byte(parts[0] + "." + parts[1]))
 	wantSig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || !hmac.Equal(mac.Sum(nil), wantSig) {
-		return fmt.Errorf("signature invalide")
+		return nil, fmt.Errorf("signature invalide")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return fmt.Errorf("payload illisible")
+		return nil, fmt.Errorf("payload illisible")
 	}
 	var claims map[string]any
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return fmt.Errorf("payload JSON invalide")
+		return nil, fmt.Errorf("payload JSON invalide")
 	}
 	if exp, ok := claims["exp"].(float64); ok && time.Now().Unix() > int64(exp) {
-		return fmt.Errorf("session expirée")
+		return nil, fmt.Errorf("session expirée")
 	}
-	if claims["role"] != "admin" {
-		return fmt.Errorf("rôle admin requis")
-	}
-	return nil
+	return claims, nil
 }

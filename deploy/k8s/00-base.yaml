@@ -80,6 +80,7 @@ stringData:
   DATABASE_URL_SHIPPING: postgres://miad:CHANGE-MOI@postgres:5432/miad_shipping?sslmode=disable
   DATABASE_URL_AUTH: postgres://miad:CHANGE-MOI@postgres:5432/miad_auth?sslmode=disable
   DATABASE_URL_NOTIFICATION: postgres://miad:CHANGE-MOI@postgres:5432/miad_notification?sslmode=disable
+  DATABASE_URL_ADMIN: postgres://miad:CHANGE-MOI@postgres:5432/miad_admin?sslmode=disable
   JWT_SECRET: CHANGE-MOI-SUR-LE-VPS
   ADMIN_EMAIL: ""
   ADMIN_PASSWORD: ""

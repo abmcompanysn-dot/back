@@ -56,6 +56,9 @@
 	handle /payments/* {
 		reverse_proxy payment-svc:8084
 	}
+	handle /payment-methods {
+		reverse_proxy payment-svc:8084
+	}
 
 	# Livraison — shipping-svc (zone internationale + national Sénégal)
 	handle /shipping-rates* {
@@ -81,6 +84,10 @@
 
 	# Console d'administration (interface + API) — admin-svc
 	handle /admin* {
+		reverse_proxy admin-svc:8088
+	}
+	# Upload média (ouvert admin OU vendeur authentifié) — admin-svc
+	handle /media/* {
 		reverse_proxy admin-svc:8088
 	}
 

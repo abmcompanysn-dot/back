@@ -1,5 +1,5 @@
 # ============================================================
-# Infra dans le cluster : Postgres (7 bases), Redis, Kafka KRaft.
+# Infra dans le cluster : Postgres (8 bases), Redis, Kafka KRaft.
 # Volumes : local-path (fourni par k3s). En prod chargée, passer
 # Postgres/Kafka/Redis en managé et supprimer ce fichier.
 # ============================================================
@@ -12,13 +12,18 @@ data:
   init-db.sh: |
     #!/bin/bash
     set -e
-    for db in miad_catalog miad_vendor miad_order miad_payment miad_shipping miad_auth miad_notification; do
+    for db in miad_catalog miad_vendor miad_order miad_payment miad_shipping miad_auth miad_notification miad_admin; do
       echo "-> creation de la base $db"
       psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
         CREATE DATABASE $db OWNER $POSTGRES_USER;
     EOSQL
     done
-    echo "-> 7 bases prêtes."
+    echo "-> 8 bases prêtes."
+    # ATTENTION : ce script ne s'exécute qu'au TOUT PREMIER démarrage du
+    # volume Postgres (docker-entrypoint-initdb.d) — sur un cluster déjà
+    # initialisé, ajouter une base ici n'a aucun effet rétroactif. Créer
+    # miad_admin manuellement (CREATE DATABASE miad_admin OWNER miad;) sur
+    # un cluster existant lors de l'ajout d'admin-svc (2026-08-24).
 ---
 apiVersion: apps/v1
 kind: StatefulSet

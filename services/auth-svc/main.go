@@ -45,8 +45,14 @@ CREATE TABLE IF NOT EXISTS customers (
   full_name       TEXT DEFAULT '',
   addresses       JSONB NOT NULL DEFAULT '[]',
   preferred_lang  TEXT NOT NULL DEFAULT 'fr',
+  password_hash   TEXT DEFAULT '',  -- vide = compte OTP/Firebase uniquement, pas de mot de passe
+  salt            TEXT DEFAULT '',
+  vendor_id       BIGINT,           -- NULL = acheteur normal ; sinon boutique liée (vendor-svc), inclus tel quel dans le JWT à l'émission
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS salt TEXT DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS vendor_id BIGINT;
 CREATE TABLE IF NOT EXISTS admins (
   id            BIGSERIAL PRIMARY KEY,
   email         TEXT UNIQUE NOT NULL,
@@ -108,6 +114,8 @@ func main() {
 	kit.Run("auth-svc", kit.Env("PORT_AUTH", "8086"), log, health, func(mux *http.ServeMux) {
 		mux.HandleFunc("POST /auth/otp/send", s.sendOTP)
 		mux.HandleFunc("POST /auth/otp/verify", s.verifyOTP)
+		mux.HandleFunc("POST /auth/register", s.registerCustomer)
+		mux.HandleFunc("POST /auth/login", s.loginCustomer)
 		mux.HandleFunc("POST /auth/admin/login", s.adminLogin)
 		mux.HandleFunc("POST /auth/admin/firebase", s.firebaseAdminLogin)
 		mux.HandleFunc("POST /auth/firebase", s.firebaseCustomerLogin)
@@ -145,6 +153,19 @@ func (s *server) seedAdmin(ctx context.Context, log interface {
 		return
 	}
 	log.Info("compte admin initial créé depuis ADMIN_EMAIL — changez-le vite")
+}
+
+// customerVendorID lit le vendor_id lié à un compte client (NULL si simple
+// acheteur) — inclus dans les claims JWT à l'émission (voir A.10 du plan de
+// migration) pour qu'admin-svc/vendor-svc identifient un vendeur sans appel
+// réseau supplémentaire à chaque requête.
+func (s *server) customerVendorID(ctx context.Context, customerID int64) any {
+	var vendorID *int64
+	_ = s.db.QueryRow(ctx, "SELECT vendor_id FROM customers WHERE id = $1", customerID).Scan(&vendorID)
+	if vendorID == nil {
+		return nil
+	}
+	return *vendorID
 }
 
 func hashPassword(salt, pwd string) string {
@@ -290,7 +311,8 @@ func (s *server) firebaseCustomerLogin(w http.ResponseWriter, r *http.Request) {
 
 	jwt, expires := s.signJWT(map[string]any{
 		"sub": id, "iss": "miad-auth", "role": "customer",
-		"provider": "firebase", "exp": time.Now().Add(s.jwtTTL).Unix(),
+		"vendor_id": s.customerVendorID(r.Context(), id),
+		"provider":  "firebase", "exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
 	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
 	kit.JSON(w, 200, map[string]any{
@@ -583,13 +605,105 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	jwt, expires := s.signJWT(map[string]any{
 		"sub": id, "iss": "miad-auth", "role": "customer",
-		"exp": time.Now().Add(s.jwtTTL).Unix(),
+		"vendor_id": s.customerVendorID(r.Context(), id),
+		"exp":       time.Now().Add(s.jwtTTL).Unix(),
 	})
 	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
 	kit.JSON(w, 200, map[string]any{
 		"session":         map[string]string{"jwt": jwt, "expires_at": expires},
 		"is_new_customer": isNew,
 		"customer_id":     id,
+	})
+}
+
+/* ---------- Clients : compte par mot de passe (distinct de OTP/Firebase) ---------- */
+
+// registerCustomer — auto-login après inscription (comportement is_new_customer
+// déjà en place pour OTP/Firebase). Réutilise hashPassword/randomToken déjà
+// présents pour admins — même primitive crypto, pas de duplication.
+func (s *server) registerCustomer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		FullName string `json:"full_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Email == "" || len(body.Password) < 8 {
+		kit.Fail(w, 400, "missing_fields", "email et un mot de passe d'au moins 8 caractères sont obligatoires")
+		return
+	}
+
+	var existing int64
+	if err := s.db.QueryRow(r.Context(), "SELECT id FROM customers WHERE lower(email) = lower($1)", body.Email).Scan(&existing); err == nil {
+		kit.Fail(w, 409, "email_taken", "un compte existe déjà avec cet email")
+		return
+	} else if err != pgx.ErrNoRows {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	salt := randomToken(12)
+	var id int64
+	err := s.db.QueryRow(r.Context(),
+		"INSERT INTO customers (email, full_name, password_hash, salt) VALUES ($1,$2,$3,$4) RETURNING id",
+		body.Email, body.FullName, hashPassword(salt, body.Password), salt,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.Publish(s.kafka, "customer.registered", fmt.Sprint(id), map[string]any{
+		"customer_id": id, "email": body.Email, "provider": "password",
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
+
+	jwt, expires := s.signJWT(map[string]any{
+		"sub": id, "iss": "miad-auth", "role": "customer",
+		"vendor_id": s.customerVendorID(r.Context(), id),
+		"exp":       time.Now().Add(s.jwtTTL).Unix(),
+	})
+	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
+	kit.JSON(w, 201, map[string]any{
+		"session":         map[string]string{"jwt": jwt, "expires_at": expires},
+		"is_new_customer": true,
+		"customer_id":     id,
+	})
+}
+
+func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	var id int64
+	var hash, salt string
+	err := s.db.QueryRow(r.Context(),
+		"SELECT id, password_hash, salt FROM customers WHERE lower(email) = lower($1)", body.Email,
+	).Scan(&id, &hash, &salt)
+	if err == pgx.ErrNoRows || hash == "" || hashPassword(salt, body.Password) != hash {
+		kit.Fail(w, 401, "invalid_credentials", "email ou mot de passe incorrect")
+		return
+	} else if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	jwt, expires := s.signJWT(map[string]any{
+		"sub": id, "iss": "miad-auth", "role": "customer",
+		"vendor_id": s.customerVendorID(r.Context(), id),
+		"exp":       time.Now().Add(s.jwtTTL).Unix(),
+	})
+	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
+	kit.JSON(w, 200, map[string]any{
+		"session":     map[string]string{"jwt": jwt, "expires_at": expires},
+		"customer_id": id,
 	})
 }
 

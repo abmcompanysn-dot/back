@@ -104,9 +104,29 @@ func main() {
 		mux.HandleFunc("POST /payments/init", s.initPayment)
 		mux.HandleFunc("GET /payments", s.listPayments)
 		mux.HandleFunc("GET /payments/order/{order_id}", s.getPayment)
+		mux.HandleFunc("GET /payment-methods", s.listPaymentMethods)
 		mux.HandleFunc("POST /payments/webhook/stripe", s.stripeWebhook)
 		mux.HandleFunc("POST /payments/webhook/paydunya", s.paydunyaCallback)
 	})
+}
+
+// listPaymentMethods — liste statique dérivée de la présence des clés
+// d'env déjà lues au démarrage (voir health-checks stripe_key/paydunya_keys
+// ci-dessus) : pas de table, pas de persistance, juste un reflet de ce qui
+// est réellement configuré. Format proche WooCommerce (wc/v3/payment_gateways)
+// pour compatibilité frontend (gateway id/title/enabled).
+func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
+	gateways := []map[string]any{
+		{
+			"id": "stripe", "title": "Carte bancaire", "method_title": "Stripe",
+			"enabled": kit.Env("STRIPE_SECRET_KEY", "") != "",
+		},
+		{
+			"id": "paydunya", "title": "Mobile Money / PayDunya", "method_title": "PayDunya",
+			"enabled": kit.Env("PAYDUNYA_API_KEY_PRIVATE", "") != "",
+		},
+	}
+	kit.JSON(w, 200, map[string]any{"gateways": gateways})
 }
 
 /* ---------- Consommation order.created ---------- */

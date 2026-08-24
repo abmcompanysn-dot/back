@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS products (
   slug        TEXT,
   description TEXT DEFAULT '',
   price_usd   DOUBLE PRECISION NOT NULL DEFAULT 0, -- USD réel, comme le catalogue WooCommerce source (voir CLAUDE.md frontend : _price n'est PAS en FCFA)
+  sale_price_usd DOUBLE PRECISION, -- NULL = pas en promo ; USD réel comme price_usd
   currency    TEXT NOT NULL DEFAULT 'USD',
   status      TEXT NOT NULL DEFAULT 'active',
   images      JSONB NOT NULL DEFAULT '[]',
@@ -46,7 +48,9 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX IF NOT EXISTS idx_products_trid    ON products (trid);
 CREATE INDEX IF NOT EXISTS idx_products_lang    ON products (lang);
 CREATE INDEX IF NOT EXISTS idx_products_vendor  ON products (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_products_slug    ON products (slug);
 CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON products (name); -- + extension pg_trgm en prod
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_usd DOUBLE PRECISION;
 
 CREATE TABLE IF NOT EXISTS product_variations (
   id         BIGSERIAL PRIMARY KEY,
@@ -83,8 +87,9 @@ CREATE TABLE IF NOT EXISTS reviews (
 `
 
 type server struct {
-	db    *pgxpool.Pool
-	kafka sarama.SyncProducer
+	db       *pgxpool.Pool
+	kafka    sarama.SyncProducer
+	orderURL string
 }
 
 func main() {
@@ -101,7 +106,11 @@ func main() {
 		return
 	}
 
-	s := &server{db: db, kafka: kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092"))}
+	s := &server{
+		db:       db,
+		kafka:    kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		orderURL: kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+	}
 
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
@@ -116,6 +125,9 @@ func main() {
 		mux.HandleFunc("GET /products", s.listProducts)
 		mux.HandleFunc("GET /products/{id}", s.getProduct)
 		mux.HandleFunc("GET /products/{id}/similar", s.similar)
+		mux.HandleFunc("GET /products/variations", s.listVariationsBatch)
+		mux.HandleFunc("GET /products/{id}/reviews", s.listReviews)
+		mux.HandleFunc("POST /products/{id}/reviews", s.createReview)
 		mux.HandleFunc("GET /categories", s.listCategories)
 		mux.HandleFunc("GET /search/suggestions", s.suggestions)
 		mux.HandleFunc("POST /vendor/products", s.createProduct)
@@ -152,6 +164,35 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		where += fmt.Sprintf(" AND name ILIKE $%d", len(args)+1)
 		args = append(args, "%"+v+"%")
 	}
+	if v := q.Get("slug"); v != "" {
+		where += fmt.Sprintf(" AND slug = $%d", len(args)+1)
+		args = append(args, v)
+	}
+	if v := q.Get("on_sale"); v == "true" {
+		where += " AND sale_price_usd IS NOT NULL AND sale_price_usd < price_usd"
+	}
+
+	// include=id1,id2,... : résolution batch par IDs (recherche sémantique,
+	// panier, produits d'un vendeur) — remplace la pagination LIMIT/OFFSET
+	// normale par un simple filtre id = ANY(...), plafonné à 200 IDs pour
+	// éviter un abus (une seule requête, pas de round-trips N+1 côté appelant).
+	var includeIDs []int64
+	if v := q.Get("include"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if id := atoi(part); id > 0 {
+				includeIDs = append(includeIDs, id)
+			}
+		}
+		if len(includeIDs) > 200 {
+			includeIDs = includeIDs[:200]
+		}
+		where += fmt.Sprintf(" AND id = ANY($%d)", len(args)+1)
+		args = append(args, includeIDs)
+	}
 
 	var total int64
 	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM products "+where, args...).Scan(&total); err != nil {
@@ -159,9 +200,11 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, status, is_variable, images
-	          FROM products ` + where +
-		fmt.Sprintf(" ORDER BY id LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
+	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, sale_price_usd, status, is_variable, images
+	          FROM products ` + where + " ORDER BY id"
+	if includeIDs == nil {
+		query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
+	}
 	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -173,14 +216,15 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, vendorID, categoryID int64
 		var price float64
+		var salePrice *float64
 		var trid, l, name, slug, status string
 		var isVar bool
 		var images []byte
-		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &status, &isVar, &images); err != nil {
+		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &salePrice, &status, &isVar, &images); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
-		items = append(items, productToWooShape(id, trid, l, vendorID, categoryID, name, slug, "", price, status, isVar, images, nil))
+		items = append(items, productToWooShape(id, trid, l, vendorID, categoryID, name, slug, "", price, salePrice, status, isVar, images, nil))
 	}
 
 	kit.JSON(w, 200, map[string]any{
@@ -201,7 +245,7 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 // d'objets. Objectif : que app/api/products/route.ts puisse lire cette
 // réponse sans réécriture, une fois pointé sur catalog-svc au lieu de
 // wc/v3/products. Le prix est en USD réel (voir schema ci-dessus).
-func productToWooShape(id int64, trid, lang string, vendorID, categoryID int64, name, slug, description string, priceUSD float64, status string, isVariable bool, imagesJSON []byte, variations []map[string]any) map[string]any {
+func productToWooShape(id int64, trid, lang string, vendorID, categoryID int64, name, slug, description string, priceUSD float64, salePriceUSD *float64, status string, isVariable bool, imagesJSON []byte, variations []map[string]any) map[string]any {
 	priceStr := strconv.FormatFloat(priceUSD, 'f', 2, 64)
 
 	var rawImages []string
@@ -215,12 +259,22 @@ func productToWooShape(id int64, trid, lang string, vendorID, categoryID int64, 
 		mainImage = rawImages[0]
 	}
 
+	// on_sale : vrai seulement si un sale_price_usd est renseigné ET
+	// strictement inférieur au prix normal — cohérent avec le filtre
+	// ?on_sale=true de listProducts (même condition des deux côtés).
+	salePriceStr := ""
+	onSale := false
+	if salePriceUSD != nil && *salePriceUSD < priceUSD {
+		salePriceStr = strconv.FormatFloat(*salePriceUSD, 'f', 2, 64)
+		onSale = true
+	}
+
 	out := map[string]any{
 		"id": id, "trid": trid, "lang": lang,
 		"vendor_id": vendorID, "category_id": categoryID,
 		"name": name, "slug": slug, "description": description,
-		"price": priceStr, "regular_price": priceStr, "sale_price": "",
-		"price_usd": priceUSD, "currency": "USD",
+		"price": priceStr, "regular_price": priceStr, "sale_price": salePriceStr,
+		"price_usd": priceUSD, "currency": "USD", "on_sale": onSale,
 		"image": mainImage, "images": images,
 		"status": status, "type": variableOrSimple(isVariable), "is_variable": isVariable,
 	}
@@ -242,15 +296,16 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	lang := defLang(r.URL.Query().Get("lang"))
 	row := s.db.QueryRow(r.Context(), `
 		SELECT p.id, p.trid, p.lang, p.vendor_id, p.category_id, p.name, p.slug,
-		       p.description, p.price_usd, p.status, p.images, p.is_variable
+		       p.description, p.price_usd, p.sale_price_usd, p.status, p.images, p.is_variable
 		FROM products p WHERE p.id = $1 AND p.lang = $2`, id, lang)
 
 	var pID, vendorID, catID int64
 	var price float64
+	var salePrice *float64
 	var trid, l, name, slug, desc, status string
 	var images []byte
 	var isVar bool
-	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &name, &slug, &desc, &price, &status, &images, &isVar); err != nil {
+	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &name, &slug, &desc, &price, &salePrice, &status, &images, &isVar); err != nil {
 		if err == pgx.ErrNoRows {
 			kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable en lang=%s — erreur explicite, pas de page vide silencieuse", id, lang))
 			return
@@ -289,7 +344,7 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	out := productToWooShape(pID, trid, l, vendorID, catID, name, slug, desc, price, status, isVar, images, variations)
+	out := productToWooShape(pID, trid, l, vendorID, catID, name, slug, desc, price, salePrice, status, isVar, images, variations)
 	out["linked"] = map[string]any{"id": linkedID, "lang": linkedLang}
 	// Compat WPML : le frontend lit p.translations pour le switch FR/EN.
 	if linkedID != 0 {
@@ -303,6 +358,194 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 func (s *server) similar(w http.ResponseWriter, r *http.Request) {
 	kit.Fail(w, 501, "not_implemented_yet",
 		"similar-products via Cloudflare Vectorize : conserver l'appel existant du frontend jusqu'au branchement de catalog-svc sur l'index Vectorize (phase 3)")
+}
+
+// listVariationsBatch — variations de plusieurs produits en une requête,
+// pour éviter au frontend de faire N appels GET /products/{id} juste pour
+// récupérer les variations d'une page de listing entière.
+// GET /products/variations?ids=1,2,3 -> {"variations": {"1": [...], "2": [...]}}
+func (s *server) listVariationsBatch(w http.ResponseWriter, r *http.Request) {
+	var ids []int64
+	for _, part := range strings.Split(r.URL.Query().Get("ids"), ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if id := atoi(part); id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		kit.JSON(w, 200, map[string]any{"variations": map[string]any{}})
+		return
+	}
+	if len(ids) > 200 {
+		ids = ids[:200]
+	}
+
+	rows, err := s.db.Query(r.Context(),
+		`SELECT id, product_id, sku, attributes, price_usd, stock, image_url
+		 FROM product_variations WHERE product_id = ANY($1) ORDER BY product_id, id`, ids)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	out := map[string][]map[string]any{}
+	for rows.Next() {
+		var vid, productID int64
+		var vprice float64
+		var sku, img string
+		var attrs []byte
+		var stock int
+		if err := rows.Scan(&vid, &productID, &sku, &attrs, &vprice, &stock, &img); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		key := strconv.FormatInt(productID, 10)
+		out[key] = append(out[key], map[string]any{
+			"id": vid, "sku": sku, "attributes": json.RawMessage(attrs),
+			"price": strconv.FormatFloat(vprice, 'f', 2, 64), "price_usd": vprice,
+			"stock": stock, "in_stock": stock > 0, "image_url": img,
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"variations": out})
+}
+
+// listReviews — avis paginés d'un produit + note moyenne/nombre calculés
+// dans la même réponse (évite un second aller-retour pour l'en-tête de
+// la fiche produit qui affiche déjà average_rating/rating_count).
+func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
+	productID := atoi(r.PathValue("id"))
+	page, _ := strconv.Atoi(def(r.URL.Query().Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(def(r.URL.Query().Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	var total int64
+	var avgRating float64
+	if err := s.db.QueryRow(r.Context(),
+		`SELECT count(*), COALESCE(AVG(rating), 0) FROM reviews WHERE product_id = $1`, productID,
+	).Scan(&total, &avgRating); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, customer_id, order_id, rating, comment, verified_purchase, created_at
+		FROM reviews WHERE product_id = $1
+		ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+		productID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, customerID int64
+		var orderID *int64
+		var rating int
+		var comment string
+		var verified bool
+		var createdAt time.Time
+		if err := rows.Scan(&id, &customerID, &orderID, &rating, &comment, &verified, &createdAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "customer_id": customerID, "order_id": orderID,
+			"rating": rating, "comment": comment, "verified_purchase": verified,
+			"created_at": createdAt.UTC().Format(time.RFC3339),
+		})
+	}
+
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+		"average_rating": avgRating, "rating_count": total,
+	})
+}
+
+// createReview — verified_purchase est déterminé au mieux : si order_id
+// est fourni, on vérifie via order-svc que la commande appartient bien à
+// ce client et contient bien ce produit ; en cas de doute ou d'échec
+// réseau, le commentaire est accepté quand même mais SANS le badge vérifié
+// (jamais bloquant pour l'utilisateur — order-svc peut être temporairement
+// indisponible sans empêcher les avis).
+func (s *server) createReview(w http.ResponseWriter, r *http.Request) {
+	productID := atoi(r.PathValue("id"))
+	var body struct {
+		CustomerID int64  `json:"customer_id"`
+		OrderID    *int64 `json:"order_id"`
+		Rating     int    `json:"rating"`
+		Comment    string `json:"comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
+		return
+	}
+	if body.CustomerID == 0 || body.Rating < 1 || body.Rating > 5 {
+		kit.Fail(w, 400, "missing_fields", "customer_id et rating (1-5) sont obligatoires")
+		return
+	}
+
+	verified := false
+	if body.OrderID != nil {
+		verified = s.verifyPurchase(r.Context(), *body.OrderID, body.CustomerID, productID)
+	}
+
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO reviews (product_id, customer_id, order_id, rating, comment, verified_purchase)
+		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+		productID, body.CustomerID, body.OrderID, body.Rating, body.Comment, verified,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": id, "verified_purchase": verified})
+}
+
+func (s *server) verifyPurchase(ctx context.Context, orderID, customerID int64, productID int64) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/orders/%d", s.orderURL, orderID), nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return false
+	}
+	defer resp.Body.Close()
+	var order struct {
+		CustomerID int64 `json:"customer_id"`
+		Lines      []struct {
+			ProductID int64 `json:"product_id"`
+		} `json:"lines"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&order); err != nil {
+		return false
+	}
+	if order.CustomerID != customerID {
+		return false
+	}
+	for _, l := range order.Lines {
+		if l.ProductID == productID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *server) listCategories(w http.ResponseWriter, r *http.Request) {

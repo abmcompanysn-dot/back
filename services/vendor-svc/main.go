@@ -79,6 +79,7 @@ func main() {
 		mux.HandleFunc("GET /vendor/{id}/products", s.vendorProducts)
 		mux.HandleFunc("PUT /vendor/profile", s.updateProfile)
 		mux.HandleFunc("GET /vendor/{id}/orders", s.vendorOrders)
+		mux.HandleFunc("GET /vendor/{id}/dashboard", s.vendorDashboard)
 	})
 }
 
@@ -233,6 +234,88 @@ func (s *server) vendorOrders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// vendorDashboard — agrège produits (catalog-svc) + commandes (order-svc)
+// pour le tableau de bord vendeur, même pattern HTTP simple que
+// vendorProducts/vendorOrders (pas de gRPC, un relais direct). Remplace
+// les anciennes routes WordPress dokan/v1/vendor/dashboard.
+func (s *server) vendorDashboard(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+
+	productsTotal, err := s.countProducts(ctx, id)
+	if err != nil {
+		kit.Fail(w, 502, "catalog_unreachable", "catalog-svc injoignable — erreur EXPLICITE")
+		return
+	}
+
+	orders, err := s.fetchVendorOrders(ctx, id)
+	if err != nil {
+		kit.Fail(w, 502, "order_unreachable", "order-svc injoignable — erreur EXPLICITE")
+		return
+	}
+
+	var revenueUSD float64
+	ordersByStatus := map[string]int{}
+	for _, o := range orders {
+		revenueUSD += o.TotalUSD
+		ordersByStatus[o.Status]++
+	}
+
+	vendorIDNum, _ := strconv.Atoi(id)
+	kit.JSON(w, 200, map[string]any{
+		"vendor_id":        vendorIDNum,
+		"products_total":   productsTotal,
+		"orders_total":     len(orders),
+		"revenue_usd":      revenueUSD,
+		"orders_by_status": ordersByStatus,
+	})
+}
+
+func (s *server) countProducts(ctx context.Context, vendorID string) (int64, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/products?vendor_id=%s&page_size=1", s.catalogURL, vendorID), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("catalog-svc a répondu %d", resp.StatusCode)
+	}
+	var out struct {
+		Total int64 `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, err
+	}
+	return out.Total, nil
+}
+
+type vendorOrderSummary struct {
+	Status   string  `json:"status"`
+	TotalUSD float64 `json:"total_usd"`
+}
+
+func (s *server) fetchVendorOrders(ctx context.Context, vendorID string) ([]vendorOrderSummary, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/orders?vendor_id=%s&page_size=100", s.orderURL, vendorID), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("order-svc a répondu %d", resp.StatusCode)
+	}
+	var out struct {
+		Items []vendorOrderSummary `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
 }
 
 func ping(ctx context.Context, url string) error {
