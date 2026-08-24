@@ -28,15 +28,17 @@ import (
 var dashboardFS embed.FS
 
 type server struct {
-	jwtSec        []byte
-	catalogURL    string
-	vendorURL     string
-	orderURL      string
-	paymentURL    string
-	shippingURL   string
-	authURL       string
+	jwtSec          []byte
+	catalogURL      string
+	vendorURL       string
+	orderURL        string
+	paymentURL      string
+	shippingURL     string
+	authURL         string
 	notificationURL string
-	emailURL      string
+	emailURL        string
+	fulfillmentURL  string
+	loyaltyURL      string
 }
 
 func main() {
@@ -52,14 +54,12 @@ func main() {
 		authURL:         kit.Env("AUTH_SVC_URL", "http://auth-svc:8086"),
 		notificationURL: kit.Env("NOTIFICATION_SVC_URL", "http://notification-svc:8087"),
 		emailURL:        kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
+		fulfillmentURL:  kit.Env("FULFILLMENT_SVC_URL", "http://fulfillment-svc:8090"),
+		loyaltyURL:      kit.Env("LOYALTY_SVC_URL", "http://loyalty-svc:8091"),
 	}
 
 	health := kit.NewHealth()
-	for name, url := range map[string]string{
-		"catalog-svc": s.catalogURL, "vendor-svc": s.vendorURL, "order-svc": s.orderURL,
-		"payment-svc": s.paymentURL, "shipping-svc": s.shippingURL, "auth-svc": s.authURL,
-		"notification-svc": s.notificationURL, "email-svc": s.emailURL,
-	} {
+	for name, url := range s.allServiceURLs() {
 		u := url
 		health.Add(name, func(ctx context.Context) error { return ping(ctx, u+"/healthz") })
 	}
@@ -77,8 +77,20 @@ func main() {
 		mux.HandleFunc("GET /admin/api/customers", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/customers" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))
 		mux.HandleFunc("GET /admin/api/shipping-quote", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping-rates/quote" })))
+		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
+		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
+		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
 	})
+}
+
+func (s *server) allServiceURLs() map[string]string {
+	return map[string]string{
+		"catalog-svc": s.catalogURL, "vendor-svc": s.vendorURL, "order-svc": s.orderURL,
+		"payment-svc": s.paymentURL, "shipping-svc": s.shippingURL, "auth-svc": s.authURL,
+		"notification-svc": s.notificationURL, "email-svc": s.emailURL,
+		"fulfillment-svc": s.fulfillmentURL, "loyalty-svc": s.loyaltyURL,
+	}
 }
 
 func (s *server) serveDashboard(w http.ResponseWriter, r *http.Request) {
@@ -118,13 +130,8 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		out["payments_error"] = err.Error()
 	}
 
-	services := map[string]string{
-		"catalog-svc": s.catalogURL, "vendor-svc": s.vendorURL, "order-svc": s.orderURL,
-		"payment-svc": s.paymentURL, "shipping-svc": s.shippingURL, "auth-svc": s.authURL,
-		"notification-svc": s.notificationURL, "email-svc": s.emailURL,
-	}
 	statuses := map[string]string{}
-	for name, url := range services {
+	for name, url := range s.allServiceURLs() {
 		if err := ping(ctx, url+"/healthz"); err != nil {
 			statuses[name] = "down"
 		} else {
@@ -138,14 +145,9 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) systemCheck(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	services := map[string]string{
-		"catalog-svc": s.catalogURL, "vendor-svc": s.vendorURL, "order-svc": s.orderURL,
-		"payment-svc": s.paymentURL, "shipping-svc": s.shippingURL, "auth-svc": s.authURL,
-		"notification-svc": s.notificationURL, "email-svc": s.emailURL,
-	}
 	out := map[string]any{}
 	overall := "ok"
-	for name, url := range services {
+	for name, url := range s.allServiceURLs() {
 		body, err := getJSON(ctx, url+"/system-check")
 		if err != nil {
 			out[name] = map[string]string{"status": "down", "error": err.Error()}

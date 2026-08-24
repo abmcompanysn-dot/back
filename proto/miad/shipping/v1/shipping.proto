@@ -38,12 +38,84 @@ message QuoteResponse {
 
 message ListZonesResponse { repeated ShippingZone zones = 1; }
 
+// ---------- Livraison nationale Sénégal (par distance, Haversine) ----------
+// Système VOLONTAIREMENT séparé de la livraison internationale par zone
+// (logique métier différente : distance réelle vs zone fixe). Les deux
+// lisent le MÊME taux de change via ExchangeRateService ci-dessous.
+
+message DomesticTier {
+  int64 id = 1;
+  double max_distance_km = 2;  // tranche : jusqu'à cette distance
+  int64 price_xof = 3;
+}
+
+message VendorShippingAddress {
+  int64 vendor_id = 1;
+  string address = 2;
+  double lat = 3;
+  double lng = 4;
+}
+
+message DomesticCalculateRequest {
+  int64 vendor_id = 1;
+  double dest_lat = 2;
+  double dest_lng = 3;
+}
+
+message DomesticCalculateResponse {
+  double distance_km = 1;
+  int64 price_xof = 2;
+  int64 tier_id = 3;
+}
+
+message DomesticOrderStage {
+  int64 order_id = 1;
+  string stage = 2; // 8 états — voir shipping-domestic-stages.go
+  string updated_at = 3;
+}
+
+message ListDomesticTiersResponse { repeated DomesticTier tiers = 1; }
+
+// ---------- Taux de change (source unique USD ↔ FCFA/autres devises) ----------
+// Remplace les 3 constantes dupliquées du PHP historique
+// (MIAD_USD_TO_FCFA, miad_currency_rates['FCFA'], MIAD_DOMESTIC_FCFA_PER_USD).
+
+message ExchangeRate {
+  string currency = 1;   // ISO 4217, ex. "XOF", "CAD"
+  double rate_per_usd = 2;
+  string updated_at = 3;
+}
+
+message GetExchangeRateRequest { string currency = 1; }
+message ListExchangeRatesResponse { repeated ExchangeRate rates = 1; }
+message SetExchangeRateRequest {
+  string currency = 1;
+  double rate_per_usd = 2;
+}
+
 service ShippingService {
   rpc ListZones(google.protobuf.Empty) returns (ListZonesResponse) {
     option (google.api.http) = { get: "/shipping-rates" };
   }
   rpc Quote(QuoteRequest) returns (QuoteResponse) {
     option (google.api.http) = { get: "/shipping-rates/quote" };
+  }
+
+  rpc ListDomesticTiers(google.protobuf.Empty) returns (ListDomesticTiersResponse) {
+    option (google.api.http) = { get: "/shipping-domestic/tiers" };
+  }
+  rpc SetVendorShippingAddress(VendorShippingAddress) returns (VendorShippingAddress) {
+    option (google.api.http) = { post: "/vendor-shipping-address", body: "*" };
+  }
+  rpc CalculateDomestic(DomesticCalculateRequest) returns (DomesticCalculateResponse) {
+    option (google.api.http) = { post: "/shipping-domestic/calculate", body: "*" };
+  }
+
+  rpc ListExchangeRates(google.protobuf.Empty) returns (ListExchangeRatesResponse) {
+    option (google.api.http) = { get: "/exchange-rates" };
+  }
+  rpc SetExchangeRate(SetExchangeRateRequest) returns (ExchangeRate) {
+    option (google.api.http) = { post: "/exchange-rates", body: "*" };
   }
 }
 

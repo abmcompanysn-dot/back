@@ -1,5 +1,5 @@
 # ============================================================
-# Les 8 services métier.
+# Les 10 services métier.
 # Images construites sur le VPS puis importées dans containerd
 # (imagePullPolicy: Never — pas de registry nécessaire).
 # Scaler : kubectl -n miad scale deploy/catalog-svc --replicas=3
@@ -291,3 +291,75 @@ metadata: { name: email-svc, namespace: miad }
 spec:
   selector: { app: email-svc }
   ports: [{ port: 80, targetPort: 8089 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: fulfillment-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: fulfillment-svc } }
+  template:
+    metadata: { labels: { app: fulfillment-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/fulfillment-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8090 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8090 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8090 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: fulfillment-svc, namespace: miad }
+spec:
+  selector: { app: fulfillment-svc }
+  ports: [{ port: 80, targetPort: 8090 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: loyalty-svc, namespace: miad }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: loyalty-svc } }
+  template:
+    metadata: { labels: { app: loyalty-svc } }
+    spec:
+      containers:
+        - name: svc
+          image: miad/loyalty-svc:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8091 }]
+          envFrom:
+            - configMapRef: { name: miad-config }
+            - secretRef: { name: miad-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8091 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8091 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: loyalty-svc, namespace: miad }
+spec:
+  selector: { app: loyalty-svc }
+  ports: [{ port: 80, targetPort: 8091 }]

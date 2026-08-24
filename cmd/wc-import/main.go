@@ -59,6 +59,15 @@ func main() {
 	}
 	defer catalog.Close()
 
+	shippingURL := kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085")
+	usdToXof, err := fetchUSDToXOFRate(shippingURL)
+	if err != nil {
+		log.Error("taux de change indisponible — import stoppé pour éviter des prix faux", "err", err)
+		os.Exit(1)
+	}
+	log.Info("taux de change USD->XOF lu depuis shipping-svc", "rate", usdToXof)
+	parsePriceXOF := parsePrice(usdToXof)
+
 	// Pour chaque langue : la même requête que le frontend actuel.
 	// WPML renvoie les lignes de la langue demandée ; le trid
 	// (meta wpml_trid) relie les paires — copié tel quel, sans
@@ -79,7 +88,7 @@ func main() {
 					ON CONFLICT (wc_id, lang) DO UPDATE SET
 						name=excluded.name, slug=excluded.slug,
 						description=excluded.description, price_xof=excluded.price_xof`,
-					p.ID, trid, lang, p.Name, p.Slug, p.Description, parsePrice(p.Price), p.Status)
+					p.ID, trid, lang, p.Name, p.Slug, p.Description, parsePriceXOF(p.Price), p.Status)
 				if err != nil {
 					log.Error("insert produit", "id", p.ID, "err", err)
 				}
@@ -125,27 +134,45 @@ func extractTrid(p wcProduct) string {
 // vérifié sur des produits réels : ex. price="16", price="37.78" — jamais
 // des montants à l'échelle FCFA). Mais products.price_xof (catalog-svc)
 // est nommée et traitée comme du FCFA partout dans ce service (colonne
-// "price_xof", champ JSON "currency":"XOF"). Convertir ici au taux du
-// moment (voir exchange_rates, §3/§4 du brief de migration — pas encore
-// implémenté dans ce dépôt) AVANT tout import réel, sinon chaque prix
-// importé serait ~600x trop bas (16 $ importé tel quel comme "16 FCFA").
-func parsePrice(s string) int64 {
-	var usd float64
-	_, _ = fmt.Sscanf(s, "%f", &usd)
-	rate := usdToXofRate()
-	return int64(usd * rate)
+// "price_xof", champ JSON "currency":"XOF"). Convertit au taux XOF lu
+// depuis shipping-svc /exchange-rates (source UNIQUE, voir shipping-svc/
+// main.go) — jamais une constante locale, pour ne pas réintroduire la
+// duplication de taux que ce projet doit justement éliminer.
+func parsePrice(usdToXof float64) func(s string) int64 {
+	return func(s string) int64 {
+		var usd float64
+		_, _ = fmt.Sscanf(s, "%f", &usd)
+		return int64(usd * usdToXof)
+	}
 }
 
-// usdToXofRate — taux fixe temporaire tant que la table exchange_rates
-// n'existe pas côté Go. Vérifier ce taux avant tout import réel.
-func usdToXofRate() float64 {
-	if v := os.Getenv("USD_TO_XOF_RATE"); v != "" {
-		var r float64
-		if _, err := fmt.Sscanf(v, "%f", &r); err == nil && r > 0 {
-			return r
+// fetchUSDToXOFRate — interroge shipping-svc, seul détenteur du taux.
+// Échec EXPLICITE : jamais de repli silencieux sur une valeur locale
+// qui pourrait diverger de la table exchange_rates.
+func fetchUSDToXOFRate(shippingURL string) (float64, error) {
+	resp, err := http.Get(shippingURL + "/exchange-rates")
+	if err != nil {
+		return 0, fmt.Errorf("shipping-svc injoignable pour lire le taux XOF: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return 0, fmt.Errorf("shipping-svc a répondu %d sur /exchange-rates", resp.StatusCode)
+	}
+	var body struct {
+		Rates []struct {
+			Currency   string  `json:"currency"`
+			RatePerUSD float64 `json:"rate_per_usd"`
+		} `json:"rates"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return 0, fmt.Errorf("réponse /exchange-rates illisible: %w", err)
+	}
+	for _, r := range body.Rates {
+		if r.Currency == "XOF" {
+			return r.RatePerUSD, nil
 		}
 	}
-	return 600.0
+	return 0, fmt.Errorf("taux XOF absent de /exchange-rates — le seeder shipping-svc n'a pas tourné")
 }
 
 var _ = base64.StdEncoding // réservé auth Basic si les clés query sont refusées

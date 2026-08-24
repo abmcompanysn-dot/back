@@ -17,6 +17,8 @@ declare -A SVC=(
   [notification-svc]=8087
   [admin-svc]=8088
   [email-svc]=8089
+  [fulfillment-svc]=8090
+  [loyalty-svc]=8091
 )
 
 overall=0

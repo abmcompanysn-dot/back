@@ -29,8 +29,11 @@
 	# Paiement (webhooks Stripe/PayDunya inclus) — payment-svc
 	handle /payments/*     { reverse_proxy payment-svc:8084 }
 
-	# Livraison — shipping-svc
-	handle /shipping-rates { reverse_proxy shipping-svc:8085 }
+	# Livraison — shipping-svc (zone internationale + national Sénégal)
+	handle /shipping-rates*     { reverse_proxy shipping-svc:8085 }
+	handle /shipping-domestic/* { reverse_proxy shipping-svc:8085 }
+	handle /vendor-shipping-address { reverse_proxy shipping-svc:8085 }
+	handle /exchange-rates      { reverse_proxy shipping-svc:8085 }
 
 	# Compte & auth — auth-svc
 	handle /auth/*         { reverse_proxy auth-svc:8086 }
@@ -45,6 +48,16 @@
 	# Emails transactionnels + webhooks entrants (Resend) — email-svc
 	handle /emails*         { reverse_proxy email-svc:8089 }
 	handle /webhooks/*      { reverse_proxy email-svc:8089 }
+
+	# Tracking unifié + DHL — fulfillment-svc
+	handle /shipments*      { reverse_proxy fulfillment-svc:8090 }
+	handle /tracking/*      { reverse_proxy fulfillment-svc:8090 }
+	handle /dhl/*           { reverse_proxy fulfillment-svc:8090 }
+
+	# Coins/fidélité + représentants pays — loyalty-svc
+	handle /coins*          { reverse_proxy loyalty-svc:8091 }
+	handle /coupons*        { reverse_proxy loyalty-svc:8091 }
+	handle /representative* { reverse_proxy loyalty-svc:8091 }
 
 	handle {
 		respond 404 {

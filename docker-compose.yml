@@ -140,6 +140,26 @@ services:
       PORT_NOTIFICATION: "8087"
     ports: ["127.0.0.1:8087:8087"]
 
+  fulfillment-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: fulfillment-svc } }
+    environment:
+      DATABASE_URL_FULFILLMENT: ${DATABASE_URL_FULFILLMENT}
+      PORT_FULFILLMENT: "8090"
+      DHL_API_BASE: ${DHL_API_BASE}
+      DHL_API_USERNAME: ${DHL_API_USERNAME}
+      DHL_API_PASSWORD: ${DHL_API_PASSWORD}
+      DHL_ACCOUNT_NUMBER: ${DHL_ACCOUNT_NUMBER}
+    ports: ["127.0.0.1:8090:8090"]
+
+  loyalty-svc:
+    <<: *service-defaults
+    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: loyalty-svc } }
+    environment:
+      DATABASE_URL_LOYALTY: ${DATABASE_URL_LOYALTY}
+      PORT_LOYALTY: "8091"
+    ports: ["127.0.0.1:8091:8091"]
+
   # Console d'administration (interface embarquée + API agrégée)
   admin-svc:
     <<: *service-defaults
@@ -154,6 +174,8 @@ services:
       AUTH_SVC_URL: http://auth-svc:8086
       NOTIFICATION_SVC_URL: http://notification-svc:8087
       EMAIL_SVC_URL: http://email-svc:8089
+      FULFILLMENT_SVC_URL: http://fulfillment-svc:8090
+      LOYALTY_SVC_URL: http://loyalty-svc:8091
     ports: ["127.0.0.1:8088:8088"]
 
   # ---------- Passerelle externe ----------
@@ -176,6 +198,8 @@ services:
       - admin-svc
       - notification-svc
       - email-svc
+      - fulfillment-svc
+      - loyalty-svc
 
 volumes:
   pgdata:

@@ -7,14 +7,14 @@
 #   bash /opt/miad-backend/scripts/vps-bootstrap.sh
 #
 # Fait : installe k3s → crée namespace + Secret depuis .env →
-# applique les manifests → build les 8 images → les importe dans
+# applique les manifests → build les 10 images → les importe dans
 # containerd → attend les rollouts → vérifie tout explicitement.
 # ============================================================
 set -euo pipefail
 
 REPO=https://github.com/abmcompanysn-dot/back.git
 APP=/opt/miad-backend
-SERVICES=(catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc email-svc admin-svc)
+SERVICES=(catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc email-svc fulfillment-svc loyalty-svc admin-svc)
 
 say() { printf "\n\033[0;32m==> %s\033[0m\n" "$*"; }
 
@@ -69,7 +69,7 @@ kubectl -n miad create configmap caddyfile \
 kubectl apply -f deploy/k8s/30-gateway.yaml
 
 # ---------- 6. Build des images + import containerd (pas de registry) ----------
-say "Build des 8 images Go…"
+say "Build des 10 images Go…"
 command -v docker >/dev/null 2>&1 || curl -fsSL https://get.docker.com | sh
 for s in "${SERVICES[@]}"; do
   docker build --build-arg SERVICE="$s" -t "miad/$s:latest" .
