@@ -5,6 +5,7 @@
 //   - Firebase : vérification du jeton Google (tokeninfo) puis
 //     émission d'un JWT maison avec le rôle de la table admins
 //   - Sessions Redis + JWT HS256 avec claim "role"
+//
 // Publie : customer.registered
 // ============================================================
 package main
@@ -101,7 +102,8 @@ func main() {
 		mux.HandleFunc("POST /auth/otp/send", s.sendOTP)
 		mux.HandleFunc("POST /auth/otp/verify", s.verifyOTP)
 		mux.HandleFunc("POST /auth/admin/login", s.adminLogin)
-		mux.HandleFunc("POST /auth/firebase", s.firebaseLogin)
+		mux.HandleFunc("POST /auth/admin/firebase", s.firebaseAdminLogin)
+		mux.HandleFunc("POST /auth/firebase", s.firebaseCustomerLogin)
 		mux.HandleFunc("GET /customers", s.listCustomers) // role admin exigé
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)
 	})
@@ -178,9 +180,10 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 
 /* ---------- Firebase ---------- */
 
-// firebaseLogin vérifie le jeton ID auprès de Google (tokeninfo),
-// puis exige que l'email soit présent dans la table admins.
-func (s *server) firebaseLogin(w http.ResponseWriter, r *http.Request) {
+// firebaseAdminLogin vérifie le jeton ID auprès de Google (tokeninfo),
+// puis exige que l'email soit présent dans la table admins. Réservé à
+// la console admin — voir firebaseCustomerLogin pour les acheteurs.
+func (s *server) firebaseAdminLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		IDToken string `json:"id_token"`
 	}
@@ -213,6 +216,59 @@ func (s *server) firebaseLogin(w http.ResponseWriter, r *http.Request) {
 		"session": map[string]string{"jwt": jwt, "expires_at": expires},
 		"role":    role,
 		"email":   info.Email,
+	})
+}
+
+// firebaseCustomerLogin — connexion Google pour n'importe quel acheteur
+// (pas seulement les admins), même mécanisme de compte que l'OTP
+// (voir verifyOTP) : un email Firebase déjà connu dans customers se
+// connecte, sinon un compte est créé à la volée et customer.registered
+// est publié. Contrairement au PHP historique, Firebase n'est PAS
+// utilisé côté Go pour créer le mot de passe d'un compte — seul l'email
+// vérifié par Google sert d'identité.
+func (s *server) firebaseCustomerLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDToken string `json:"id_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IDToken == "" {
+		kit.Fail(w, 400, "invalid_body", "id_token Firebase obligatoire")
+		return
+	}
+	info, err := verifyFirebaseToken(r.Context(), body.IDToken, kit.Env("FIREBASE_WEB_CLIENT_ID", ""))
+	if err != nil {
+		kit.Fail(w, 401, "firebase_rejected", err.Error())
+		return
+	}
+
+	var id int64
+	var isNew bool
+	err = s.db.QueryRow(r.Context(), "SELECT id FROM customers WHERE lower(email) = lower($1)", info.Email).Scan(&id)
+	if err == pgx.ErrNoRows {
+		if err := s.db.QueryRow(r.Context(),
+			"INSERT INTO customers (email) VALUES ($1) RETURNING id", info.Email).Scan(&id); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		isNew = true
+		kit.Publish(s.kafka, "customer.registered", fmt.Sprint(id), map[string]any{
+			"customer_id": id, "email": info.Email, "provider": "firebase",
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
+	} else if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	jwt, expires := s.signJWT(map[string]any{
+		"sub": id, "iss": "miad-auth", "role": "customer",
+		"provider": "firebase", "exp": time.Now().Add(s.jwtTTL).Unix(),
+	})
+	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
+	kit.JSON(w, 200, map[string]any{
+		"session":         map[string]string{"jwt": jwt, "expires_at": expires},
+		"is_new_customer": isNew,
+		"customer_id":     id,
+		"email":           info.Email,
 	})
 }
 

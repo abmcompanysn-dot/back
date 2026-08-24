@@ -108,6 +108,7 @@ func main() {
 		mux.HandleFunc("POST /orders", s.createOrder)
 		mux.HandleFunc("GET /orders", s.listOrders)
 		mux.HandleFunc("GET /orders/{id}", s.getOrder)
+		mux.HandleFunc("GET /orders/parent/{parent_id}", s.getParentOrder)
 		mux.HandleFunc("POST /orders/{id}/confirm", s.confirmPayment)
 	})
 }
@@ -303,6 +304,95 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 		"created_at":  createdAt.UTC().Format(time.RFC3339),
 		"updated_at":  updatedAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// getParentOrder — recompose une vue "commande unique" au format
+// WooCommerce (id, number, status, total en STRING décimale, line_items[],
+// currency) à partir des vendor_orders éclatés par boutique. Le modèle
+// multi-vendeur reste la source de vérité (chaque vendor_order garde son
+// propre cycle de vie) ; cet endpoint sert UNIQUEMENT à ce que le
+// frontend actuel (qui attend une commande unique après checkout /
+// dans l'historique client) puisse la lire sans réécriture.
+func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
+	parentID := atoi(r.PathValue("parent_id"))
+
+	var reference string
+	var createdAt time.Time
+	if err := s.db.QueryRow(r.Context(),
+		`SELECT reference, created_at FROM orders WHERE id = $1 AND status = 'group'`, parentID,
+	).Scan(&reference, &createdAt); err != nil {
+		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande groupée %d introuvable", parentID))
+		return
+	}
+
+	rows, err := s.db.Query(r.Context(), `
+		SELECT vendor_id, status, lines, shipping_usd, total_usd
+		FROM orders WHERE parent_order_id = $1 ORDER BY id`, parentID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	var totalUSD, shippingUSD float64
+	lineItems := []map[string]any{}
+	statuses := map[string]bool{}
+	found := false
+
+	for rows.Next() {
+		var vendorID int64
+		var status string
+		var lines []byte
+		var shipping, total float64
+		if err := rows.Scan(&vendorID, &status, &lines, &shipping, &total); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		found = true
+		totalUSD += total
+		shippingUSD += shipping
+		statuses[status] = true
+
+		var vendorLines []line
+		_ = json.Unmarshal(lines, &vendorLines)
+		for _, l := range vendorLines {
+			lineItems = append(lineItems, map[string]any{
+				"product_id": l.ProductID, "variation_id": l.VariationID, "vendor_id": vendorID,
+				"name": l.Name, "quantity": l.Quantity,
+				"price": strconv.FormatFloat(l.UnitPrice, 'f', 2, 64),
+				"total": strconv.FormatFloat(l.UnitPrice*float64(l.Quantity), 'f', 2, 64),
+			})
+		}
+	}
+	if !found {
+		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande groupée %d introuvable", parentID))
+		return
+	}
+
+	kit.JSON(w, 200, map[string]any{
+		"id": parentID, "number": reference, "reference": reference,
+		"status": aggregateStatus(statuses),
+		"total":  strconv.FormatFloat(totalUSD, 'f', 2, 64), "currency": "USD",
+		"shipping_total": strconv.FormatFloat(shippingUSD, 'f', 2, 64),
+		"line_items":     lineItems,
+		"date_created":   createdAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// aggregateStatus — un seul statut affichable pour l'acheteur à partir
+// des statuts (potentiellement différents) de chaque sous-commande.
+// Explicite : "partially_paid" plutôt que de choisir arbitrairement le
+// statut d'une seule sous-commande et cacher les autres.
+func aggregateStatus(statuses map[string]bool) string {
+	if len(statuses) == 1 {
+		for s := range statuses {
+			return s
+		}
+	}
+	if statuses["paid"] && (statuses["pending_payment"] || statuses["payment_expired"]) {
+		return "partially_paid"
+	}
+	return "mixed"
 }
 
 // destCountryFrom — extrait le code pays ISO alpha-2 de l'adresse de

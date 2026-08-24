@@ -1,6 +1,12 @@
 // ============================================================
-// payment-svc — Stripe (carte) + PayDunya (Wave, Orange Money).
-// Consomme order.created → crée VRAIMENT la session de paiement.
+// payment-svc — Stripe (carte, PaymentIntent + Elements EMBARQUÉ,
+// PAS de redirection Checkout — le frontend affiche son propre
+// formulaire de carte) + PayDunya (Wave, Orange Money, redirection).
+// Consomme order.created → pré-crée le paiement PayDunya (asynchrone,
+// redirection de toute façon). Pour Stripe : POST /payments/init est
+// SYNCHRONE et crée le PaymentIntent à la demande — le frontend en a
+// besoin immédiatement pour afficher Stripe Elements, il ne peut pas
+// attendre un aller-retour Kafka.
 // Publie payment.confirmed / payment.failed.
 // payments.order_id : référence logique, jamais de FK SQL.
 // ============================================================
@@ -36,6 +42,7 @@ CREATE TABLE IF NOT EXISTS payments (
   order_id     BIGINT NOT NULL,
   provider     TEXT NOT NULL CHECK (provider IN ('stripe','paydunya')),
   provider_ref TEXT DEFAULT '',
+  client_secret TEXT DEFAULT '', -- Stripe PaymentIntent uniquement (Elements embarqué) ; jamais rempli pour PayDunya
   redirect_url TEXT DEFAULT '',
   amount_usd   DOUBLE PRECISION NOT NULL DEFAULT 0, -- USD réel (voir catalog-svc) ; converti en XOF uniquement à l'appel PayDunya
   currency     TEXT NOT NULL DEFAULT 'USD',
@@ -144,7 +151,14 @@ func (s *server) consumeOrders(log *slog.Logger) {
 	}
 }
 
-// initiateFor crée le paiement puis la session chez le fournisseur réel.
+// initiateFor — pré-crée le paiement dès order.created (Kafka), ET la
+// session chez le fournisseur pour PayDunya (redirection, pas besoin
+// d'un aller-retour synchrone). Pour Stripe, la ligne "initiated" est
+// posée ici mais le PaymentIntent réel est créé au premier appel de
+// POST /payments/init (voir initPayment) : le frontend en a besoin
+// immédiatement pour Stripe Elements, il ne peut pas attendre que ce
+// consommateur Kafka ait tourné. Les deux chemins convergent sur la
+// même ligne "payments" (idempotent via ON CONFLICT).
 func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCreatedEvent) {
 	provider := ev.PaymentMethod
 	if provider == "" {
@@ -159,14 +173,11 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 		log.Warn("paiement déjà initié", "order_id", ev.OrderID)
 		return
 	}
-
-	var ref, redirect string
-	switch provider {
-	case "stripe":
-		ref, redirect, err = createStripeCheckout(ev)
-	case "paydunya":
-		ref, redirect, err = s.createPayDunyaInvoice(ctx, ev)
+	if provider != "paydunya" {
+		return // Stripe : PaymentIntent créé à la demande via POST /payments/init
 	}
+
+	ref, redirect, err := s.createPayDunyaInvoice(ctx, ev)
 	if err != nil {
 		// EXPLICITE : le paiement est marqué failed, l'événement part sur Kafka.
 		_, _ = s.db.Exec(ctx, "UPDATE payments SET status='failed' WHERE id=$1", id)
@@ -174,37 +185,39 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 			"order_id": ev.OrderID, "provider": provider, "reason": err.Error(),
 			"at": time.Now().UTC().Format(time.RFC3339),
 		})
-		log.Error("création de session impossible", "provider", provider, "order_id", ev.OrderID, "err", err)
+		log.Error("création de facture PayDunya impossible", "order_id", ev.OrderID, "err", err)
 		return
 	}
 	_, _ = s.db.Exec(ctx, "UPDATE payments SET provider_ref=$2, redirect_url=$3 WHERE id=$1", id, ref, redirect)
-	log.Info("session de paiement créée", "payment_id", id, "order_id", ev.OrderID,
-		"provider", provider, "ref", ref)
+	log.Info("facture PayDunya créée", "payment_id", id, "order_id", ev.OrderID, "ref", ref)
 }
 
 /* ---------- Fournisseurs réels ---------- */
 
-func createStripeCheckout(ev orderCreatedEvent) (ref, redirect string, err error) {
+// createStripePaymentIntent — PaymentIntent (PAS Checkout Session) :
+// le frontend affiche son propre formulaire de carte via Stripe Elements
+// et confirme le paiement lui-même avec le client_secret renvoyé ici,
+// sans jamais quitter le site. order_id part en métadonnée (pas
+// client_reference_id, propre à Checkout Session) — c'est là que le
+// webhook stripeWebhook le relit pour retrouver la commande.
+func createStripePaymentIntent(orderID int64, reference string, totalUSD float64) (id, clientSecret string, err error) {
 	key := kit.Env("STRIPE_SECRET_KEY", "")
 	if key == "" {
 		return "", "", fmt.Errorf("STRIPE_SECRET_KEY absente")
 	}
-	front := kit.Env("STOREFRONT_URL", "http://localhost:3000")
-	// Stripe attend unit_amount dans la plus PETITE unité de la devise.
+	// Stripe attend amount dans la plus PETITE unité de la devise.
 	// USD a 2 décimales (cents) — contrairement au XOF (zéro décimale)
 	// utilisé auparavant ici, qui n'aurait pas eu besoin de ce ×100.
-	amountCents := int64(math.Round(ev.TotalUSD * 100))
+	amountCents := int64(math.Round(totalUSD * 100))
 	form := url.Values{}
-	form.Set("mode", "payment")
-	form.Set("line_items[0][quantity]", "1")
-	form.Set("line_items[0][price_data][currency]", "usd")
-	form.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(amountCents, 10))
-	form.Set("line_items[0][price_data][product_data][name]", "Commande MIAD "+ev.Reference)
-	form.Set("client_reference_id", strconv.FormatInt(ev.OrderID, 10))
-	form.Set("success_url", front+"/checkout/success?order="+strconv.FormatInt(ev.OrderID, 10))
-	form.Set("cancel_url", front+"/checkout/cancel?order="+strconv.FormatInt(ev.OrderID, 10))
+	form.Set("amount", strconv.FormatInt(amountCents, 10))
+	form.Set("currency", "usd")
+	form.Set("automatic_payment_methods[enabled]", "true")
+	form.Set("description", "Commande MIAD "+reference)
+	form.Set("metadata[order_id]", strconv.FormatInt(orderID, 10))
+	form.Set("metadata[reference]", reference)
 
-	req, _ := http.NewRequest(http.MethodPost, "https://api.stripe.com/v1/checkout/sessions",
+	req, _ := http.NewRequest(http.MethodPost, "https://api.stripe.com/v1/payment_intents",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -218,13 +231,13 @@ func createStripeCheckout(ev orderCreatedEvent) (ref, redirect string, err error
 		return "", "", fmt.Errorf("Stripe a refusé (%d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var doc struct {
-		ID  string `json:"id"`
-		URL string `json:"url"`
+		ID           string `json:"id"`
+		ClientSecret string `json:"client_secret"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return "", "", err
 	}
-	return doc.ID, doc.URL, nil
+	return doc.ID, doc.ClientSecret, nil
 }
 
 // createPayDunyaInvoice — PayDunya (Wave, Orange Money) facture en XOF,
@@ -347,7 +360,10 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		Type string `json:"type"`
 		Data struct {
 			Object struct {
-				ClientReferenceID string `json:"client_reference_id"`
+				ID       string `json:"id"`
+				Metadata struct {
+					OrderID string `json:"order_id"`
+				} `json:"metadata"`
 			} `json:"object"`
 		} `json:"data"`
 	}
@@ -355,12 +371,11 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 400, "invalid_event", err.Error())
 		return
 	}
+	orderID, _ := strconv.ParseInt(event.Data.Object.Metadata.OrderID, 10, 64)
 	switch event.Type {
-	case "checkout.session.completed", "payment_intent.succeeded":
-		orderID, _ := strconv.ParseInt(event.Data.Object.ClientReferenceID, 10, 64)
-		s.confirmPayment(w, r, orderID, "stripe", "evt")
-	case "checkout.session.expired", "payment_intent.payment_failed":
-		orderID, _ := strconv.ParseInt(event.Data.Object.ClientReferenceID, 10, 64)
+	case "payment_intent.succeeded":
+		s.confirmPayment(w, r, orderID, "stripe", event.Data.Object.ID)
+	case "payment_intent.payment_failed", "payment_intent.canceled":
 		s.markFailed(w, r, orderID, "stripe")
 	default:
 		kit.JSON(w, 200, map[string]string{"received": event.Type})
@@ -466,30 +481,62 @@ func (s *server) markFailed(w http.ResponseWriter, r *http.Request, orderID int6
 
 /* ---------- Lectures ---------- */
 
+// initPayment — SYNCHRONE, contrairement au flux Kafka pur historique.
+// Le frontend (Stripe Elements) a besoin du client_secret immédiatement
+// pour afficher son formulaire de carte ; il ne peut pas attendre le
+// consommateur order.created. Idempotent : si le PaymentIntent existe
+// déjà (créé par initiateFor ou un appel précédent), le renvoie tel quel
+// plutôt que d'en créer un second pour la même commande.
 func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		OrderID int64 `json:"order_id"`
+		OrderID   int64  `json:"order_id"`
+		Reference string `json:"reference"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrderID == 0 {
 		kit.Fail(w, 400, "invalid_body", "order_id obligatoire")
 		return
 	}
-	row := s.db.QueryRow(r.Context(), `
-		SELECT provider, amount_usd, status, redirect_url, provider_ref
-		FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1`, body.OrderID)
-	var provider, status, redirect, ref string
+	ctx := r.Context()
+
+	var id int64
+	var provider, status, redirect, ref, clientSecret string
 	var amount float64
-	if err := row.Scan(&provider, &amount, &status, &redirect, &ref); err != nil {
+	err := s.db.QueryRow(ctx, `
+		SELECT id, provider, amount_usd, status, redirect_url, provider_ref, client_secret
+		FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1`, body.OrderID,
+	).Scan(&id, &provider, &amount, &status, &redirect, &ref, &clientSecret)
+	if err != nil {
 		kit.Fail(w, 404, "payment_not_found",
 			fmt.Sprintf("aucun paiement pour la commande %d — order.created a-t-il été consommé ?", body.OrderID))
 		return
 	}
+
+	if provider == "stripe" && clientSecret == "" && (status == "initiated" || status == "failed") {
+		reference := body.Reference
+		if reference == "" {
+			reference = fmt.Sprintf("MIAD-%d", body.OrderID)
+		}
+		piID, secret, err := createStripePaymentIntent(body.OrderID, reference, amount)
+		if err != nil {
+			kit.Fail(w, 502, "stripe_error", fmt.Sprintf("création du PaymentIntent impossible: %v", err))
+			return
+		}
+		if _, err := s.db.Exec(ctx,
+			"UPDATE payments SET provider_ref=$2, client_secret=$3, status='initiated' WHERE id=$1",
+			id, piID, secret); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		ref, clientSecret = piID, secret
+	}
+
 	kit.JSON(w, 200, map[string]any{
 		"payment": map[string]any{
 			"order_id": body.OrderID, "provider": provider, "provider_ref": ref,
 			"amount_usd": amount, "currency": "USD", "status": status,
 		},
-		"redirect_url": redirect,
+		"client_secret": clientSecret, // Stripe Elements (vide pour PayDunya)
+		"redirect_url":  redirect,     // PayDunya uniquement
 	})
 }
 
