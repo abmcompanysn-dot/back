@@ -10,6 +10,7 @@ const TABS = [
   { path: '/admin/payments', label: 'Paiements' },
   { path: '/admin/shipping', label: 'Livraison' },
   { path: '/admin/marketing', label: 'Marketing' },
+  { path: '/admin/email-templates', label: 'Modèles de messages' },
   { path: '/admin/security', label: 'Sécurité' },
   { path: '/admin/system', label: 'Système' },
 ]

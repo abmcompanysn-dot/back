@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS email_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_email_events_email_id ON email_events (email_id);
+
+-- Modèles d'emails éditables depuis le dashboard admin (Marketing >
+-- Modèles de messages) — plus figés dans le binaire Go : modifier
+-- subject/body_html ici a un effet immédiat, sans redéploiement.
+CREATE TABLE IF NOT EXISTS email_templates (
+  name       TEXT PRIMARY KEY,
+  label      TEXT NOT NULL,
+  subject    TEXT NOT NULL,
+  body_html  TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 var watchedTopics = []string{
@@ -71,52 +82,45 @@ type server struct {
 	resendAPI   string
 	fromEmail   string
 	frontendURL string
+	orderURL    string
+	authURL     string
 	maxAttempts int
 }
 
 type EmailTemplate struct {
-	Name       string
-	SubjectTpl string
-	BodyTpl    string
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	Subject   string `json:"subject"`
+	BodyHTML  string `json:"body_html"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
-// Templates d'emails MIAD Market
-var templates = map[string]EmailTemplate{
-	"welcome": {
-		Name:       "welcome",
-		SubjectTpl: "Bienvenue chez MIAD Market !",
-		BodyTpl:    welcomeEmailHTML,
-	},
-	"order_confirmation": {
-		Name:       "order_confirmation",
-		SubjectTpl: "Confirmation de commande #{{.OrderID}}",
-		BodyTpl:    orderConfirmationHTML,
-	},
-	"payment_confirmed": {
-		Name:       "payment_confirmed",
-		SubjectTpl: "Paiement confirmé - Commande #{{.OrderID}}",
-		BodyTpl:    paymentConfirmedHTML,
-	},
-	"payment_failed": {
-		Name:       "payment_failed",
-		SubjectTpl: "Échec du paiement - Commande #{{.OrderID}}",
-		BodyTpl:    paymentFailedHTML,
-	},
-	"order_shipped": {
-		Name:       "order_shipped",
-		SubjectTpl: "Votre commande #{{.OrderID}} a été expédiée !",
-		BodyTpl:    orderShippedHTML,
-	},
-	"otp_email": {
-		Name:       "otp_email",
-		SubjectTpl: "Votre code de vérification MIAD Market",
-		BodyTpl:    otpEmailHTML,
-	},
-	"password_reset": {
-		Name:       "password_reset",
-		SubjectTpl: "Réinitialisation de mot de passe",
-		BodyTpl:    passwordResetHTML,
-	},
+// seedTemplates — valeurs par défaut insérées UNE SEULE FOIS au premier
+// démarrage (ON CONFLICT DO NOTHING dans seedEmailTemplates) : ensuite la
+// table email_templates est la seule source de vérité, éditable depuis
+// le dashboard admin (Marketing > Modèles de messages) sans redéploiement.
+var seedTemplates = []EmailTemplate{
+	{Name: "welcome", Label: "Bienvenue", Subject: "Bienvenue chez MIAD Market !", BodyHTML: welcomeEmailHTML},
+	{Name: "order_confirmation", Label: "Confirmation de commande", Subject: "Confirmation de commande #{{.order_id}}", BodyHTML: orderConfirmationHTML},
+	{Name: "payment_confirmed", Label: "Paiement confirmé", Subject: "Paiement confirmé - Commande #{{.order_id}}", BodyHTML: paymentConfirmedHTML},
+	{Name: "payment_failed", Label: "Paiement échoué", Subject: "Échec du paiement - Commande #{{.order_id}}", BodyHTML: paymentFailedHTML},
+	{Name: "order_shipped", Label: "Commande expédiée", Subject: "Votre commande #{{.order_id}} a été expédiée !", BodyHTML: orderShippedHTML},
+	{Name: "otp_email", Label: "Code de vérification (OTP)", Subject: "Votre code de vérification MIAD Market", BodyHTML: otpEmailHTML},
+	{Name: "password_reset", Label: "Réinitialisation de mot de passe", Subject: "Réinitialisation de mot de passe", BodyHTML: passwordResetHTML},
+}
+
+func seedEmailTemplates(ctx context.Context, db *pgxpool.Pool) error {
+	for _, t := range seedTemplates {
+		_, err := db.Exec(ctx, `
+			INSERT INTO email_templates (name, label, subject, body_html)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (name) DO NOTHING`,
+			t.Name, t.Label, t.Subject, t.BodyHTML)
+		if err != nil {
+			return fmt.Errorf("seed template %s: %w", t.Name, err)
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -143,7 +147,13 @@ func main() {
 		resendAPI:   resendAPI,
 		fromEmail:   kit.Env("FROM_EMAIL", "noreply@miadmarket.ca"),
 		frontendURL: kit.Env("STOREFRONT_URL", "https://miadmarket.ca"),
+		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		authURL:     kit.Env("AUTH_SVC_URL", "http://auth-svc:8086"),
 		maxAttempts: 3,
+	}
+
+	if err := seedEmailTemplates(ctx, db); err != nil {
+		log.Error("seed email_templates échoué", "err", err)
 	}
 
 	// Démarrer le consommateur Kafka
@@ -164,6 +174,9 @@ func main() {
 	kit.Run("email-svc", kit.Env("PORT_EMAIL", "8089"), log, health, func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /emails/stats", s.stats)
 		mux.HandleFunc("POST /emails/send", s.sendEmail)
+		mux.HandleFunc("GET /email-templates", s.listTemplates)
+		mux.HandleFunc("GET /email-templates/{name}", s.getTemplate)
+		mux.HandleFunc("PUT /email-templates/{name}", s.updateTemplate)
 		mux.HandleFunc("POST /webhooks/resend", s.resendWebhook)
 		mux.HandleFunc("POST /webhooks/inbound", s.inboundWebhook)
 	})
@@ -229,10 +242,62 @@ func (s *server) queueWelcomeEmail(ctx context.Context, log *slog.Logger, payloa
 	s.queueEmail(ctx, log, email, "welcome", "Bienvenue chez MIAD Market !", payload)
 }
 
+// resolveOrderContact enrichit un payload d'événement commande/paiement
+// (qui ne porte toujours que order_id + customer_id, jamais l'email — ni
+// order-svc ni payment-svc ne connaissent l'email du client) en appelant
+// order-svc puis auth-svc. Sans ça, customer_email est TOUJOURS absent du
+// payload Kafka et les 4 emails commande/paiement ne partent jamais
+// (confirmé en lisant order-svc et payment-svc : aucun des deux ne
+// publie jamais customer_email).
+func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any) (email string, err error) {
+	orderID := fmt.Sprint(payload["order_id"])
+	if orderID == "" || orderID == "<nil>" {
+		return "", fmt.Errorf("order_id manquant dans le payload")
+	}
+	var order struct {
+		CustomerID int64   `json:"customer_id"`
+		TotalUSD   float64 `json:"total_usd"`
+	}
+	if err := fetchJSON(ctx, s.orderURL+"/orders/"+orderID, &order); err != nil {
+		return "", fmt.Errorf("order-svc: %w", err)
+	}
+	payload["total_usd"] = order.TotalUSD
+	if order.CustomerID == 0 {
+		return "", fmt.Errorf("commande %s sans customer_id", orderID)
+	}
+	var customer struct {
+		Email string `json:"email"`
+	}
+	if err := fetchJSON(ctx, s.authURL+"/customer/"+fmt.Sprint(order.CustomerID), &customer); err != nil {
+		return "", fmt.Errorf("auth-svc: %w", err)
+	}
+	if customer.Email == "" {
+		return "", fmt.Errorf("client %d inscrit par téléphone, sans email", order.CustomerID)
+	}
+	return customer.Email, nil
+}
+
+func fetchJSON(ctx context.Context, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("statut %d: %s", resp.StatusCode, string(body))
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func (s *server) queueOrderConfirmation(ctx context.Context, log *slog.Logger, payload map[string]any) {
-	email, _ := payload["customer_email"].(string)
-	if email == "" {
-		log.Warn("email client manquant pour confirmation commande")
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour confirmation commande", "err", err)
 		return
 	}
 	subject := fmt.Sprintf("Confirmation de commande #%v", payload["order_id"])
@@ -240,9 +305,9 @@ func (s *server) queueOrderConfirmation(ctx context.Context, log *slog.Logger, p
 }
 
 func (s *server) queuePaymentConfirmed(ctx context.Context, log *slog.Logger, payload map[string]any) {
-	email, _ := payload["customer_email"].(string)
-	if email == "" {
-		log.Warn("email client manquant pour paiement confirmé")
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour paiement confirmé", "err", err)
 		return
 	}
 	subject := fmt.Sprintf("Paiement confirmé - Commande #%v", payload["order_id"])
@@ -250,9 +315,9 @@ func (s *server) queuePaymentConfirmed(ctx context.Context, log *slog.Logger, pa
 }
 
 func (s *server) queuePaymentFailed(ctx context.Context, log *slog.Logger, payload map[string]any) {
-	email, _ := payload["customer_email"].(string)
-	if email == "" {
-		log.Warn("email client manquant pour paiement échoué")
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour paiement échoué", "err", err)
 		return
 	}
 	subject := fmt.Sprintf("Échec du paiement - Commande #%v", payload["order_id"])
@@ -260,9 +325,9 @@ func (s *server) queuePaymentFailed(ctx context.Context, log *slog.Logger, paylo
 }
 
 func (s *server) queueOrderShipped(ctx context.Context, log *slog.Logger, payload map[string]any) {
-	email, _ := payload["customer_email"].(string)
-	if email == "" {
-		log.Warn("email client manquant pour commande expédiée")
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour commande expédiée", "err", err)
 		return
 	}
 	subject := fmt.Sprintf("Votre commande #%v a été expédiée !", payload["order_id"])
@@ -359,21 +424,31 @@ func (s *server) sendEmailJob(ctx context.Context, log *slog.Logger, job struct 
 	json.Unmarshal(job.payload, &payload)
 
 	// Générer le contenu HTML
-	htmlBody, err := s.renderTemplate(job.template, payload)
+	htmlBody, err := s.renderTemplate(ctx, job.template, payload)
 	if err != nil {
 		s.markEmailFailed(ctx, log, job.id, fmt.Sprintf("template error: %v", err))
 		return
 	}
 
+	// Le sujet est re-rendu depuis email_templates (pas job.subject, figé
+	// à la mise en file) : une modification du modèle dans le dashboard
+	// admin s'applique même aux emails déjà en file d'attente.
+	subject := job.subject
+	if _, tplSubject, err := s.loadTemplate(ctx, job.template); err == nil && tplSubject != "" {
+		if rendered, err := renderText(tplSubject, payload); err == nil {
+			subject = rendered
+		}
+	}
+
 	// Envoyer via Resend
 	if s.resendAPI == "" {
 		// Mode simulation
-		log.Info("[SIMULATION] Email envoyé", "to", job.to, "subject", job.subject, "template", job.template)
+		log.Info("[SIMULATION] Email envoyé", "to", job.to, "subject", subject, "template", job.template)
 		s.markEmailSent(ctx, log, job.id, "simulated")
 		return
 	}
 
-	resendID, err := s.sendViaResend(job.from, job.to, job.subject, htmlBody)
+	resendID, err := s.sendViaResend(job.from, job.to, subject, htmlBody)
 	if err != nil {
 		s.markEmailFailed(ctx, log, job.id, err.Error())
 		return
@@ -463,13 +538,16 @@ func (s *server) logEmailEvent(ctx context.Context, emailID int64, eventType str
 	}
 }
 
-func (s *server) renderTemplate(templateName string, data map[string]any) (string, error) {
-	tpl, ok := templates[templateName]
-	if !ok {
-		return "", fmt.Errorf("template inconnu: %s", templateName)
+func (s *server) renderTemplate(ctx context.Context, templateName string, data map[string]any) (string, error) {
+	bodyHTML, _, err := s.loadTemplate(ctx, templateName)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := data["frontend_url"]; !ok {
+		data["frontend_url"] = s.frontendURL
 	}
 
-	tmpl, err := template.New(tpl.Name).Parse(tpl.BodyTpl)
+	tmpl, err := template.New(templateName).Parse(bodyHTML)
 	if err != nil {
 		return "", fmt.Errorf("parse template: %w", err)
 	}
@@ -479,6 +557,28 @@ func (s *server) renderTemplate(templateName string, data map[string]any) (strin
 		return "", fmt.Errorf("execute template: %w", err)
 	}
 
+	return buf.String(), nil
+}
+
+// loadTemplate lit le modèle depuis email_templates (source de vérité,
+// éditable depuis le dashboard admin) — renvoie (body_html, subject, err).
+func (s *server) loadTemplate(ctx context.Context, name string) (bodyHTML, subject string, err error) {
+	row := s.db.QueryRow(ctx, `SELECT body_html, subject FROM email_templates WHERE name = $1`, name)
+	if err := row.Scan(&bodyHTML, &subject); err != nil {
+		return "", "", fmt.Errorf("template inconnu: %s (%w)", name, err)
+	}
+	return bodyHTML, subject, nil
+}
+
+func renderText(tpl string, data map[string]any) (string, error) {
+	t, err := template.New("subject").Parse(tpl)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
 	return buf.String(), nil
 }
 
@@ -506,6 +606,88 @@ func (s *server) stats(w http.ResponseWriter, r *http.Request) {
 		"sending":        sending,
 		"watched_topics": watchedTopics,
 	})
+}
+
+func (s *server) listTemplates(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT name, label, subject, body_html, updated_at
+		FROM email_templates ORDER BY name`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	out := []EmailTemplate{}
+	for rows.Next() {
+		var t EmailTemplate
+		var updatedAt time.Time
+		if err := rows.Scan(&t.Name, &t.Label, &t.Subject, &t.BodyHTML, &updatedAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		t.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+		out = append(out, t)
+	}
+	kit.JSON(w, 200, map[string]any{"templates": out})
+}
+
+func (s *server) getTemplate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	row := s.db.QueryRow(r.Context(), `
+		SELECT name, label, subject, body_html, updated_at
+		FROM email_templates WHERE name = $1`, name)
+	var t EmailTemplate
+	var updatedAt time.Time
+	if err := row.Scan(&t.Name, &t.Label, &t.Subject, &t.BodyHTML, &updatedAt); err != nil {
+		kit.Fail(w, 404, "template_not_found", fmt.Sprintf("modèle %q introuvable", name))
+		return
+	}
+	t.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	kit.JSON(w, 200, t)
+}
+
+// updateTemplate — édite subject/body_html depuis le dashboard admin.
+// Valide que le HTML compile comme gabarit Go AVANT d'écrire en base :
+// un template cassé enregistré ferait échouer silencieusement tous les
+// envois futurs de cet email (voir sendEmailJob → markEmailFailed).
+func (s *server) updateTemplate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Label    string `json:"label"`
+		Subject  string `json:"subject"`
+		BodyHTML string `json:"body_html"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Subject == "" || body.BodyHTML == "" {
+		kit.Fail(w, 400, "missing_fields", "subject et body_html obligatoires")
+		return
+	}
+	if _, err := template.New("check").Parse(body.Subject); err != nil {
+		kit.Fail(w, 400, "invalid_subject_template", err.Error())
+		return
+	}
+	if _, err := template.New("check").Parse(body.BodyHTML); err != nil {
+		kit.Fail(w, 400, "invalid_body_template", err.Error())
+		return
+	}
+
+	tag, err := s.db.Exec(r.Context(), `
+		UPDATE email_templates SET label = COALESCE(NULLIF($2, ''), label),
+		       subject = $3, body_html = $4, updated_at = now()
+		WHERE name = $1`, name, body.Label, body.Subject, body.BodyHTML)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "template_not_found", fmt.Sprintf("modèle %q introuvable", name))
+		return
+	}
+	kit.JSON(w, 200, map[string]string{"status": "updated"})
 }
 
 func (s *server) sendEmail(w http.ResponseWriter, r *http.Request) {
@@ -695,7 +877,7 @@ const orderConfirmationHTML = `
           <tr>
             <td style="background:linear-gradient(135deg,#11998e 0%,#38ef7d 100%);padding:40px;text-align:center;">
               <h1 style="color:#ffffff;margin:0;font-size:28px;">✅ Commande confirmée !</h1>
-              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">#{{.OrderID}}</p>
+              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">#{{.order_id}}</p>
             </td>
           </tr>
           <tr>
@@ -715,11 +897,11 @@ const orderConfirmationHTML = `
                     <span style="color:#11998e;font-weight:bold;">Confirmée</span>
                   </td>
                 </tr>
-                {{if .TotalAmount}}
+                {{if .total_usd}}
                 <tr>
                   <td colspan="2" style="padding:15px;">
                     <strong>Montant total</strong><br>
-                    <span style="color:#11998e;font-size:20px;font-weight:bold;">{{.TotalAmount}} Ar</span>
+                    <span style="color:#11998e;font-size:20px;font-weight:bold;">{{.total_usd}} $ US</span>
                   </td>
                 </tr>
                 {{end}}
@@ -773,7 +955,7 @@ const paymentConfirmedHTML = `
           <tr>
             <td style="background:linear-gradient(135deg,#56ab2f 0%,#a8e063 100%);padding:40px;text-align:center;">
               <h1 style="color:#ffffff;margin:0;font-size:28px;">💳 Paiement confirmé !</h1>
-              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">Commande #{{.OrderID}}</p>
+              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">Commande #{{.order_id}}</p>
             </td>
           </tr>
           <tr>
@@ -785,7 +967,7 @@ const paymentConfirmedHTML = `
               <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0;">
                 <tr>
                   <td style="padding:15px;background-color:#e8f5e9;border-radius:8px;text-align:center;">
-                    <span style="font-size:24px;color:#56ab2f;font-weight:bold;">{{.TotalAmount}} Ar</span>
+                    <span style="font-size:24px;color:#56ab2f;font-weight:bold;">{{.total_usd}} $ US</span>
                   </td>
                 </tr>
               </table>
@@ -826,7 +1008,7 @@ const paymentFailedHTML = `
           <tr>
             <td style="background:linear-gradient(135deg,#eb3349 0%,#f45c43 100%);padding:40px;text-align:center;">
               <h1 style="color:#ffffff;margin:0;font-size:28px;">⚠️ Échec du paiement</h1>
-              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">Commande #{{.OrderID}}</p>
+              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">Commande #{{.order_id}}</p>
             </td>
           </tr>
           <tr>
@@ -834,17 +1016,17 @@ const paymentFailedHTML = `
               <p style="font-size:16px;color:#333333;margin-bottom:20px;">
                 Le paiement de votre commande n'a pas abouti.
               </p>
-              
+
               <div style="background-color:#fff3cd;padding:20px;border-radius:8px;margin:20px 0;">
                 <p style="margin:0;color:#856404;">
-                  <strong>Raison :</strong> {{if .ErrorReason}}{{.ErrorReason}}{{else}}Problème de traitement{{end}}
+                  <strong>Raison :</strong> {{if .error_reason}}{{.error_reason}}{{else}}Problème de traitement{{end}}
                 </p>
               </div>
-              
+
               <table role="presentation" style="margin:30px 0;">
                 <tr>
                   <td align="center" style="background-color:#eb3349;padding:15px 30px;border-radius:8px;">
-                    <a href="{{.frontend_url}}/orders/{{.OrderID}}/pay" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:bold;">Réessayer le paiement →</a>
+                    <a href="{{.frontend_url}}/orders/{{.order_id}}/pay" style="color:#ffffff;text-decoration:none;font-size:16px;font-weight:bold;">Réessayer le paiement →</a>
                   </td>
                 </tr>
               </table>
@@ -881,7 +1063,7 @@ const orderShippedHTML = `
           <tr>
             <td style="background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);padding:40px;text-align:center;">
               <h1 style="color:#ffffff;margin:0;font-size:28px;">📦 Commande expédiée !</h1>
-              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">#{{.OrderID}}</p>
+              <p style="color:#ffffff;margin:10px 0 0 0;font-size:18px;">#{{.order_id}}</p>
             </td>
           </tr>
           <tr>

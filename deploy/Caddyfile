@@ -96,6 +96,9 @@
 	handle /emails* {
 		reverse_proxy email-svc:8089
 	}
+	handle /email-templates* {
+		reverse_proxy email-svc:8089
+	}
 	handle /webhooks/* {
 		reverse_proxy email-svc:8089
 	}

@@ -101,6 +101,13 @@ func main() {
 		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
 		mux.HandleFunc("POST /admin/api/media/upload", s.requireAdmin(s.uploadMedia))
+		mux.HandleFunc("GET /admin/api/email-templates", s.requireAdmin(s.proxy(func() string { return s.emailURL + "/email-templates" })))
+		mux.HandleFunc("GET /admin/api/email-templates/{name}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forward(w, r, s.emailURL+"/email-templates/"+r.PathValue("name"))
+		}))
+		mux.HandleFunc("PUT /admin/api/email-templates/{name}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPut, s.emailURL+"/email-templates/"+r.PathValue("name"))
+		}))
 
 		// SPA React : sert les assets embarqués, retombe sur index.html
 		// pour toute route côté client (/admin/orders, /admin/security, …)
@@ -314,6 +321,27 @@ func forward(w http.ResponseWriter, r *http.Request, upstream string) {
 		kit.Fail(w, 500, "upstream_request_error", err.Error())
 		return
 	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		kit.Fail(w, 502, "upstream_unreachable", fmt.Sprintf("%s injoignable — erreur EXPLICITE", upstream))
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// forwardWithBody — même principe que forward, mais transmet la méthode
+// et le corps de la requête (nécessaire pour PUT /email-templates/{name},
+// contrairement aux proxies GET simples ci-dessus).
+func forwardWithBody(w http.ResponseWriter, r *http.Request, method, upstream string) {
+	req, err := http.NewRequestWithContext(r.Context(), method, upstream, r.Body)
+	if err != nil {
+		kit.Fail(w, 500, "upstream_request_error", err.Error())
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		kit.Fail(w, 502, "upstream_unreachable", fmt.Sprintf("%s injoignable — erreur EXPLICITE", upstream))
