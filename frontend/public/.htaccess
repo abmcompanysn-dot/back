@@ -1,0 +1,17 @@
+# MIAD MARKET - SECURITY CONFIG
+
+# 1. Empêcher Clickjacking (Iframe blocking)
+Header always set X-Frame-Options "SAMEORIGIN"
+Header always set X-Content-Type-Options "nosniff"
+
+# 2. Désactiver le sniffing de type MIME
+Header set X-Content-Type-Options "nosniff"
+
+# 3. Protection contre le XSS
+Header set X-XSS-Protection "1; mode=block"
+
+# 4. Bloquer l'accès aux fichiers sensibles
+<FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>

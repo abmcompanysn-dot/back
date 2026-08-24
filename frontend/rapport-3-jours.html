@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Rapport d'activité — MIAD Market</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a1a1a; max-width: 880px; margin: 0 auto; padding: 40px 32px; line-height: 1.6; }
+  h1 { color: #005826; font-size: 28px; border-bottom: 4px solid #F5A623; padding-bottom: 12px; margin-bottom: 4px; }
+  .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 32px; }
+  h2 { color: #005826; font-size: 19px; margin-top: 40px; padding: 10px 16px; background: #f0fdf4; border-left: 4px solid #005826; border-radius: 0 6px 6px 0; }
+  h3 { color: #1a1a1a; font-size: 15px; margin-top: 20px; margin-bottom: 6px; }
+  p { margin: 6px 0; font-size: 14px; }
+  ul { margin: 6px 0 6px 0; padding-left: 22px; }
+  li { font-size: 14px; margin-bottom: 4px; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px; margin-right: 6px; }
+  .ok { background: #dcfce7; color: #166534; }
+  .warn { background: #fef9c3; color: #854d0e; }
+  .info { background: #dbeafe; color: #1e40af; }
+  code { background: #f3f4f6; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; color: #be185d; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f9fafb; color: #6b7280; text-transform: uppercase; font-size: 11px; }
+  .stat-grid { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 140px; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px 16px; text-align: center; }
+  .stat .num { font-size: 26px; font-weight: 900; color: #005826; }
+  .stat .lbl { font-size: 11px; color: #6b7280; text-transform: uppercase; font-weight: 700; margin-top: 2px; }
+  .footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; text-align: center; }
+  @media print { body { padding: 10px; } h2 { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<h1>Rapport d'activité — MIAD Market</h1>
+<p class="subtitle">Synthèse des travaux réalisés — infrastructure, images, emails, performance</p>
+
+<div class="stat-grid">
+  <div class="stat"><div class="num">1853+</div><div class="lbl">Images migrées vers R2</div></div>
+  <div class="stat"><div class="num">71/71</div><div class="lbl">Boutiques vérifiées</div></div>
+  <div class="stat"><div class="num">5</div><div class="lbl">Outils admin créés</div></div>
+  <div class="stat"><div class="num">0</div><div class="lbl">Lien mort restant</div></div>
+</div>
+
+<h2>1. Migration et fiabilisation des images (R2 / CDN)</h2>
+<p><span class="badge ok">Terminé</span> Migration complète du stockage des images produits vers Cloudflare R2, avec un domaine personnalisé dédié <code>cdn.miadmarket.com</code> remplaçant l'ancien lien R2 brut.</p>
+<ul>
+  <li>Migration du bucket source (1853 objets) vers le nouveau bucket <code>miadr2</code>, sur un compte Cloudflare distinct.</li>
+  <li>Diagnostic et résolution d'un conflit entre deux scripts WordPress concurrents qui géraient les mêmes images avec des configurations différentes (cause racine de plusieurs semaines de comportements incohérents).</li>
+  <li>Correction d'une erreur de syntaxe PHP cachée qui empêchait silencieusement tout le système de réécriture d'URL de fonctionner.</li>
+  <li>Mise en place d'un <strong>filet de sécurité permanent</strong> : si une image locale disparaît du serveur sans être encore synchronisée sur R2, le site bascule automatiquement vers R2 plutôt que d'afficher un lien cassé.</li>
+  <li>Correction d'un bug qui ignorait les images de galeries produit contenant plusieurs photos (seule la première image de chaque galerie était traitée).</li>
+  <li>Script de migration final exécuté sur l'ensemble du catalogue : <strong>126 images</strong> rattachées directement (déjà présentes sur R2), <strong>331 images</strong> ré-uploadées depuis le serveur d'origine, <strong>1 seul échec</strong> (image isolée, non récupérable).</li>
+</ul>
+
+<h3>Outils mis en place</h3>
+<table>
+  <tr><th>Outil</th><th>Usage</th></tr>
+  <tr><td>🩺 Diagnostic des liens</td><td>Affiche en un coup d'œil combien d'images sont rattachées, encore en local, ou cassées</td></tr>
+  <tr><td>🔗 Rattachement automatique</td><td>Officialise en base de données les images déjà migrées mais pas encore enregistrées</td></tr>
+  <tr><td>🔄 Vérification produits</td><td>Scanne les images produits manquantes et les uploade automatiquement</td></tr>
+  <tr><td>🔎 Traitement à la demande</td><td>Permet de taper le nom d'une image précise (logo, bannière) pour la migrer en un clic</td></tr>
+  <tr><td>Script externe (ordinateur local)</td><td>Déporte le travail lourd (téléchargement + upload) hors du serveur WordPress pour éviter toute surcharge</td></tr>
+</table>
+
+<h2>2. Emails transactionnels — fiabilité et image professionnelle</h2>
+<p><span class="badge ok">Terminé</span> Les emails (commande, livraison, connexion) ne renvoient plus jamais vers le backend technique du site.</p>
+<ul>
+  <li><strong>Tous les liens</strong> (boutique, produit, suivi de commande) pointent désormais systématiquement vers le site public <code>www.miadmarket.com</code> — plus aucun lien vers <code>api.miadmarket.com</code>, peu importe le composant qui le génère (Dokan, WooCommerce, ou un template existant).</li>
+  <li>Correction d'une incohérence de chemin : les liens boutique générés par le système de vente (<code>/store/...</code>) ne correspondaient à aucune page réelle du site — redirigés vers la bonne page (<code>/vendor/...</code>).</li>
+  <li>Redesign du code de connexion par email (OTP) : passage d'un code éclaté en plusieurs cases (difficile à copier proprement) à un bloc unique facilement sélectionnable.</li>
+  <li>Suppression des émoticônes dans les emails de sécurité au profit d'une présentation sobre et professionnelle ; harmonisation du délai d'expiration affiché (10 minutes partout).</li>
+  <li>Filtre anti-spam renforcé : suppression des liens vides, neutralisation des domaines placeholder oubliés, et reformulation des liens d'images pour respecter les standards Gmail/Outlook.</li>
+</ul>
+
+<h2>3. Performance et stabilité du site</h2>
+<p><span class="badge ok">Résolu</span> Diagnostic d'une lenteur significative au chargement de la page d'accueil.</p>
+<ul>
+  <li>Identification de la cause racine : l'API qui liste les boutiques répondait en plus de <strong>10 secondes</strong> à chaque appel, ralentissant tout le site (et particulièrement perceptible sur mobile).</li>
+  <li>Mise en place d'un système de cache côté serveur pour les requêtes les plus lourdes (boutiques, produits, catégories), réduisant ce temps à quasi instantané après le premier appel.</li>
+  <li>Le cache se purge automatiquement à chaque modification de produit ou de boutique — pas de risque d'afficher des informations obsolètes.</li>
+  <li>Correction d'une limite codée en dur qui plafonnait l'affichage initial à 50 boutiques au lieu de la totalité du catalogue (71 actuellement).</li>
+  <li>Recommandation transmise pour le cache navigateur des images (Cloudflare) : passage de 4h à 24h, pour une meilleure résilience en cas de coupure réseau temporaire côté visiteur.</li>
+</ul>
+
+<h2>4. Outils de test et de vérification</h2>
+<ul>
+  <li>Outil de test d'email de commande : permet de choisir un produit et une adresse, et de recevoir un véritable email de commande pour vérifier visuellement le rendu (images, liens) sans attendre une vraie vente.</li>
+  <li>Script de diagnostic réseau pour distinguer les vrais liens cassés des faux positifs causés par des protections anti-robot du serveur d'hébergement.</li>
+</ul>
+
+<h2>5. Points restants / recommandations</h2>
+<ul>
+  <li><span class="badge warn">À faire</span> Régler le cache navigateur des images sur 24h dans le dashboard Cloudflare (instructions transmises).</li>
+  <li><span class="badge info">À surveiller</span> Une image isolée (référence #20601) reste introuvable (ni en local, ni sur R2) — probablement un fichier supprimé manuellement par le passé, à corriger en re-uploadant l'image depuis sa source originale si elle existe encore.</li>
+  <li><span class="badge info">Non prioritaire</span> Le parcours "Récupérer mon panier abandonné" reste déconnecté du panier côté site (architecture identifiée, correction reportée à la demande du client).</li>
+</ul>
+
+<div class="footer">
+  Rapport généré automatiquement — MIAD Market<br>
+  Pour le convertir en PDF : ouvrir ce fichier dans un navigateur, puis Ctrl+P (ou Cmd+P) → "Enregistrer au format PDF"
+</div>
+
+</body>
+</html>

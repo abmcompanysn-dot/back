@@ -1,0 +1,21 @@
+name: Sync product embeddings
+
+# Ré-embed le catalogue publié dans Vectorize chaque nuit (voir CLAUDE.md,
+# section "Recherche sémantique & recommandations IA"). Pas de Worker Cloudflare
+# séparé pour ça : les bindings AI/VECTORIZE n'existent que côté Next.js/Pages,
+# donc on appelle simplement l'endpoint admin déjà en place.
+on:
+  schedule:
+    - cron: '0 2 * * *' # 02:00 UTC chaque jour
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger embeddings sync
+        run: |
+          curl -sf --max-time 300 -X POST "https://miadmarket.com/api/admin/embeddings" \
+            -H "X-Internal-Secret: ${{ secrets.INTERNAL_API_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{"all": true}'

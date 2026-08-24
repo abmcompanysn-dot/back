@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"fetch\\('https://api.miadmarket.com/wp-json/dokan/v1/stores?per_page=100&orderby=registered&order=asc'\\).then\\(r=>r.json\\(\\)\\).then\\(stores=>{console.log\\('TOTAL:'+stores.length\\);for\\(const s of stores\\){const owner=[s.first_name,s.last_name].filter\\(Boolean\\).join\\(' '\\);const city=s.address?.city||'';const country=s.address?.country||'';const slug=s.shop_url?s.shop_url.replace\\('https://api.miadmarket.com/store/',''\\).replace\\('/',''\\):'';const since=s.registered?s.registered.slice\\(0,10\\):'';console.log\\(s.id+'|'+\\(s.store_name||'\\(vide\\)'\\)+'|'+owner+'|'+city+'|'+country+'|'+slug+'|'+since\\)}}\\).catch\\(e=>console.error\\(e.message\\)\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Read(//c/Users/Admin/Downloads/**)",
+      "Bash(curl -s -m 10 -o /dev/null -w \"home status: %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(gh api *)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"exit: $?\")",
+      "mcp__claude_ai_Canva__create-design-from-candidate",
+      "mcp__claude_ai_Canva__generate-design",
+      "Bash(node -e ' *)",
+      "Bash(node scripts/miad.mjs set-image --product 39774 --image https://cdn.miadmarket.com/2026/07/sac-vip-denim-kente-soleil-1782944069988.jpg --gallery https://cdn.miadmarket.com/2026/07/sac-vip-denim-kente-soleil-vue-dos.jpg --gallery https://cdn.miadmarket.com/2026/07/sac-vip-denim-kente-soleil-vue-34.jpg --gallery https://cdn.miadmarket.com/2026/07/sac-vip-denim-kente-soleil-vue-profil.jpg --gallery https://cdn.miadmarket.com/2026/07/sac-vip-denim-kente-soleil-vue-interieur.jpg)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000)",
+      "Bash(curl -sD - -o /dev/null \"https://miadmarket.com/wp-content/uploads/2026/05/cropped-IMG-20260529-WA0019-scaled-1.jpg\" -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0 Safari/537.36\")",
+      "Bash(node scripts/miad.mjs create-vendor --store-name \"Teranga Perle\" --email mbenegning9@gmail.com --first-name \"Mbéne\" --last-name \"Gning\" --country SN --city \"Dakar\" --phone \"+221 78 384 69 64\")",
+      "Bash(node scripts/miad.mjs create --name 'Sac Nœud en Perles Cristal SALY — Violet' --price 15 --vendor 153 --category 'Sacs - Maroquinerie' --description 'Le sac SALY séduit par son design original en forme de nœud, entièrement confectionné à la main avec des perles en cristal soigneusement sélectionnées. Son éclat raffiné et sa couleur violette lumineuse en font un accessoire élégant, idéal pour apporter une touche de charme à toutes vos tenues. Léger, chic et unique, il est parfait pour les cérémonies, les soirées, les anniversaires ou toute autre occasion spéciale. Fabrication 100% artisanale, perles en cristal de haute qualité, design exclusif en forme de nœud. Teranga Perle — des créations faites à la main avec passion, où chaque perle raconte une histoire.' --image https://cdn.miadmarket.com/vendors/teranga/saly-violet.jpg --status publish)",
+      "Bash(node scripts/miad.mjs create --name 'Sac Nœud en Perles Cristal SALY — Noir' --price 15 --vendor 153 --category 'Sacs - Maroquinerie' --description 'Le sac SALY séduit par son design original en forme de nœud, entièrement confectionné à la main avec des perles en cristal soigneusement sélectionnées. Son éclat raffiné et sa couleur noire intense en font un accessoire élégant, idéal pour apporter une touche de charme à toutes vos tenues. Léger, chic et unique, il est parfait pour les cérémonies, les soirées, les anniversaires ou toute autre occasion spéciale. Fabrication 100% artisanale, perles en cristal de haute qualité, design exclusif en forme de nœud. Teranga Perle — des créations faites à la main avec passion, où chaque perle raconte une histoire.' --image https://cdn.miadmarket.com/vendors/teranga/saly-noir.jpg --status publish)"
+    ]
+  }
+}

@@ -1,0 +1,3669 @@
+{
+	"knownSymbols": {
+		"middleware": [
+			{
+				"name": "middleware",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\middleware.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"config": [
+			{
+				"name": "config",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\middleware.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"NextResponse": [
+			{
+				"name": "NextResponse",
+				"module": "next/server",
+				"isDefault": false
+			}
+		],
+		"type { NextRequest": [
+			{
+				"name": "type { NextRequest",
+				"module": "next/server.js",
+				"isDefault": true
+			},
+			{
+				"name": "type { NextRequest",
+				"module": "next/server",
+				"isDefault": true
+			}
+		],
+		"VendorStorePage": [
+			{
+				"name": "VendorStorePage",
+				"module": "@/app/VendorStorePage",
+				"isDefault": false
+			},
+			{
+				"name": "VendorStorePage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\VendorStorePage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"useMemo": [
+			{
+				"name": "useMemo",
+				"module": "react",
+				"isDefault": true
+			}
+		],
+		"useRef": [
+			{
+				"name": "useRef",
+				"module": "react",
+				"isDefault": true
+			}
+		],
+		"useEffect": [
+			{
+				"name": "useEffect",
+				"module": "react",
+				"isDefault": true
+			}
+		],
+		"useSWR": [
+			{
+				"name": "useSWR",
+				"module": "swr",
+				"isDefault": true
+			}
+		],
+		"ArrowLeft": [
+			{
+				"name": "ArrowLeft",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Store": [
+			{
+				"name": "Store",
+				"module": "lucide-react",
+				"isDefault": false
+			},
+			{
+				"name": "Store",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\hooks.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"Star": [
+			{
+				"name": "Star",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Package": [
+			{
+				"name": "Package",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Button": [
+			{
+				"name": "Button",
+				"module": "@/components/ui/button",
+				"isDefault": false
+			}
+		],
+		"type WooVendor": [
+			{
+				"name": "type WooVendor",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			}
+		],
+		"type WooProduct": [
+			{
+				"name": "type WooProduct",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			}
+		],
+		"Skeleton": [
+			{
+				"name": "Skeleton",
+				"module": "@/components/ui/skeleton",
+				"isDefault": false
+			}
+		],
+		"ProductCard": [
+			{
+				"name": "ProductCard",
+				"module": "@/components/miad/ProductCard",
+				"isDefault": false
+			},
+			{
+				"name": "ProductCard",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductCard.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"ShareButton": [
+			{
+				"name": "ShareButton",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ShareButton.tsx",
+				"type": "function",
+				"isDefault": false
+			},
+			{
+				"name": "ShareButton",
+				"module": "@/components/miad/ShareButton",
+				"isDefault": false
+			}
+		],
+		"metadata": [
+			{
+				"name": "metadata",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\register\\page.tsx",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"viewport": [
+			{
+				"name": "viewport",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\layout.tsx",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"RootLayout": [
+			{
+				"name": "RootLayout",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\layout.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"type { Metadata": [
+			{
+				"name": "type { Metadata",
+				"module": "next",
+				"isDefault": true
+			}
+		],
+		"Inter": [
+			{
+				"name": "Inter",
+				"module": "next/font/google",
+				"isDefault": false
+			}
+		],
+		"Toaster": [
+			{
+				"name": "Toaster",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\ui\\toaster.tsx",
+				"type": "function",
+				"isDefault": false
+			},
+			{
+				"name": "Toaster",
+				"module": "sonner",
+				"isDefault": false
+			}
+		],
+		"BackNavigationGuard": [
+			{
+				"name": "BackNavigationGuard",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\BackNavigationGuard.tsx",
+				"type": "function",
+				"isDefault": true
+			},
+			{
+				"name": "BackNavigationGuard",
+				"module": "@/components/miad/BackNavigationGuard",
+				"isDefault": true
+			}
+		],
+		"InstallPrompt": [
+			{
+				"name": "InstallPrompt",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\InstallPrompt.tsx",
+				"type": "function",
+				"isDefault": true
+			},
+			{
+				"name": "InstallPrompt",
+				"module": "@/components/miad/InstallPrompt",
+				"isDefault": true
+			}
+		],
+		"PushManager": [
+			{
+				"name": "PushManager",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\PushManager.tsx",
+				"type": "function",
+				"isDefault": true
+			},
+			{
+				"name": "PushManager",
+				"module": "@/components/miad/PushManager",
+				"isDefault": true
+			}
+		],
+		"MagicLinkHandler": [
+			{
+				"name": "MagicLinkHandler",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\MagicLinkHandler.tsx",
+				"type": "function",
+				"isDefault": true
+			},
+			{
+				"name": "MagicLinkHandler",
+				"module": "@/components/miad/MagicLinkHandler",
+				"isDefault": true
+			}
+		],
+		"TawkWidget": [
+			{
+				"name": "TawkWidget",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\TawkWidget.tsx",
+				"type": "function",
+				"isDefault": true
+			},
+			{
+				"name": "TawkWidget",
+				"module": "@/components/miad/TawkWidget",
+				"isDefault": true
+			}
+		],
+		"CurrencyProvider": [
+			{
+				"name": "CurrencyProvider",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\contexts\\CurrencyContext.tsx",
+				"type": "function",
+				"isDefault": false
+			},
+			{
+				"name": "CurrencyProvider",
+				"module": "@/contexts/CurrencyContext",
+				"isDefault": false
+			}
+		],
+		"translations": [
+			{
+				"name": "translations",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			},
+			{
+				"name": "translations",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"ProductType": [
+			{
+				"name": "ProductType",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "type",
+				"isDefault": false
+			}
+		],
+		"WooProduct": [
+			{
+				"name": "WooProduct",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"WooProductAttribute": [
+			{
+				"name": "WooProductAttribute",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"WooProductVariation": [
+			{
+				"name": "WooProductVariation",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"WooVendor": [
+			{
+				"name": "WooVendor",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"WooCategory": [
+			{
+				"name": "WooCategory",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			},
+			{
+				"name": "WooCategory",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"Country": [
+			{
+				"name": "Country",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			},
+			{
+				"name": "Country",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"CartItem": [
+			{
+				"name": "CartItem",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"formatPrice": [
+			{
+				"name": "formatPrice",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			},
+			{
+				"name": "formatPrice",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\api.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"countries": [
+			{
+				"name": "countries",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			},
+			{
+				"name": "countries",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"categories": [
+			{
+				"name": "categories",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"vendors": [
+			{
+				"name": "vendors",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"productsByCountry": [
+			{
+				"name": "productsByCountry",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"allProducts": [
+			{
+				"name": "allProducts",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			},
+			{
+				"name": "allProducts",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"async": [
+			{
+				"name": "async",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\api\\admin\\2fa\\route.ts",
+				"isDefault": true
+			}
+		],
+		"getProductsByCountry": [
+			{
+				"name": "getProductsByCountry",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\woocommerce.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"cn": [
+			{
+				"name": "cn",
+				"module": "@/lib/utils",
+				"isDefault": false
+			},
+			{
+				"name": "cn",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\utils.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"clsx": [
+			{
+				"name": "clsx",
+				"module": "clsx",
+				"isDefault": false
+			}
+		],
+		"type ClassValue": [
+			{
+				"name": "type ClassValue",
+				"module": "clsx",
+				"isDefault": false
+			}
+		],
+		"twMerge": [
+			{
+				"name": "twMerge",
+				"module": "tailwind-merge",
+				"isDefault": false
+			}
+		],
+		"COUNTRY_TO_ZONE": [
+			{
+				"name": "COUNTRY_TO_ZONE",
+				"module": "@/lib/shipping-utils",
+				"isDefault": false
+			},
+			{
+				"name": "COUNTRY_TO_ZONE",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"ALL_WORLD_COUNTRIES": [
+			{
+				"name": "ALL_WORLD_COUNTRIES",
+				"module": "@/lib/shipping-utils",
+				"isDefault": false
+			},
+			{
+				"name": "ALL_WORLD_COUNTRIES",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"getShippingCost": [
+			{
+				"name": "getShippingCost",
+				"module": "@/lib/shipping-utils",
+				"isDefault": false
+			},
+			{
+				"name": "getShippingCost",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getCountryZone": [
+			{
+				"name": "getCountryZone",
+				"module": "@/lib/shipping-utils",
+				"isDefault": false
+			},
+			{
+				"name": "getCountryZone",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"ZONE_SHIPPING_RATES": [
+			{
+				"name": "ZONE_SHIPPING_RATES",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"getZoneRates": [
+			{
+				"name": "getZoneRates",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"isLocalDelivery": [
+			{
+				"name": "isLocalDelivery",
+				"module": "@/lib/shipping-utils",
+				"isDefault": false
+			},
+			{
+				"name": "isLocalDelivery",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"isSameZoneAfrica": [
+			{
+				"name": "isSameZoneAfrica",
+				"module": "@/lib/shipping-utils",
+				"isDefault": false
+			},
+			{
+				"name": "isSameZoneAfrica",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getSmartShippingCost": [
+			{
+				"name": "getSmartShippingCost",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\shipping-utils.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"RateLimitResult": [
+			{
+				"name": "RateLimitResult",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\rate-limit.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"rateLimit": [
+			{
+				"name": "rateLimit",
+				"module": "@/lib/rate-limit",
+				"isDefault": false
+			},
+			{
+				"name": "rateLimit",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\rate-limit.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getIp": [
+			{
+				"name": "getIp",
+				"module": "@/lib/rate-limit",
+				"isDefault": false
+			},
+			{
+				"name": "getIp",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\rate-limit.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"tooManyRequests": [
+			{
+				"name": "tooManyRequests",
+				"module": "@/lib/rate-limit",
+				"isDefault": false
+			},
+			{
+				"name": "tooManyRequests",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\rate-limit.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"r2Url": [
+			{
+				"name": "r2Url",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\r2.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"isR2Url": [
+			{
+				"name": "isR2Url",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\r2.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"isPushSupported": [
+			{
+				"name": "isPushSupported",
+				"module": "@/lib/push",
+				"isDefault": false
+			},
+			{
+				"name": "isPushSupported",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\push.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getNotificationPermission": [
+			{
+				"name": "getNotificationPermission",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\push.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"WOO_URL": [
+			{
+				"name": "WOO_URL",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			},
+			{
+				"name": "WOO_URL",
+				"module": "@/lib/constants",
+				"isDefault": false
+			},
+			{
+				"name": "WOO_URL",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\constants.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"INTERNAL_SECRET": [
+			{
+				"name": "INTERNAL_SECRET",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			},
+			{
+				"name": "INTERNAL_SECRET",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\miad-server-auth.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"REP_ROLES": [
+			{
+				"name": "REP_ROLES",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			},
+			{
+				"name": "REP_ROLES",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\miad-server-auth.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"wpHeaders": [
+			{
+				"name": "wpHeaders",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			},
+			{
+				"name": "wpHeaders",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\miad-server-auth.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"meUrl": [
+			{
+				"name": "meUrl",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\miad-server-auth.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"isAdmin": [
+			{
+				"name": "isAdmin",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			},
+			{
+				"name": "isAdmin",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\miad-server-auth.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"isRep": [
+			{
+				"name": "isRep",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			},
+			{
+				"name": "isRep",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\miad-server-auth.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Product": [
+			{
+				"name": "Product",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\hooks.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"Category": [
+			{
+				"name": "Category",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\hooks.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"useProducts": [
+			{
+				"name": "useProducts",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\hooks.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"useProduct": [
+			{
+				"name": "useProduct",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\hooks.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"useStores": [
+			{
+				"name": "useStores",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\hooks.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"useCategories": [
+			{
+				"name": "useCategories",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\hooks.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"app": [
+			{
+				"name": "app",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\firebase.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"auth": [
+			{
+				"name": "auth",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\firebase.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"db": [
+			{
+				"name": "db",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\firebase.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"initializeApp": [
+			{
+				"name": "initializeApp",
+				"module": "firebase/app",
+				"isDefault": false
+			}
+		],
+		"getApps": [
+			{
+				"name": "getApps",
+				"module": "firebase/app",
+				"isDefault": false
+			}
+		],
+		"getAuth": [
+			{
+				"name": "getAuth",
+				"module": "firebase/auth",
+				"isDefault": false
+			}
+		],
+		"getFirestore": [
+			{
+				"name": "getFirestore",
+				"module": "firebase/firestore",
+				"isDefault": false
+			}
+		],
+		"WOO_CK": [
+			{
+				"name": "WOO_CK",
+				"module": "@/lib/constants",
+				"isDefault": false
+			},
+			{
+				"name": "WOO_CK",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\constants.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"WOO_CS": [
+			{
+				"name": "WOO_CS",
+				"module": "@/lib/constants",
+				"isDefault": false
+			},
+			{
+				"name": "WOO_CS",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\constants.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"COINS_VALUE_USD": [
+			{
+				"name": "COINS_VALUE_USD",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"USD_TO_FCFA": [
+			{
+				"name": "USD_TO_FCFA",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"COINS_PER_PURCHASE": [
+			{
+				"name": "COINS_PER_PURCHASE",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"COINS_DAILY": [
+			{
+				"name": "COINS_DAILY",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"COINS_PER_SHARE": [
+			{
+				"name": "COINS_PER_SHARE",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"COINS_REFERRAL": [
+			{
+				"name": "COINS_REFERRAL",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"COINS_PER_REVIEW": [
+			{
+				"name": "COINS_PER_REVIEW",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"BADGES": [
+			{
+				"name": "BADGES",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"CoinTx": [
+			{
+				"name": "CoinTx",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"getBalance": [
+			{
+				"name": "getBalance",
+				"module": "@/lib/coins",
+				"isDefault": false
+			},
+			{
+				"name": "getBalance",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"addCoins": [
+			{
+				"name": "addCoins",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"spendCoins": [
+			{
+				"name": "spendCoins",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"canClaimDaily": [
+			{
+				"name": "canClaimDaily",
+				"module": "@/lib/coins",
+				"isDefault": false
+			},
+			{
+				"name": "canClaimDaily",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"claimDaily": [
+			{
+				"name": "claimDaily",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getCalendar": [
+			{
+				"name": "getCalendar",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getStreak": [
+			{
+				"name": "getStreak",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getHistory": [
+			{
+				"name": "getHistory",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"toUSD": [
+			{
+				"name": "toUSD",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"toFCFA": [
+			{
+				"name": "toFCFA",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getBadge": [
+			{
+				"name": "getBadge",
+				"module": "@/lib/coins",
+				"isDefault": false
+			},
+			{
+				"name": "getBadge",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getNextBadge": [
+			{
+				"name": "getNextBadge",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"getAnchorPrice": [
+			{
+				"name": "getAnchorPrice",
+				"module": "@/lib/coins",
+				"isDefault": false
+			},
+			{
+				"name": "getAnchorPrice",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\coins.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"mutate": [
+			{
+				"name": "mutate",
+				"module": "swr",
+				"isDefault": false
+			}
+		],
+		"WooCommerceProduct": [
+			{
+				"name": "WooCommerceProduct",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\api.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"WooCommerceCategory": [
+			{
+				"name": "WooCommerceCategory",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\api.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"DokanStore": [
+			{
+				"name": "DokanStore",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\api.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"getProductImage": [
+			{
+				"name": "getProductImage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\api.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"mapDokanStoreToVendor": [
+			{
+				"name": "mapDokanStoreToVendor",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\api.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"mapWooProductToApp": [
+			{
+				"name": "mapWooProductToApp",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\lib\\api.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"runtime": [
+			{
+				"name": "runtime",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\api\\admin\\2fa\\route.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"Metadata": [
+			{
+				"name": "Metadata",
+				"module": "next",
+				"isDefault": false
+			}
+		],
+		"notFound": [
+			{
+				"name": "notFound",
+				"module": "next/navigation",
+				"isDefault": false
+			}
+		],
+		"fetchStores": [
+			{
+				"name": "fetchStores",
+				"module": "@/lib/woo-server",
+				"isDefault": false
+			}
+		],
+		"fetchProductsByVendor": [
+			{
+				"name": "fetchProductsByVendor",
+				"module": "@/lib/woo-server",
+				"isDefault": false
+			}
+		],
+		"VendorStoreWrapper": [
+			{
+				"name": "VendorStoreWrapper",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\VendorStoreWrapper.tsx",
+				"type": "function",
+				"isDefault": false
+			},
+			{
+				"name": "VendorStoreWrapper",
+				"module": "@/components/miad/VendorStoreWrapper",
+				"isDefault": false
+			}
+		],
+		"ShippingRatesConfig": [
+			{
+				"name": "ShippingRatesConfig",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\hooks\\useShippingRates.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"useShippingRates": [
+			{
+				"name": "useShippingRates",
+				"module": "@/hooks/useShippingRates",
+				"isDefault": false
+			},
+			{
+				"name": "useShippingRates",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\hooks\\useShippingRates.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"calcShipping": [
+			{
+				"name": "calcShipping",
+				"module": "@/hooks/useShippingRates",
+				"isDefault": false
+			},
+			{
+				"name": "calcShipping",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\hooks\\useShippingRates.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"reducer": [
+			{
+				"name": "reducer",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\ui\\use-toast.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"React": [
+			{
+				"name": "React",
+				"module": "react",
+				"isDefault": true,
+				"asDefinition": "* as React"
+			}
+		],
+		"type { ToastActionElement": [
+			{
+				"name": "type { ToastActionElement",
+				"module": "@/components/ui/toast",
+				"isDefault": true
+			}
+		],
+		"ToastProps": [
+			{
+				"name": "ToastProps",
+				"module": "@/components/ui/toast",
+				"isDefault": true
+			}
+		],
+		"useIsMobile": [
+			{
+				"name": "useIsMobile",
+				"module": "@/hooks/use-mobile",
+				"isDefault": false
+			},
+			{
+				"name": "useIsMobile",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\ui\\use-mobile.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"EspaceRepresentantRoute": [
+			{
+				"name": "EspaceRepresentantRoute",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\espace-representant\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"RepresentantPage": [
+			{
+				"name": "RepresentantPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\RepresentantPage.tsx",
+				"type": "function",
+				"isDefault": false
+			},
+			{
+				"name": "RepresentantPage",
+				"module": "@/components/miad/RepresentantPage",
+				"isDefault": false
+			}
+		],
+		"SuccessPage": [
+			{
+				"name": "SuccessPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\success\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"useState": [
+			{
+				"name": "useState",
+				"module": "react",
+				"isDefault": true
+			}
+		],
+		"Suspense": [
+			{
+				"name": "Suspense",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"type FormEvent": [
+			{
+				"name": "type FormEvent",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"useSearchParams": [
+			{
+				"name": "useSearchParams",
+				"module": "next/navigation",
+				"isDefault": false
+			}
+		],
+		"useRouter": [
+			{
+				"name": "useRouter",
+				"module": "next/navigation",
+				"isDefault": false
+			}
+		],
+		"toast": [
+			{
+				"name": "toast",
+				"module": "sonner",
+				"isDefault": false
+			}
+		],
+		"MetadataRoute": [
+			{
+				"name": "MetadataRoute",
+				"module": "next",
+				"isDefault": false
+			}
+		],
+		"robots": [
+			{
+				"name": "robots",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\robots.ts",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"Currency": [
+			{
+				"name": "Currency",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\contexts\\CurrencyContext.tsx",
+				"type": "type",
+				"isDefault": false
+			}
+		],
+		"useCurrency": [
+			{
+				"name": "useCurrency",
+				"module": "@/contexts/CurrencyContext",
+				"isDefault": false
+			},
+			{
+				"name": "useCurrency",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\contexts\\CurrencyContext.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"createContext": [
+			{
+				"name": "createContext",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"useContext": [
+			{
+				"name": "useContext",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"useCallback": [
+			{
+				"name": "useCallback",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"type ReactNode": [
+			{
+				"name": "type ReactNode",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"AdminBatekossiPage": [
+			{
+				"name": "AdminBatekossiPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\admin\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"ShieldCheck": [
+			{
+				"name": "ShieldCheck",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Database": [
+			{
+				"name": "Database",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Tag": [
+			{
+				"name": "Tag",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ArrowRight": [
+			{
+				"name": "ArrowRight",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Lock": [
+			{
+				"name": "Lock",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Key": [
+			{
+				"name": "Key",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"QrCode": [
+			{
+				"name": "QrCode",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ClipboardCopy": [
+			{
+				"name": "ClipboardCopy",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Save": [
+			{
+				"name": "Save",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Loader2": [
+			{
+				"name": "Loader2",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ShoppingCart": [
+			{
+				"name": "ShoppingCart",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Users": [
+			{
+				"name": "Users",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Activity": [
+			{
+				"name": "Activity",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"AlertTriangle": [
+			{
+				"name": "AlertTriangle",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"RefreshCw": [
+			{
+				"name": "RefreshCw",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Terminal": [
+			{
+				"name": "Terminal",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Search": [
+			{
+				"name": "Search",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Globe": [
+			{
+				"name": "Globe",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Link": [
+			{
+				"name": "Link",
+				"module": "next/link",
+				"isDefault": true
+			}
+		],
+		"Input": [
+			{
+				"name": "Input",
+				"module": "@/components/ui/input",
+				"isDefault": false
+			}
+		],
+		"CoinsPage": [
+			{
+				"name": "CoinsPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\coins\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"motion": [
+			{
+				"name": "motion",
+				"module": "framer-motion",
+				"isDefault": false
+			}
+		],
+		"AnimatePresence": [
+			{
+				"name": "AnimatePresence",
+				"module": "framer-motion",
+				"isDefault": false
+			}
+		],
+		"the": [
+			{
+				"name": "the",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\validator.ts",
+				"isDefault": false
+			}
+		],
+		"type { ResolvingMetadata": [
+			{
+				"name": "type { ResolvingMetadata",
+				"module": "next/dist/lib/metadata/types/metadata-interface.js",
+				"isDefault": true
+			},
+			{
+				"name": "type { ResolvingMetadata",
+				"module": "next/types.js",
+				"isDefault": true
+			}
+		],
+		"ResolvingViewport": [
+			{
+				"name": "ResolvingViewport",
+				"module": "next/dist/lib/metadata/types/metadata-interface.js",
+				"isDefault": true
+			},
+			{
+				"name": "ResolvingViewport",
+				"module": "next/types.js",
+				"isDefault": true
+			}
+		],
+		"ParamsOf": [
+			{
+				"name": "ParamsOf",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\routes.d.ts",
+				"type": "type",
+				"isDefault": false
+			}
+		],
+		"type": [
+			{
+				"name": "type",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\routes.d.ts",
+				"isDefault": false
+			}
+		],
+		"Page": [
+			{
+				"name": "Page",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\routes.d.ts",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"Layout": [
+			{
+				"name": "Layout",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\routes.d.ts",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"unstable_cacheLife": [
+			{
+				"name": "unstable_cacheLife",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\cache-life.d.ts",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"TooltipPrimitive": [
+			{
+				"name": "TooltipPrimitive",
+				"module": "@radix-ui/react-tooltip",
+				"isDefault": true,
+				"asDefinition": "* as TooltipPrimitive"
+			}
+		],
+		"TogglePrimitive": [
+			{
+				"name": "TogglePrimitive",
+				"module": "@radix-ui/react-toggle",
+				"isDefault": true,
+				"asDefinition": "* as TogglePrimitive"
+			}
+		],
+		"cva": [
+			{
+				"name": "cva",
+				"module": "class-variance-authority",
+				"isDefault": false
+			}
+		],
+		"type VariantProps": [
+			{
+				"name": "type VariantProps",
+				"module": "class-variance-authority",
+				"isDefault": false
+			}
+		],
+		"ToggleGroupPrimitive": [
+			{
+				"name": "ToggleGroupPrimitive",
+				"module": "@radix-ui/react-toggle-group",
+				"isDefault": true,
+				"asDefinition": "* as ToggleGroupPrimitive"
+			}
+		],
+		"toggleVariants": [
+			{
+				"name": "toggleVariants",
+				"module": "@/components/ui/toggle",
+				"isDefault": false
+			}
+		],
+		"useToast": [
+			{
+				"name": "useToast",
+				"module": "@/hooks/use-toast",
+				"isDefault": false
+			}
+		],
+		"ToastPrimitives": [
+			{
+				"name": "ToastPrimitives",
+				"module": "@radix-ui/react-toast",
+				"isDefault": true,
+				"asDefinition": "* as ToastPrimitives"
+			}
+		],
+		"X": [
+			{
+				"name": "X",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"TabsPrimitive": [
+			{
+				"name": "TabsPrimitive",
+				"module": "@radix-ui/react-tabs",
+				"isDefault": true,
+				"asDefinition": "* as TabsPrimitive"
+			}
+		],
+		"SwitchPrimitive": [
+			{
+				"name": "SwitchPrimitive",
+				"module": "@radix-ui/react-switch",
+				"isDefault": true,
+				"asDefinition": "* as SwitchPrimitive"
+			}
+		],
+		"Loader2Icon": [
+			{
+				"name": "Loader2Icon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"useTheme": [
+			{
+				"name": "useTheme",
+				"module": "next-themes",
+				"isDefault": false
+			}
+		],
+		"Toaster as Sonner": [
+			{
+				"name": "Toaster as Sonner",
+				"module": "sonner",
+				"isDefault": false
+			}
+		],
+		"ToasterProps": [
+			{
+				"name": "ToasterProps",
+				"module": "sonner",
+				"isDefault": false
+			}
+		],
+		"SliderPrimitive": [
+			{
+				"name": "SliderPrimitive",
+				"module": "@radix-ui/react-slider",
+				"isDefault": true,
+				"asDefinition": "* as SliderPrimitive"
+			}
+		],
+		"Slot": [
+			{
+				"name": "Slot",
+				"module": "@radix-ui/react-slot",
+				"isDefault": false
+			}
+		],
+		"VariantProps": [
+			{
+				"name": "VariantProps",
+				"module": "class-variance-authority",
+				"isDefault": false
+			}
+		],
+		"PanelLeftIcon": [
+			{
+				"name": "PanelLeftIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Separator": [
+			{
+				"name": "Separator",
+				"module": "@/components/ui/separator",
+				"isDefault": false
+			}
+		],
+		"SheetPrimitive": [
+			{
+				"name": "SheetPrimitive",
+				"module": "@radix-ui/react-dialog",
+				"isDefault": true,
+				"asDefinition": "* as SheetPrimitive"
+			}
+		],
+		"XIcon": [
+			{
+				"name": "XIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"SeparatorPrimitive": [
+			{
+				"name": "SeparatorPrimitive",
+				"module": "@radix-ui/react-separator",
+				"isDefault": true,
+				"asDefinition": "* as SeparatorPrimitive"
+			}
+		],
+		"SelectPrimitive": [
+			{
+				"name": "SelectPrimitive",
+				"module": "@radix-ui/react-select",
+				"isDefault": true,
+				"asDefinition": "* as SelectPrimitive"
+			}
+		],
+		"CheckIcon": [
+			{
+				"name": "CheckIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ChevronDownIcon": [
+			{
+				"name": "ChevronDownIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ChevronUpIcon": [
+			{
+				"name": "ChevronUpIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ScrollAreaPrimitive": [
+			{
+				"name": "ScrollAreaPrimitive",
+				"module": "@radix-ui/react-scroll-area",
+				"isDefault": true,
+				"asDefinition": "* as ScrollAreaPrimitive"
+			}
+		],
+		"GripVerticalIcon": [
+			{
+				"name": "GripVerticalIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ResizablePrimitive": [
+			{
+				"name": "ResizablePrimitive",
+				"module": "react-resizable-panels",
+				"isDefault": true,
+				"asDefinition": "* as ResizablePrimitive"
+			}
+		],
+		"RadioGroupPrimitive": [
+			{
+				"name": "RadioGroupPrimitive",
+				"module": "@radix-ui/react-radio-group",
+				"isDefault": true,
+				"asDefinition": "* as RadioGroupPrimitive"
+			}
+		],
+		"CircleIcon": [
+			{
+				"name": "CircleIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ProgressPrimitive": [
+			{
+				"name": "ProgressPrimitive",
+				"module": "@radix-ui/react-progress",
+				"isDefault": true,
+				"asDefinition": "* as ProgressPrimitive"
+			}
+		],
+		"PopoverPrimitive": [
+			{
+				"name": "PopoverPrimitive",
+				"module": "@radix-ui/react-popover",
+				"isDefault": true,
+				"asDefinition": "* as PopoverPrimitive"
+			}
+		],
+		"buttonVariants": [
+			{
+				"name": "buttonVariants",
+				"module": "@/components/ui/button",
+				"isDefault": false
+			}
+		],
+		"NavigationMenuPrimitive": [
+			{
+				"name": "NavigationMenuPrimitive",
+				"module": "@radix-ui/react-navigation-menu",
+				"isDefault": true,
+				"asDefinition": "* as NavigationMenuPrimitive"
+			}
+		],
+		"MenubarPrimitive": [
+			{
+				"name": "MenubarPrimitive",
+				"module": "@radix-ui/react-menubar",
+				"isDefault": true,
+				"asDefinition": "* as MenubarPrimitive"
+			}
+		],
+		"ChevronRightIcon": [
+			{
+				"name": "ChevronRightIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"LabelPrimitive": [
+			{
+				"name": "LabelPrimitive",
+				"module": "@radix-ui/react-label",
+				"isDefault": true,
+				"asDefinition": "* as LabelPrimitive"
+			}
+		],
+		"OTPInput": [
+			{
+				"name": "OTPInput",
+				"module": "input-otp",
+				"isDefault": false
+			}
+		],
+		"OTPInputContext": [
+			{
+				"name": "OTPInputContext",
+				"module": "input-otp",
+				"isDefault": false
+			}
+		],
+		"MinusIcon": [
+			{
+				"name": "MinusIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Textarea": [
+			{
+				"name": "Textarea",
+				"module": "@/components/ui/textarea",
+				"isDefault": false
+			}
+		],
+		"HoverCardPrimitive": [
+			{
+				"name": "HoverCardPrimitive",
+				"module": "@radix-ui/react-hover-card",
+				"isDefault": true,
+				"asDefinition": "* as HoverCardPrimitive"
+			}
+		],
+		"Label": [
+			{
+				"name": "Label",
+				"module": "@/components/ui/label",
+				"isDefault": false
+			}
+		],
+		"DropdownMenuPrimitive": [
+			{
+				"name": "DropdownMenuPrimitive",
+				"module": "@radix-ui/react-dropdown-menu",
+				"isDefault": true,
+				"asDefinition": "* as DropdownMenuPrimitive"
+			}
+		],
+		"Drawer as DrawerPrimitive": [
+			{
+				"name": "Drawer as DrawerPrimitive",
+				"module": "vaul",
+				"isDefault": false
+			}
+		],
+		"DialogPrimitive": [
+			{
+				"name": "DialogPrimitive",
+				"module": "@radix-ui/react-dialog",
+				"isDefault": true,
+				"asDefinition": "* as DialogPrimitive"
+			}
+		],
+		"ContextMenuPrimitive": [
+			{
+				"name": "ContextMenuPrimitive",
+				"module": "@radix-ui/react-context-menu",
+				"isDefault": true,
+				"asDefinition": "* as ContextMenuPrimitive"
+			}
+		],
+		"Command as CommandPrimitive": [
+			{
+				"name": "Command as CommandPrimitive",
+				"module": "cmdk",
+				"isDefault": false
+			}
+		],
+		"SearchIcon": [
+			{
+				"name": "SearchIcon",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"CollapsiblePrimitive": [
+			{
+				"name": "CollapsiblePrimitive",
+				"module": "@radix-ui/react-collapsible",
+				"isDefault": true,
+				"asDefinition": "* as CollapsiblePrimitive"
+			}
+		],
+		"CheckboxPrimitive": [
+			{
+				"name": "CheckboxPrimitive",
+				"module": "@radix-ui/react-checkbox",
+				"isDefault": true,
+				"asDefinition": "* as CheckboxPrimitive"
+			}
+		],
+		"ChartConfig": [
+			{
+				"name": "ChartConfig",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\ui\\chart.tsx",
+				"type": "type",
+				"isDefault": false
+			}
+		],
+		"RechartsPrimitive": [
+			{
+				"name": "RechartsPrimitive",
+				"module": "recharts",
+				"isDefault": true,
+				"asDefinition": "* as RechartsPrimitive"
+			}
+		],
+		"DayButton": [
+			{
+				"name": "DayButton",
+				"module": "react-day-picker",
+				"isDefault": false
+			}
+		],
+		"DayPicker": [
+			{
+				"name": "DayPicker",
+				"module": "react-day-picker",
+				"isDefault": false
+			}
+		],
+		"getDefaultClassNames": [
+			{
+				"name": "getDefaultClassNames",
+				"module": "react-day-picker",
+				"isDefault": false
+			}
+		],
+		"ChevronRight": [
+			{
+				"name": "ChevronRight",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"MoreHorizontal": [
+			{
+				"name": "MoreHorizontal",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"AvatarPrimitive": [
+			{
+				"name": "AvatarPrimitive",
+				"module": "@radix-ui/react-avatar",
+				"isDefault": true,
+				"asDefinition": "* as AvatarPrimitive"
+			}
+		],
+		"AspectRatioPrimitive": [
+			{
+				"name": "AspectRatioPrimitive",
+				"module": "@radix-ui/react-aspect-ratio",
+				"isDefault": true,
+				"asDefinition": "* as AspectRatioPrimitive"
+			}
+		],
+		"AlertDialogPrimitive": [
+			{
+				"name": "AlertDialogPrimitive",
+				"module": "@radix-ui/react-alert-dialog",
+				"isDefault": true,
+				"asDefinition": "* as AlertDialogPrimitive"
+			}
+		],
+		"AccordionPrimitive": [
+			{
+				"name": "AccordionPrimitive",
+				"module": "@radix-ui/react-accordion",
+				"isDefault": true,
+				"asDefinition": "* as AccordionPrimitive"
+			}
+		],
+		"ThemeProvider": [
+			{
+				"name": "ThemeProvider",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\theme-provider.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"PageProps": [
+			{
+				"name": "PageProps",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\app\\email\\batekossi@gmail.com\\page.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"LayoutProps": [
+			{
+				"name": "LayoutProps",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\.next\\types\\app\\email\\batekossi@gmail.com\\page.ts",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"VariationSelector": [
+			{
+				"name": "VariationSelector",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\VariationSelector.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"{ useState": [
+			{
+				"name": "{ useState",
+				"module": "react",
+				"isDefault": true
+			}
+		],
+		"Minus": [
+			{
+				"name": "Minus",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Plus": [
+			{
+				"name": "Plus",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Zap": [
+			{
+				"name": "Zap",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"type WooProductVariation": [
+			{
+				"name": "type WooProductVariation",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			}
+		],
+		"TrackingEvent": [
+			{
+				"name": "TrackingEvent",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\TrackingTimeline.tsx",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"TrackingData": [
+			{
+				"name": "TrackingData",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\TrackingTimeline.tsx",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"TrackingTimeline": [
+			{
+				"name": "TrackingTimeline",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\TrackingTimeline.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"MapPin": [
+			{
+				"name": "MapPin",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Clock": [
+			{
+				"name": "Clock",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"CheckCircle2": [
+			{
+				"name": "CheckCircle2",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Truck": [
+			{
+				"name": "Truck",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"AlertCircle": [
+			{
+				"name": "AlertCircle",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Plane": [
+			{
+				"name": "Plane",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"headers": [
+			{
+				"name": "headers",
+				"module": "next/headers",
+				"isDefault": false
+			}
+		],
+		"Script": [
+			{
+				"name": "Script",
+				"module": "next/script",
+				"isDefault": true
+			}
+		],
+		"StripePaymentForm": [
+			{
+				"name": "StripePaymentForm",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\StripePaymentForm.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"PaymentElement": [
+			{
+				"name": "PaymentElement",
+				"module": "@stripe/react-stripe-js",
+				"isDefault": false
+			}
+		],
+		"useStripe": [
+			{
+				"name": "useStripe",
+				"module": "@stripe/react-stripe-js",
+				"isDefault": false
+			}
+		],
+		"useElements": [
+			{
+				"name": "useElements",
+				"module": "@stripe/react-stripe-js",
+				"isDefault": false
+			}
+		],
+		"StoresListPage": [
+			{
+				"name": "StoresListPage",
+				"module": "@/components/miad/StoresListPage",
+				"isDefault": false
+			},
+			{
+				"name": "StoresListPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\StoresListPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"StandaloneHeader": [
+			{
+				"name": "StandaloneHeader",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\StandaloneHeader.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Home": [
+			{
+				"name": "Home",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"BadgeCheck": [
+			{
+				"name": "BadgeCheck",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"CurrencySelector": [
+			{
+				"name": "CurrencySelector",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CurrencySelector.tsx",
+				"type": "function",
+				"isDefault": false
+			},
+			{
+				"name": "CurrencySelector",
+				"module": "@/components/miad/CurrencySelector",
+				"isDefault": false
+			}
+		],
+		"ShippingLabel": [
+			{
+				"name": "ShippingLabel",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ShippingLabel.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Printer": [
+			{
+				"name": "Printer",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ShippingInfo": [
+			{
+				"name": "ShippingInfo",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ShippingInfo.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"{ useMemo": [
+			{
+				"name": "{ useMemo",
+				"module": "react",
+				"isDefault": true
+			}
+		],
+		"Info": [
+			{
+				"name": "Info",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"MessageCircle": [
+			{
+				"name": "MessageCircle",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Calendar": [
+			{
+				"name": "Calendar",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"PackageCheck": [
+			{
+				"name": "PackageCheck",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ShipmentOrder": [
+			{
+				"name": "ShipmentOrder",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ShipmentManager.tsx",
+				"type": "interface",
+				"isDefault": false
+			}
+		],
+		"ShipmentManager": [
+			{
+				"name": "ShipmentManager",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ShipmentManager.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Share2": [
+			{
+				"name": "Share2",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Link2": [
+			{
+				"name": "Link2",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Check": [
+			{
+				"name": "Check",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Facebook": [
+			{
+				"name": "Facebook",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Twitter": [
+			{
+				"name": "Twitter",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Copy": [
+			{
+				"name": "Copy",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"LogOut": [
+			{
+				"name": "LogOut",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"DollarSign": [
+			{
+				"name": "DollarSign",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ShoppingBag": [
+			{
+				"name": "ShoppingBag",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"TrendingUp": [
+			{
+				"name": "TrendingUp",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Eye": [
+			{
+				"name": "Eye",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Phone": [
+			{
+				"name": "Phone",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Bell": [
+			{
+				"name": "Bell",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"RepMessages": [
+			{
+				"name": "RepMessages",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\RepMessages.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Send": [
+			{
+				"name": "Send",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"User": [
+			{
+				"name": "User",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ChevronLeft": [
+			{
+				"name": "ChevronLeft",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Mail": [
+			{
+				"name": "Mail",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"RegisterPage": [
+			{
+				"name": "RegisterPage",
+				"module": "@/components/miad/RegisterPage",
+				"isDefault": false
+			},
+			{
+				"name": "RegisterPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\RegisterPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"QuickSelectModal": [
+			{
+				"name": "QuickSelectModal",
+				"module": "@/components/miad/QuickSelectModal",
+				"isDefault": false
+			},
+			{
+				"name": "QuickSelectModal",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\QuickSelectModal.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"type WooProductAttribute": [
+			{
+				"name": "type WooProductAttribute",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			}
+		],
+		"QRCodeImage": [
+			{
+				"name": "QRCodeImage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\QRCodeImage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"initPushNotifications": [
+			{
+				"name": "initPushNotifications",
+				"module": "@/lib/push",
+				"isDefault": false
+			}
+		],
+		"saveTokenToServer": [
+			{
+				"name": "saveTokenToServer",
+				"module": "@/lib/push",
+				"isDefault": false
+			}
+		],
+		"ProgressBar": [
+			{
+				"name": "ProgressBar",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProgressBar.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"NProgress": [
+			{
+				"name": "NProgress",
+				"module": "nprogress",
+				"isDefault": true
+			}
+		],
+		"usePathname": [
+			{
+				"name": "usePathname",
+				"module": "next/navigation",
+				"isDefault": false
+			}
+		],
+		"ProductVariations": [
+			{
+				"name": "ProductVariations",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductVariations.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"ProductTicker": [
+			{
+				"name": "ProductTicker",
+				"module": "@/components/miad/ProductTicker",
+				"isDefault": false
+			},
+			{
+				"name": "ProductTicker",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductTicker.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Compass": [
+			{
+				"name": "Compass",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ProductSkeleton": [
+			{
+				"name": "ProductSkeleton",
+				"module": "@/components/miad/ProductSkeleton",
+				"isDefault": false
+			},
+			{
+				"name": "ProductSkeleton",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductSkeleton.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"ProductShippingEstimate": [
+			{
+				"name": "ProductShippingEstimate",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductShippingEstimate.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Popover": [
+			{
+				"name": "Popover",
+				"module": "@/components/ui/popover",
+				"isDefault": false
+			}
+		],
+		"PopoverContent": [
+			{
+				"name": "PopoverContent",
+				"module": "@/components/ui/popover",
+				"isDefault": false
+			}
+		],
+		"PopoverTrigger": [
+			{
+				"name": "PopoverTrigger",
+				"module": "@/components/ui/popover",
+				"isDefault": false
+			}
+		],
+		"ProductReviewForm": [
+			{
+				"name": "ProductReviewForm",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductReviewForm.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"ProductDetailWrapper": [
+			{
+				"name": "ProductDetailWrapper",
+				"module": "@/components/miad/ProductDetailWrapper",
+				"isDefault": false
+			},
+			{
+				"name": "ProductDetailWrapper",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductDetailWrapper.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"ProductDetailProps": [
+			{
+				"name": "ProductDetailProps",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductDetail.tsx",
+				"type": "type",
+				"isDefault": false
+			}
+		],
+		"ProductDetail": [
+			{
+				"name": "ProductDetail",
+				"module": "@/components/miad/ProductDetail",
+				"isDefault": false
+			},
+			{
+				"name": "ProductDetail",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ProductDetail.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Dialog": [
+			{
+				"name": "Dialog",
+				"module": "@/components/ui/dialog",
+				"isDefault": false
+			}
+		],
+		"DialogContent": [
+			{
+				"name": "DialogContent",
+				"module": "@/components/ui/dialog",
+				"isDefault": false
+			}
+		],
+		"DialogHeader": [
+			{
+				"name": "DialogHeader",
+				"module": "@/components/ui/dialog",
+				"isDefault": false
+			}
+		],
+		"DialogTitle": [
+			{
+				"name": "DialogTitle",
+				"module": "@/components/ui/dialog",
+				"isDefault": false
+			}
+		],
+		"DialogDescription": [
+			{
+				"name": "DialogDescription",
+				"module": "@/components/ui/dialog",
+				"isDefault": false
+			}
+		],
+		"DOMPurify": [
+			{
+				"name": "DOMPurify",
+				"module": "dompurify",
+				"isDefault": true
+			}
+		],
+		"Tabs": [
+			{
+				"name": "Tabs",
+				"module": "@/components/ui/tabs",
+				"isDefault": false
+			}
+		],
+		"TabsContent": [
+			{
+				"name": "TabsContent",
+				"module": "@/components/ui/tabs",
+				"isDefault": false
+			}
+		],
+		"TabsList": [
+			{
+				"name": "TabsList",
+				"module": "@/components/ui/tabs",
+				"isDefault": false
+			}
+		],
+		"TabsTrigger": [
+			{
+				"name": "TabsTrigger",
+				"module": "@/components/ui/tabs",
+				"isDefault": false
+			}
+		],
+		"Progress": [
+			{
+				"name": "Progress",
+				"module": "@/components/ui/progress",
+				"isDefault": false
+			}
+		],
+		"OtpInput": [
+			{
+				"name": "OtpInput",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\OtpInput.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"ClipboardEvent": [
+			{
+				"name": "ClipboardEvent",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"KeyboardEvent": [
+			{
+				"name": "KeyboardEvent",
+				"module": "react",
+				"isDefault": false
+			}
+		],
+		"OrderHistory": [
+			{
+				"name": "OrderHistory",
+				"module": "@/components/miad/OrderHistory",
+				"isDefault": false
+			},
+			{
+				"name": "OrderHistory",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\OrderHistory.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"CheckCircle": [
+			{
+				"name": "CheckCircle",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"XCircle": [
+			{
+				"name": "XCircle",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"OrderDetailPanel": [
+			{
+				"name": "OrderDetailPanel",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\OrderDetailPanel.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"MobileSidebar": [
+			{
+				"name": "MobileSidebar",
+				"module": "@/components/miad/MobileSidebar",
+				"isDefault": false
+			},
+			{
+				"name": "MobileSidebar",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\MobileSidebar.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Heart": [
+			{
+				"name": "Heart",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Settings": [
+			{
+				"name": "Settings",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"MiadAIChat": [
+			{
+				"name": "MiadAIChat",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\MiadAIChat.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Sparkles": [
+			{
+				"name": "Sparkles",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ExternalLink": [
+			{
+				"name": "ExternalLink",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Bot": [
+			{
+				"name": "Bot",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"LoginPage": [
+			{
+				"name": "LoginPage",
+				"module": "@/components/miad/LoginPage",
+				"isDefault": false
+			},
+			{
+				"name": "LoginPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\LoginPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Download": [
+			{
+				"name": "Download",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Smartphone": [
+			{
+				"name": "Smartphone",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Wifi": [
+			{
+				"name": "Wifi",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"HomePage": [
+			{
+				"name": "HomePage",
+				"module": "@/components/miad/HomePage",
+				"isDefault": false
+			},
+			{
+				"name": "HomePage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\HomePage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Headphones": [
+			{
+				"name": "Headphones",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"HeroSection": [
+			{
+				"name": "HeroSection",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\HeroSection.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Shield": [
+			{
+				"name": "Shield",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"HelpCenter": [
+			{
+				"name": "HelpCenter",
+				"module": "@/components/miad/HelpCenter",
+				"isDefault": false
+			},
+			{
+				"name": "HelpCenter",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\HelpCenter.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Header": [
+			{
+				"name": "Header",
+				"module": "@/components/miad/Header",
+				"isDefault": false
+			},
+			{
+				"name": "Header",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\Header.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Menu": [
+			{
+				"name": "Menu",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ChevronDown": [
+			{
+				"name": "ChevronDown",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"HelpCircle": [
+			{
+				"name": "HelpCircle",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"LayoutDashboard": [
+			{
+				"name": "LayoutDashboard",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"BarChart2": [
+			{
+				"name": "BarChart2",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"LogIn": [
+			{
+				"name": "LogIn",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"type WooCategory": [
+			{
+				"name": "type WooCategory",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			}
+		],
+		"Footer": [
+			{
+				"name": "Footer",
+				"module": "@/components/miad/Footer",
+				"isDefault": false
+			},
+			{
+				"name": "Footer",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\Footer.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"FlashSalesSection": [
+			{
+				"name": "FlashSalesSection",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\FlashSalesSection.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"EmailBlast": [
+			{
+				"name": "EmailBlast",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\EmailBlast.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"EyeOff": [
+			{
+				"name": "EyeOff",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Dashboard": [
+			{
+				"name": "Dashboard",
+				"module": "@/components/miad/Dashboard",
+				"isDefault": false
+			},
+			{
+				"name": "Dashboard",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\Dashboard.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"type Currency": [
+			{
+				"name": "type Currency",
+				"module": "@/contexts/CurrencyContext",
+				"isDefault": false
+			}
+		],
+		"DEMO_COUPONS": [
+			{
+				"name": "DEMO_COUPONS",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CouponsSection.tsx",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"CouponsSection": [
+			{
+				"name": "CouponsSection",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CouponsSection.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"validateCoupon": [
+			{
+				"name": "validateCoupon",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CouponsSection.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Ticket": [
+			{
+				"name": "Ticket",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"CountrySection": [
+			{
+				"name": "CountrySection",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CountrySection.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"type Country": [
+			{
+				"name": "type Country",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			}
+		],
+		"CountryPage": [
+			{
+				"name": "CountryPage",
+				"module": "@/components/miad/CountryPage",
+				"isDefault": false
+			},
+			{
+				"name": "CountryPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CountryPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Image": [
+			{
+				"name": "Image",
+				"module": "next/image",
+				"isDefault": true
+			}
+		],
+		"LayoutGrid": [
+			{
+				"name": "LayoutGrid",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Grid": [
+			{
+				"name": "Grid",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"List": [
+			{
+				"name": "List",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ContactVendorForm": [
+			{
+				"name": "ContactVendorForm",
+				"module": "@/components/miad/ContactVendorForm",
+				"isDefault": false
+			},
+			{
+				"name": "ContactVendorForm",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ContactVendorForm.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"MessageSquare": [
+			{
+				"name": "MessageSquare",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"CoinsWidget": [
+			{
+				"name": "CoinsWidget",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CoinsWidget.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"CoinsBanner": [
+			{
+				"name": "CoinsBanner",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CoinsBanner.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Flame": [
+			{
+				"name": "Flame",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"ClientDashboard": [
+			{
+				"name": "ClientDashboard",
+				"module": "@/components/miad/ClientDashboard",
+				"isDefault": false
+			},
+			{
+				"name": "ClientDashboard",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\ClientDashboard.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"CheckoutPage": [
+			{
+				"name": "CheckoutPage",
+				"module": "@/components/miad/CheckoutPage",
+				"isDefault": false
+			},
+			{
+				"name": "CheckoutPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CheckoutPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"CreditCard": [
+			{
+				"name": "CreditCard",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Wallet": [
+			{
+				"name": "Wallet",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"type CartItem": [
+			{
+				"name": "type CartItem",
+				"module": "@/lib/woocommerce",
+				"isDefault": false
+			}
+		],
+		"loadStripe": [
+			{
+				"name": "loadStripe",
+				"module": "@stripe/stripe-js",
+				"isDefault": false
+			}
+		],
+		"Elements": [
+			{
+				"name": "Elements",
+				"module": "@stripe/react-stripe-js",
+				"isDefault": false
+			}
+		],
+		"CategoryPage": [
+			{
+				"name": "CategoryPage",
+				"module": "@/components/miad/CategoryPage",
+				"isDefault": false
+			},
+			{
+				"name": "CategoryPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CategoryPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"{ mutate": [
+			{
+				"name": "{ mutate",
+				"module": "swr",
+				"isDefault": true
+			}
+		],
+		"SlidersHorizontal": [
+			{
+				"name": "SlidersHorizontal",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"CategoriesSection": [
+			{
+				"name": "CategoriesSection",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CategoriesSection.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Shirt": [
+			{
+				"name": "Shirt",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Palette": [
+			{
+				"name": "Palette",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Coffee": [
+			{
+				"name": "Coffee",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"Utensils": [
+			{
+				"name": "Utensils",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"CategoriesListPage": [
+			{
+				"name": "CategoriesListPage",
+				"module": "@/components/miad/CategoriesListPage",
+				"isDefault": false
+			},
+			{
+				"name": "CategoriesListPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CategoriesListPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"CartPage": [
+			{
+				"name": "CartPage",
+				"module": "@/components/miad/CartPage",
+				"isDefault": false
+			},
+			{
+				"name": "CartPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\CartPage.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"Trash2": [
+			{
+				"name": "Trash2",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"BottomNav": [
+			{
+				"name": "BottomNav",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\BottomNav.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"AdminDashboard": [
+			{
+				"name": "AdminDashboard",
+				"module": "@/components/miad/AdminDashboard",
+				"isDefault": false
+			},
+			{
+				"name": "AdminDashboard",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\AdminDashboard.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"FileSpreadsheet": [
+			{
+				"name": "FileSpreadsheet",
+				"module": "lucide-react",
+				"isDefault": false
+			}
+		],
+		"clearAllCaches": [
+			{
+				"name": "clearAllCaches",
+				"module": "@/lib/clear-cache",
+				"isDefault": false
+			}
+		],
+		"AddToCartButton": [
+			{
+				"name": "AddToCartButton",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\components\\miad\\AddToCartButton.tsx",
+				"type": "function",
+				"isDefault": false
+			}
+		],
+		"AuthPage": [
+			{
+				"name": "AuthPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\auth\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"revalidate": [
+			{
+				"name": "revalidate",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\api\\shipping-rates\\route.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"fetchInitialProducts": [
+			{
+				"name": "fetchInitialProducts",
+				"module": "@/lib/woo-server",
+				"isDefault": false
+			}
+		],
+		"fetchInitialCategories": [
+			{
+				"name": "fetchInitialCategories",
+				"module": "@/lib/woo-server",
+				"isDefault": false
+			}
+		],
+		"NotFound": [
+			{
+				"name": "NotFound",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\not-found.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"redirect": [
+			{
+				"name": "redirect",
+				"module": "next/navigation",
+				"isDefault": false
+			}
+		],
+		"MiadMarketClient": [
+			{
+				"name": "MiadMarketClient",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\MiadMarketClient.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"useSWRInfinite": [
+			{
+				"name": "useSWRInfinite",
+				"module": "swr/infinite",
+				"isDefault": true
+			}
+		],
+		"PromotionPage": [
+			{
+				"name": "PromotionPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\promotions\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"fetchProductBySlug": [
+			{
+				"name": "fetchProductBySlug",
+				"module": "@/lib/woo-server",
+				"isDefault": false
+			}
+		],
+		"ResetPasswordPage": [
+			{
+				"name": "ResetPasswordPage",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\reset-password\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"RegisterRoute": [
+			{
+				"name": "RegisterRoute",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\register\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"LoginPageRoute": [
+			{
+				"name": "LoginPageRoute",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\Login\\page.tsx",
+				"type": "function",
+				"isDefault": true
+			}
+		],
+		"revalidatePath": [
+			{
+				"name": "revalidatePath",
+				"module": "next/cache",
+				"isDefault": false
+			}
+		],
+		"revalidateTag": [
+			{
+				"name": "revalidateTag",
+				"module": "next/cache",
+				"isDefault": false
+			}
+		],
+		"NextRequest": [
+			{
+				"name": "NextRequest",
+				"module": "next/server",
+				"isDefault": false
+			}
+		],
+		"PhotonImage": [
+			{
+				"name": "PhotonImage",
+				"module": "@cf-wasm/photon/edge-light",
+				"isDefault": false
+			}
+		],
+		"SamplingFilter": [
+			{
+				"name": "SamplingFilter",
+				"module": "@cf-wasm/photon/edge-light",
+				"isDefault": false
+			}
+		],
+		"resize": [
+			{
+				"name": "resize",
+				"module": "@cf-wasm/photon/edge-light",
+				"isDefault": false
+			}
+		],
+		"fetchWpUser": [
+			{
+				"name": "fetchWpUser",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			}
+		],
+		"dynamic": [
+			{
+				"name": "dynamic",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\api\\products\\route.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"isRep as checkIsRep": [
+			{
+				"name": "isRep as checkIsRep",
+				"module": "@/lib/miad-server-auth",
+				"isDefault": false
+			}
+		],
+		"getGoogleAccessToken": [
+			{
+				"name": "getGoogleAccessToken",
+				"module": "@/lib/firebase-custom-token",
+				"isDefault": false
+			}
+		],
+		"maxDuration": [
+			{
+				"name": "maxDuration",
+				"path": "c:\\Users\\Admin\\OneDrive\\Pictures\\im\\Desktop\\v0-miad-front-end\\app\\api\\products\\route.ts",
+				"type": "const",
+				"isDefault": false
+			}
+		],
+		"AdminBanner": [
+			{
+				"name": "AdminBanner",
+				"module": "@/components/admin/AdminBanner",
+				"isDefault": true
+			}
+		],
+		"satori": [
+			{
+				"name": "satori",
+				"module": "satori",
+				"isDefault": true
+			}
+		],
+		"Resvg": [
+			{
+				"name": "Resvg",
+				"module": "@cf-wasm/resvg/edge-light",
+				"isDefault": false
+			}
+		],
+		"qrcode": [
+			{
+				"name": "qrcode",
+				"module": "qrcode-generator",
+				"isDefault": true
+			}
+		]
+	}
+}

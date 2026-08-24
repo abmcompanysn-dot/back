@@ -1,0 +1,20 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /dashboard/
+Disallow: /checkout/
+Disallow: /Login
+Disallow: /login/
+Disallow: /register
+Disallow: /auth
+Disallow: /reset-password
+Disallow: /success
+Disallow: /espace-representant
+Disallow: /email/
+Disallow: /fr/
+Disallow: /*?id=*
+Disallow: /*?view=*
+Disallow: /*?lang=*
+
+Sitemap: https://www.miadmarket.com/sitemap.xml

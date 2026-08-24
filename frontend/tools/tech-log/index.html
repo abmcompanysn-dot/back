@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MIAD Tech Log</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #1a1a1a; min-height: 100vh; }
+
+    /* ── HEADER ── */
+    header { background: #1a1a2e; color: #fff; padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.3); position: sticky; top: 0; z-index: 100; }
+    header img { height: 28px; }
+    header h1 { font-size: 16px; font-weight: 700; }
+    header .tag { font-size: 10px; background: #c0392b; padding: 2px 8px; border-radius: 10px; margin-left: 4px; }
+    #user-info { margin-left: auto; font-size: 12px; color: rgba(255,255,255,.7); display: flex; align-items: center; gap: 12px; }
+    #btn-logout { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+    #btn-logout:hover { background: rgba(255,255,255,.2); }
+
+    /* ── LOGIN ── */
+    #screen-login { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: linear-gradient(135deg, #1a1a2e 0%, #2c3e50 100%); }
+    .login-box { background: #fff; border-radius: 16px; padding: 40px 36px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+    .login-logo { text-align: center; margin-bottom: 24px; }
+    .login-logo img { height: 44px; }
+    .login-title { text-align: center; font-size: 20px; font-weight: 800; color: #1a1a2e; margin-bottom: 4px; }
+    .login-sub { text-align: center; font-size: 13px; color: #888; margin-bottom: 28px; }
+    .login-field { margin-bottom: 16px; }
+    .login-field label { display: block; font-size: 12px; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+    .login-field input { width: 100%; border: 2px solid #eee; border-radius: 8px; padding: 11px 14px; font-size: 14px; transition: border-color .2s; }
+    .login-field input:focus { outline: none; border-color: #c0392b; }
+    .login-error { color: #c0392b; font-size: 12px; margin-top: -8px; margin-bottom: 12px; display: none; }
+    .btn-login { width: 100%; background: #c0392b; color: #fff; border: none; border-radius: 9px; padding: 13px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background .2s; }
+    .btn-login:hover { background: #a93226; }
+
+    /* ── LAYOUT APP ── */
+    #screen-app { display: none; }
+    .container { max-width: 980px; margin: 0 auto; padding: 28px 16px 60px; }
+
+    /* ── TABS ── */
+    .tabs { display: flex; gap: 4px; background: #fff; border-radius: 12px; padding: 6px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+    .tab { flex: 1; text-align: center; padding: 10px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: #777; transition: all .2s; border: none; background: none; }
+    .tab.active { background: #c0392b; color: #fff; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── CARDS ── */
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.07); overflow: hidden; margin-bottom: 20px; }
+    .card-header { background: #2c3e50; color: #fff; padding: 14px 20px; font-size: 14px; font-weight: 700; }
+    .card-header.red { background: #c0392b; }
+    .card-header.green { background: #1e8449; }
+    .card-body { padding: 20px; }
+
+    /* ── STATS ADMIN ── */
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
+    @media(max-width:700px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+    .stat-card { background: #fff; border-radius: 12px; padding: 18px 20px; box-shadow: 0 2px 8px rgba(0,0,0,.07); border-left: 4px solid #ddd; }
+    .stat-card.green { border-color: #1e8449; }
+    .stat-card.orange { border-color: #e67e22; }
+    .stat-card.red { border-color: #c0392b; }
+    .stat-card.blue { border-color: #2980b9; }
+    .stat-num { font-size: 28px; font-weight: 800; color: #1a1a2e; }
+    .stat-label { font-size: 12px; color: #888; margin-top: 2px; }
+
+    /* ── FORMULAIRE ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media(max-width:600px) { .grid-2 { grid-template-columns: 1fr; } }
+    .full { grid-column: 1/-1; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    label { font-size: 12px; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: .4px; }
+    label .req { color: #c0392b; }
+    input[type=text], input[type=number], select, textarea {
+      border: 1.5px solid #ddd; border-radius: 7px; padding: 9px 12px;
+      font-size: 14px; font-family: inherit; transition: border-color .2s; background: #fff; width: 100%;
+    }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #c0392b; box-shadow: 0 0 0 3px rgba(192,57,43,.1); }
+    textarea { resize: vertical; min-height: 90px; }
+
+    /* ── STATUT PILLS ── */
+    .statut-group { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+    .statut-pill { display: none; }
+    .statut-pill + label { cursor: pointer; padding: 8px 18px; border-radius: 20px; border: 2px solid #ddd; font-size: 13px; font-weight: 700; text-transform: none; letter-spacing: 0; color: #555; transition: all .15s; }
+    #s-resolu:checked   + label { background: #d5f5e3; color: #1e8449; border-color: #1e8449; }
+    #s-encours:checked  + label { background: #fef9e7; color: #b7950b; border-color: #b7950b; }
+    #s-escalade:checked + label { background: #fce4e4; color: #c0392b; border-color: #c0392b; }
+
+    /* ── BOUTONS ── */
+    .btn { border: none; border-radius: 8px; padding: 11px 22px; font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity .2s; }
+    .btn-primary { background: #c0392b; color: #fff; width: 100%; padding: 13px; font-size: 15px; }
+    .btn-primary:hover { opacity: .88; }
+    .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+    .btn-sm { padding: 6px 14px; font-size: 12px; }
+    .btn-export { background: #2980b9; color: #fff; }
+
+    /* ── TABLE INTERVENTIONS ── */
+    .search-bar { width: 100%; border: 1.5px solid #ddd; border-radius: 8px; padding: 10px 14px; font-size: 14px; margin-bottom: 14px; }
+    .search-bar:focus { outline: none; border-color: #c0392b; }
+    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .filter-row select { flex: 1; min-width: 140px; }
+    .table-wrap { overflow-x: auto; }
+    table.log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.log-table th { background: #2c3e50; color: #fff; padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
+    table.log-table td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+    table.log-table tr:hover td { background: #f9f9f9; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+    .badge.resolu { background: #d5f5e3; color: #1e8449; }
+    .badge.encours { background: #fef9e7; color: #b7950b; }
+    .badge.escalade { background: #fce4e4; color: #c0392b; }
+    .truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+
+    /* ── DETAIL MODAL ── */
+    #modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 200; align-items: center; justify-content: center; padding: 20px; }
+    #modal.open { display: flex; }
+    .modal-box { background: #fff; border-radius: 14px; max-width: 680px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 28px; position: relative; }
+    .modal-close { position: absolute; top: 16px; right: 16px; background: #eee; border: none; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 18px; line-height: 32px; text-align: center; }
+    .modal-section { margin-bottom: 14px; padding: 12px 14px; border-radius: 8px; border-left: 4px solid #ccc; }
+    .modal-section.desc { background: #f8f9fa; border-color: #555; }
+    .modal-section.err  { background: #fdf2f2; border-color: #e74c3c; }
+    .modal-section.mod  { background: #f2fdf5; border-color: #27ae60; }
+    .modal-section.note { background: #fffde7; border-color: #f39c12; }
+    .modal-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+
+    /* ── HISTORIQUE LOCAL ── */
+    .hist-item { background: #fff; border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; border-left: 4px solid #ccc; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    .hist-item.resolu  { border-color: #1e8449; }
+    .hist-item.encours { border-color: #b7950b; }
+    .hist-item.escalade{ border-color: #c0392b; }
+
+    /* ── TOAST ── */
+    #toast { position: fixed; bottom: 24px; right: 20px; padding: 12px 20px; border-radius: 10px; color: #fff; font-weight: 700; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.25); transform: translateY(80px); opacity: 0; transition: all .3s; z-index: 999; }
+    #toast.show { transform: translateY(0); opacity: 1; }
+    #toast.ok  { background: #1e8449; }
+    #toast.err { background: #c0392b; }
+
+    #loading-admin { text-align: center; color: #888; padding: 40px; }
+
+    /* ── PARAMÈTRES ── */
+    .param-section { margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #f0f0f0; }
+    .param-section:last-child { border-bottom: none; }
+    .param-title { font-size: 14px; font-weight: 800; color: #1a1a2e; margin-bottom: 12px; }
+    .url-row { display: flex; gap: 10px; }
+    .url-row input { flex: 1; }
+    .account-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    .account-item { display: flex; align-items: center; gap: 10px; background: #f8f9fa; border-radius: 8px; padding: 10px 14px; font-size: 13px; }
+    .account-item .role-pill { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+    .pill-admin { background: #d6eaf8; color: #2980b9; }
+    .pill-tech  { background: #d5f5e3; color: #1e8449; }
+    .account-item .del-btn { margin-left: auto; background: none; border: none; color: #c0392b; cursor: pointer; font-size: 16px; line-height: 1; }
+    .add-account-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
+    .add-account-row select, .add-account-row input { padding: 8px 12px; }
+    .btn-add { background: #1e8449; color: #fff; border: none; border-radius: 8px; padding: 9px 16px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════ ÉCRAN LOGIN ═══════════════════ -->
+<div id="screen-login">
+  <div class="login-box">
+    <div class="login-logo">
+      <img src="https://www.miadmarket.com/logo/logo.png" alt="MIAD Market"
+           onerror="this.outerHTML='<div style=\'font-size:22px;font-weight:900;color:#c0392b;\'>MIAD</div>'">
+    </div>
+    <div class="login-title">Tech Log</div>
+    <div class="login-sub">Journal des interventions techniques</div>
+    <div class="login-field">
+      <label>Mot de passe</label>
+      <input type="password" id="login-pwd" placeholder="••••••••" onkeydown="if(event.key==='Enter')seConnecter()">
+    </div>
+    <div class="login-error" id="login-err">Mot de passe incorrect.</div>
+    <button class="btn-login" onclick="seConnecter()">Se connecter →</button>
+  </div>
+</div>
+
+<!-- ═══════════════════ APP ═══════════════════ -->
+<div id="screen-app">
+  <header>
+    <img src="https://www.miadmarket.com/logo/logo.png" alt="MIAD"
+         onerror="this.outerHTML='<span style=\'color:#c0392b;font-weight:900;font-size:18px;\'>MIAD</span>'">
+    <h1>Tech Log <span class="tag" id="role-tag">—</span></h1>
+    <div id="user-info">
+      <span id="user-label"></span>
+      <button id="btn-logout" onclick="seDeconnecter()">Déconnexion</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="tabs" id="tabs-container"></div>
+
+    <!-- ── TAB : NOUVELLE INTERVENTION ── -->
+    <div class="tab-panel" id="panel-form">
+      <form id="form-intervention" onsubmit="soumettre(event)">
+        <div class="card">
+          <div class="card-header">👤 Identification</div>
+          <div class="card-body grid-2">
+            <div class="field">
+              <label>Technicien <span class="req">*</span></label>
+              <input type="text" name="technicien" id="input-technicien" placeholder="Votre nom" required>
+            </div>
+            <div class="field">
+              <label>Type d'intervention <span class="req">*</span></label>
+              <select name="type" required>
+                <option value="">— Choisir —</option>
+                <option>Déploiement</option>
+                <option>Correction de bug</option>
+                <option>Mise à jour / Configuration</option>
+                <option>Diagnostic</option>
+                <option>Optimisation performance</option>
+                <option>Sécurité</option>
+                <option>Restauration / Rollback</option>
+                <option>Autre</option>
+              </select>
+            </div>
+            <div class="field full">
+              <label>Composant affecté <span class="req">*</span></label>
+              <select name="composant" required>
+                <option value="">— Choisir —</option>
+                <option>Frontend Next.js / Cloudflare Pages</option>
+                <option>WordPress / WooCommerce</option>
+                <option>Paiement Stripe</option>
+                <option>Paiement PayDunya (Mobile Money)</option>
+                <option>CDN / Cloudflare R2</option>
+                <option>Notifications push (FCM)</option>
+                <option>WPML / Traductions</option>
+                <option>Journal Tech Log / Apps Script</option>
+                <option>Emails</option>
+                <option>Authentification JWT</option>
+                <option>Autre</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">📋 Détail de l'intervention</div>
+          <div class="card-body grid-2">
+            <div class="field full">
+              <label>Description <span class="req">*</span></label>
+              <textarea name="description" placeholder="Ce qui a été fait, pourquoi, comment..." required></textarea>
+            </div>
+            <div class="field full">
+              <label>🔴 Erreurs / Problèmes détectés</label>
+              <textarea name="erreurs" style="min-height:75px;border-color:#f5b7b1;" placeholder="Messages d'erreur, comportements inattendus..."></textarea>
+            </div>
+            <div class="field full">
+              <label>🔧 Modifications apportées</label>
+              <textarea name="modifications" style="min-height:75px;border-color:#a9dfbf;" placeholder="Fichiers, snippets, paramètres modifiés..."></textarea>
+            </div>
+            <div class="field">
+              <label>Durée (minutes)</label>
+              <input type="number" name="duree" placeholder="ex: 30" min="1">
+            </div>
+            <div class="field">
+              <label>Statut <span class="req">*</span></label>
+              <div class="statut-group">
+                <input type="radio" name="statut" id="s-resolu"   value="Résolu"   class="statut-pill" required>
+                <label for="s-resolu">✅ Résolu</label>
+                <input type="radio" name="statut" id="s-encours"  value="En cours" class="statut-pill">
+                <label for="s-encours">⚠️ En cours</label>
+                <input type="radio" name="statut" id="s-escalade" value="Escaladé" class="statut-pill">
+                <label for="s-escalade">🚨 Escaladé</label>
+              </div>
+            </div>
+            <div class="field full">
+              <label>Notes & Prochaines étapes</label>
+              <textarea name="notes" style="min-height:65px;" placeholder="Liens, références, actions à venir..."></textarea>
+            </div>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary" id="btn-submit">📤 Enregistrer l'intervention</button>
+      </form>
+    </div>
+
+    <!-- ── TAB : MON HISTORIQUE (technicien) ── -->
+    <div class="tab-panel" id="panel-mon-historique">
+      <div class="card">
+        <div class="card-header">📁 Mes interventions (cet appareil)</div>
+        <div class="card-body">
+          <div id="liste-historique-local"></div>
+          <div id="no-hist-local" style="color:#aaa;font-size:13px;">Aucune intervention enregistrée.</div>
+          <button class="btn btn-sm" style="background:#eee;color:#555;margin-top:12px;" onclick="clearHistorique()">🗑 Effacer l'historique local</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB : DASHBOARD ADMIN ── -->
+    <div class="tab-panel" id="panel-admin">
+      <div class="stats-grid" id="stats-grid"></div>
+
+      <div class="card">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>📊 Toutes les interventions</span>
+          <button class="btn btn-sm btn-export" onclick="exporterCSV()">⬇ Export CSV</button>
+        </div>
+        <div class="card-body">
+          <input type="text" class="search-bar" id="search-bar" placeholder="🔍 Rechercher..." oninput="filtrerTable()">
+          <div class="filter-row">
+            <select id="filtre-statut" onchange="filtrerTable()">
+              <option value="">Tous les statuts</option>
+              <option value="Résolu">✅ Résolu</option>
+              <option value="En cours">⚠️ En cours</option>
+              <option value="Escaladé">🚨 Escaladé</option>
+            </select>
+            <select id="filtre-composant" onchange="filtrerTable()">
+              <option value="">Tous les composants</option>
+            </select>
+            <select id="filtre-technicien" onchange="filtrerTable()">
+              <option value="">Tous les techniciens</option>
+            </select>
+          </div>
+          <div id="loading-admin">⏳ Chargement des données...</div>
+          <div class="table-wrap" id="table-wrap" style="display:none;">
+            <table class="log-table">
+              <thead>
+                <tr>
+                  <th>Date</th><th>Technicien</th><th>Type</th><th>Composant</th>
+                  <th>Description</th><th>Statut</th><th>Durée</th>
+                </tr>
+              </thead>
+              <tbody id="table-body"></tbody>
+            </table>
+          </div>
+          <div id="no-results" style="display:none;color:#aaa;text-align:center;padding:30px;">Aucun résultat.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB : PARAMÈTRES ADMIN ── -->
+    <div class="tab-panel" id="panel-parametres">
+      <div class="card">
+        <div class="card-header red">⚙️ Paramètres système</div>
+        <div class="card-body">
+
+          <!-- Gestion des comptes -->
+          <div class="param-section">
+            <div class="param-title">👥 Comptes & Accès</div>
+            <div style="font-size:12px;color:#888;margin-bottom:14px;">
+              Admin/Technicien : vérifiés côté serveur (Apps Script), jamais stockés ici.
+              Comptes ajoutés ci-dessous : mot de passe stocké localement sur cet appareil uniquement.
+            </div>
+            <div class="account-list" id="account-list"></div>
+            <div class="add-account-row">
+              <div class="field">
+                <label>Nom / Identifiant</label>
+                <input type="text" id="new-account-name" placeholder="ex: Ibrahim">
+              </div>
+              <div class="field">
+                <label>Mot de passe</label>
+                <input type="password" id="new-account-pwd" placeholder="Nouveau mot de passe">
+              </div>
+              <div class="field">
+                <label>Rôle</label>
+                <select id="new-account-role">
+                  <option value="technicien">Technicien</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <button class="btn-add" onclick="ajouterCompte()">+ Ajouter</button>
+            </div>
+          </div>
+
+          <!-- Déconnexion / Réinitialisation -->
+          <div class="param-section">
+            <div class="param-title">🔒 Session & Données</div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+              <button class="btn btn-sm" style="background:#e67e22;color:#fff;" onclick="seDeconnecter()">
+                🔓 Se déconnecter
+              </button>
+              <button class="btn btn-sm" style="background:#c0392b;color:#fff;" onclick="reinitialiserTout()">
+                🗑 Effacer toutes les données locales
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /container -->
+</div><!-- /screen-app -->
+
+<!-- ── MODAL DÉTAIL ── -->
+<div id="modal" onclick="if(event.target===this)fermerModal()">
+  <div class="modal-box">
+    <button class="modal-close" onclick="fermerModal()">✕</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+const DEFAULT_URL   = 'https://script.google.com/macros/s/AKfycbykeycNsBogMSLA3N8cM21LXMVQH7JUkR19FNyt7LDwZNebdJOEIuZMdJov5wcikhMD/exec';
+const STORAGE_KEY   = 'miad_tech_log_v2';
+const KEY_URL       = 'miad_tech_log_url';
+const KEY_ACCOUNTS  = 'miad_tech_log_accounts';
+// ═══════════════════════════════════════════════════════════
+
+// Comptes par défaut (toujours présents, non supprimables). Les mots de passe
+// ne sont JAMAIS stockés ici : seul Apps Script les connaît et les vérifie
+// côté serveur (voir seConnecter). Un fichier servi au navigateur est visible
+// par quiconque fait "Afficher la source" — y stocker les vrais mots de passe
+// les exposerait à n'importe qui connaissant l'URL de cet outil.
+const DEFAULT_ACCOUNTS = [
+  { name: 'Admin principal', role: 'admin' },
+  { name: 'Technicien', role: 'technicien' },
+];
+
+let currentRole = null;
+let currentPwd  = null;
+let currentName = null;
+let allInterventions = [];
+
+// Retourne l'URL active (localStorage > défaut)
+function getApiUrl() {
+  return localStorage.getItem(KEY_URL) || DEFAULT_URL;
+}
+
+// Retourne tous les comptes (défaut + comptes ajoutés)
+function getTousComptes() {
+  const extra = JSON.parse(localStorage.getItem(KEY_ACCOUNTS) || '[]');
+  return [...DEFAULT_ACCOUNTS, ...extra];
+}
+
+// ── LOGIN ────────────────────────────────────────────────────────────────────
+async function seConnecter() {
+  const pwd = document.getElementById('login-pwd').value;
+  const err = document.getElementById('login-err');
+  const btn = document.querySelector('.btn-login');
+  err.style.display = 'none';
+
+  // 1. Comptes ajoutés localement (Paramètres > Comptes & Accès) — stockés
+  // uniquement sur cet appareil, pas de vérification serveur possible pour eux.
+  const extra = JSON.parse(localStorage.getItem(KEY_ACCOUNTS) || '[]');
+  const local = extra.find(c => c.pwd === pwd);
+  if (local) {
+    currentRole = local.role; currentPwd = pwd; currentName = local.name;
+    lancerApp();
+    return;
+  }
+
+  // 2. Comptes par défaut (admin/technicien) : vérifiés côté serveur —
+  // le mot de passe saisi est envoyé à Apps Script, qui répond juste par
+  // rôle/nom, jamais par les mots de passe eux-mêmes.
+  btn.disabled = true; btn.textContent = '⏳ Vérification…';
+  try {
+    const res = await fetch(`${getApiUrl()}?action=login&password=${encodeURIComponent(pwd)}`);
+    const data = await res.json();
+    if (data.success) {
+      currentRole = data.role; currentPwd = pwd; currentName = data.name;
+      btn.disabled = false; btn.textContent = 'Se connecter →';
+      lancerApp();
+      return;
+    }
+  } catch (e) {
+    // Réseau indisponible — tombe sur l'erreur ci-dessous
+  }
+  btn.disabled = false; btn.textContent = 'Se connecter →';
+  err.style.display = 'block';
+}
+
+function seDeconnecter() {
+  currentRole = null; currentPwd = null; currentName = null;
+  allInterventions = [];
+  document.getElementById('screen-login').style.display = 'flex';
+  document.getElementById('screen-app').style.display = 'none';
+  document.getElementById('login-pwd').value = '';
+  document.getElementById('login-pwd').focus();
+}
+
+function reinitialiserTout() {
+  if (!confirm('Effacer TOUTES les données locales (historique, comptes ajoutés, URL) ?')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(KEY_URL);
+  localStorage.removeItem(KEY_ACCOUNTS);
+  toast('🗑 Données locales effacées.', 'ok');
+  chargerParametres();
+  afficherHistoriqueLocal();
+}
+
+// ── INITIALISATION APP ───────────────────────────────────────────────────────
+function lancerApp() {
+  document.getElementById('screen-login').style.display = 'none';
+  document.getElementById('screen-app').style.display = 'block';
+
+  const roleTag   = document.getElementById('role-tag');
+  const userLabel = document.getElementById('user-label');
+
+  if (currentRole === 'admin') {
+    roleTag.textContent = 'Admin';
+    roleTag.style.background = '#2980b9';
+    userLabel.textContent = currentName || 'Admin';
+    buildTabs(['form', 'admin', 'mon-historique', 'parametres']);
+    ouvrirOnglet('admin');
+    chargerDashboardAdmin();
+    chargerParametres();
+  } else {
+    roleTag.textContent = 'Technicien';
+    roleTag.style.background = '#1e8449';
+    userLabel.textContent = currentName || 'Technicien';
+    buildTabs(['form', 'mon-historique']);
+    ouvrirOnglet('form');
+  }
+
+  afficherHistoriqueLocal();
+}
+
+function buildTabs(list) {
+  const labels = {
+    form: '📝 Nouvelle intervention',
+    admin: '📊 Dashboard',
+    'mon-historique': '📁 Mon historique',
+    parametres: '⚙️ Paramètres',
+  };
+  const tc = document.getElementById('tabs-container');
+  tc.innerHTML = list.map(id => `
+    <button class="tab" id="tab-${id}" onclick="ouvrirOnglet('${id}')">${labels[id]}</button>
+  `).join('');
+}
+
+function ouvrirOnglet(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const tab = document.getElementById('tab-' + id);
+  const panel = document.getElementById('panel-' + id);
+  if (tab) tab.classList.add('active');
+  if (panel) panel.classList.add('active');
+}
+
+// ── SOUMISSION FORMULAIRE ────────────────────────────────────────────────────
+async function soumettre(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn-submit');
+  btn.disabled = true; btn.textContent = '⏳ Envoi…';
+
+  const form = e.target;
+  const data = {
+    technicien:    form.technicien.value.trim(),
+    password:      currentPwd,
+    type:          form.type.value,
+    composant:     form.composant.value,
+    description:   form.description.value.trim(),
+    erreurs:       form.erreurs.value.trim(),
+    modifications: form.modifications.value.trim(),
+    statut:        form.statut.value,
+    duree:         form.duree.value,
+    notes:         form.notes.value.trim(),
+  };
+
+  try {
+    await fetch(getApiUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      mode: 'no-cors',
+    });
+    const id = 'INT-' + Date.now();
+    sauverLocal({ ...data, id, date: new Date().toLocaleString('fr-FR') });
+    toast('✅ Intervention enregistrée !', 'ok');
+    form.reset();
+    if (currentRole === 'admin') chargerDashboardAdmin();
+  } catch (err) {
+    toast('❌ Erreur réseau : ' + err.message, 'err');
+  }
+
+  btn.disabled = false; btn.textContent = '📤 Enregistrer l\'intervention';
+}
+
+// ── DASHBOARD ADMIN ──────────────────────────────────────────────────────────
+async function chargerDashboardAdmin() {
+  document.getElementById('loading-admin').style.display = 'block';
+  document.getElementById('table-wrap').style.display = 'none';
+  document.getElementById('no-results').style.display = 'none';
+
+  try {
+    const url = `${getApiUrl()}?password=${encodeURIComponent(currentPwd)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!data.success) throw new Error(data.error || 'Erreur serveur');
+
+    allInterventions = data.interventions || [];
+    construireStats();
+    remplirFiltres();
+    filtrerTable();
+    document.getElementById('loading-admin').style.display = 'none';
+    document.getElementById('table-wrap').style.display = 'block';
+
+  } catch (err) {
+    document.getElementById('loading-admin').innerHTML =
+      `<div style="color:#c0392b;">⚠️ Impossible de charger les données.<br><small>${err.message}</small><br><br>
+       <button class="btn btn-sm" style="background:#2980b9;color:#fff;" onclick="chargerDashboardAdmin()">Réessayer</button></div>`;
+  }
+}
+
+function construireStats() {
+  const total   = allInterventions.length;
+  const resolu  = allInterventions.filter(i => i['Statut'] === 'Résolu').length;
+  const encours = allInterventions.filter(i => i['Statut'] === 'En cours').length;
+  const escal   = allInterventions.filter(i => i['Statut'] === 'Escaladé').length;
+
+  document.getElementById('stats-grid').innerHTML = `
+    <div class="stat-card blue"><div class="stat-num">${total}</div><div class="stat-label">Total interventions</div></div>
+    <div class="stat-card green"><div class="stat-num">${resolu}</div><div class="stat-label">✅ Résolues</div></div>
+    <div class="stat-card orange"><div class="stat-num">${encours}</div><div class="stat-label">⚠️ En cours</div></div>
+    <div class="stat-card red"><div class="stat-num">${escal}</div><div class="stat-label">🚨 Escaladées</div></div>
+  `;
+}
+
+function remplirFiltres() {
+  const composants  = [...new Set(allInterventions.map(i => i['Composant']).filter(Boolean))].sort();
+  const techniciens = [...new Set(allInterventions.map(i => i['Technicien']).filter(Boolean))].sort();
+
+  const sel = (id, vals) => {
+    const el = document.getElementById(id);
+    const cur = el.value;
+    el.innerHTML = el.options[0].outerHTML + vals.map(v => `<option value="${v}">${v}</option>`).join('');
+    el.value = cur;
+  };
+  sel('filtre-composant', composants);
+  sel('filtre-technicien', techniciens);
+}
+
+function filtrerTable() {
+  const q    = (document.getElementById('search-bar').value || '').toLowerCase();
+  const stat = document.getElementById('filtre-statut').value;
+  const comp = document.getElementById('filtre-composant').value;
+  const tech = document.getElementById('filtre-technicien').value;
+
+  const filtered = allInterventions.filter(i => {
+    if (stat && i['Statut'] !== stat) return false;
+    if (comp && i['Composant'] !== comp) return false;
+    if (tech && i['Technicien'] !== tech) return false;
+    if (q) {
+      const hay = JSON.stringify(i).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const tbody = document.getElementById('table-body');
+  const cls = { 'Résolu': 'resolu', 'En cours': 'encours', 'Escaladé': 'escalade' };
+
+  tbody.innerHTML = filtered.map((i, idx) => `
+    <tr style="cursor:pointer;" onclick="voirDetail(${allInterventions.indexOf(i)})">
+      <td style="white-space:nowrap;font-size:12px;">${i['Date'] || ''}<br><span style="color:#aaa;">${i['Heure'] || ''}</span></td>
+      <td style="font-weight:700;">${i['Technicien'] || '—'}</td>
+      <td style="font-size:12px;">${i['Type'] || '—'}</td>
+      <td style="font-size:12px;">${i['Composant'] || '—'}</td>
+      <td><div class="truncate" title="${(i['Description']||'').replace(/"/g,"'")}">${i['Description'] || '—'}</div></td>
+      <td><span class="badge ${cls[i['Statut']] || ''}">${i['Statut'] || '—'}</span></td>
+      <td style="font-size:12px;white-space:nowrap;">${i['Durée (min)'] ? i['Durée (min)'] + ' min' : '—'}</td>
+    </tr>
+  `).join('') || '';
+
+  document.getElementById('no-results').style.display = filtered.length === 0 ? 'block' : 'none';
+}
+
+function voirDetail(idx) {
+  const i = allInterventions[idx];
+  const cls = { 'Résolu': '#1e8449', 'En cours': '#e67e22', 'Escaladé': '#c0392b' };
+  const coul = cls[i['Statut']] || '#555';
+  const section = (icon, label, val, cl) => val ? `
+    <div class="modal-section ${cl}">
+      <div class="modal-label" style="color:${coul};">${icon} ${label}</div>
+      <div style="font-size:13px;line-height:1.6;">${val.replace(/\n/g,'<br>')}</div>
+    </div>` : '';
+
+  document.getElementById('modal-content').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+      <div style="background:${coul};color:#fff;padding:3px 14px;border-radius:12px;font-size:12px;font-weight:700;">${i['Statut'] || '—'}</div>
+      <div style="font-family:monospace;font-size:11px;color:#aaa;">${i['ID'] || ''}</div>
+    </div>
+    <h2 style="font-size:17px;margin-bottom:4px;">${i['Type'] || '—'}</h2>
+    <div style="font-size:13px;color:#888;margin-bottom:16px;">${i['Composant'] || '—'}</div>
+    <table style="font-size:13px;margin-bottom:16px;width:100%;border-collapse:collapse;">
+      <tr><td style="padding:5px 0;color:#888;width:110px;">Technicien</td><td style="font-weight:700;">${i['Technicien'] || '—'}</td>
+          <td style="padding:5px 0;color:#888;width:80px;">Date</td><td>${i['Date'] || ''} ${i['Heure'] || ''}</td></tr>
+      <tr><td style="padding:5px 0;color:#888;">Durée</td><td>${i['Durée (min)'] ? i['Durée (min)'] + ' min' : '—'}</td></tr>
+    </table>
+    ${section('📋', 'Description', i['Description'], 'desc')}
+    ${section('🔴', 'Erreurs détectées', i['Erreurs détectées'], 'err')}
+    ${section('🔧', 'Modifications apportées', i['Modifications apportées'], 'mod')}
+    ${section('📌', 'Notes', i['Notes'], 'note')}
+  `;
+  document.getElementById('modal').classList.add('open');
+}
+
+function fermerModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+// ── EXPORT CSV ───────────────────────────────────────────────────────────────
+function exporterCSV() {
+  const headers = ['Date','Heure','Technicien','Type','Composant','Description','Erreurs détectées','Modifications apportées','Statut','Durée (min)','Notes','ID'];
+  const rows = allInterventions.map(i => headers.map(h => `"${(i[h]||'').toString().replace(/"/g,'""')}"`).join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent('﻿' + csv);
+  a.download = 'miad-tech-log-' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+
+// ── HISTORIQUE LOCAL ─────────────────────────────────────────────────────────
+function sauverLocal(item) {
+  const items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  items.unshift(item);
+  if (items.length > 200) items.pop();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  afficherHistoriqueLocal();
+}
+
+function afficherHistoriqueLocal() {
+  const items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  const liste = document.getElementById('liste-historique-local');
+  const noHist = document.getElementById('no-hist-local');
+  if (!liste) return;
+  if (items.length === 0) { liste.innerHTML = ''; noHist.style.display = 'block'; return; }
+  noHist.style.display = 'none';
+  const cls = { 'Résolu': 'resolu', 'En cours': 'encours', 'Escaladé': 'escalade' };
+  const emoji = { 'Résolu': '✅', 'En cours': '⚠️', 'Escaladé': '🚨' };
+  liste.innerHTML = items.map(item => `
+    <div class="hist-item ${cls[item.statut] || ''}">
+      <div style="font-size:11px;color:#999;">${item.date} — ${item.technicien}</div>
+      <div style="font-weight:700;font-size:14px;margin:3px 0;">${item.type} · ${item.composant}</div>
+      <div style="font-size:13px;color:#555;">${(item.description||'').substring(0,120)}…</div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:6px;">
+        <span style="font-size:12px;font-weight:700;">${emoji[item.statut]||''} ${item.statut}</span>
+        ${item.duree ? `<span style="font-size:11px;color:#aaa;">${item.duree} min</span>` : ''}
+        <span style="font-family:monospace;font-size:11px;color:#bbb;">${item.id}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function clearHistorique() {
+  if (!confirm('Supprimer tout l\'historique local ?')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  afficherHistoriqueLocal();
+}
+
+// ── PARAMÈTRES ───────────────────────────────────────────────────────────────
+function chargerParametres() {
+  afficherListeComptes();
+}
+
+function afficherListeComptes() {
+  const liste = document.getElementById('account-list');
+  if (!liste) return;
+  const comptes = getTousComptes();
+  const extra = JSON.parse(localStorage.getItem(KEY_ACCOUNTS) || '[]');
+  liste.innerHTML = comptes.map((c, idx) => {
+    const isDefault = idx < DEFAULT_ACCOUNTS.length;
+    return `
+    <div class="account-item">
+      <div>
+        <span class="role-pill ${c.role === 'admin' ? 'pill-admin' : 'pill-tech'}">${c.role === 'admin' ? 'Admin' : 'Tech'}</span>
+        <strong style="margin-left:8px;">${c.name}</strong>
+      </div>
+      <div style="font-family:monospace;font-size:12px;color:#888;margin-left:auto;margin-right:${isDefault ? '0' : '10px'};">
+        ${isDefault ? 'Vérifié côté serveur' : c.pwd.replace(/./g, '•')}
+      </div>
+      ${!isDefault ? `<button class="del-btn" onclick="supprimerCompte(${idx - DEFAULT_ACCOUNTS.length})" title="Supprimer">✕</button>` : '<span style="font-size:11px;color:#bbb;">défaut</span>'}
+    </div>`;
+  }).join('');
+}
+
+function ajouterCompte() {
+  const name = document.getElementById('new-account-name').value.trim();
+  const pwd  = document.getElementById('new-account-pwd').value;
+  const role = document.getElementById('new-account-role').value;
+  if (!name || !pwd) { toast('⚠️ Nom et mot de passe requis.', 'err'); return; }
+  if (pwd.length < 6) { toast('⚠️ Mot de passe trop court (6 caractères min).', 'err'); return; }
+  const existing = getTousComptes().find(c => c.pwd === pwd);
+  if (existing) { toast('⚠️ Ce mot de passe existe déjà.', 'err'); return; }
+  const extra = JSON.parse(localStorage.getItem(KEY_ACCOUNTS) || '[]');
+  extra.push({ name, pwd, role });
+  localStorage.setItem(KEY_ACCOUNTS, JSON.stringify(extra));
+  document.getElementById('new-account-name').value = '';
+  document.getElementById('new-account-pwd').value = '';
+  afficherListeComptes();
+  toast('✅ Compte ajouté.', 'ok');
+}
+
+function supprimerCompte(extraIdx) {
+  if (!confirm('Supprimer ce compte ?')) return;
+  const extra = JSON.parse(localStorage.getItem(KEY_ACCOUNTS) || '[]');
+  extra.splice(extraIdx, 1);
+  localStorage.setItem(KEY_ACCOUNTS, JSON.stringify(extra));
+  afficherListeComptes();
+  toast('🗑 Compte supprimé.', 'ok');
+}
+
+// ── TOAST ────────────────────────────────────────────────────────────────────
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = 'show ' + type;
+  setTimeout(() => { el.className = ''; }, 3500);
+}
+
+// ── INIT ─────────────────────────────────────────────────────────────────────
+document.getElementById('login-pwd').focus();
+</script>
+</body>
+</html>

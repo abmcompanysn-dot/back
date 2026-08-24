@@ -1,0 +1,37 @@
+/**
+ * MIAD Market - Tunnel de Redirection Invisible vers Next.js
+ * Intercepte la page "Merci" de WooCommerce pour renvoyer vers le Front-end.
+ */
+add_action('template_redirect', 'miad_redirect_checkout_to_nextjs');
+
+function miad_redirect_checkout_to_nextjs() {
+    // On vérifie si on est sur la page "Order Received" (Thank You)
+    if ( is_wc_endpoint_url( 'order-received' ) ) {
+        global $wp;
+
+        // Récupération de l'ID de commande depuis l'URL WordPress
+        $order_id = absint( $wp->query_vars['order-received'] );
+        if ( $order_id <= 0 ) return;
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) return;
+
+        $order_key = $order->get_order_key();
+        
+        / Ton URL de destination sur Next.js (Vercel)
+        // Note : On utilise /success ou /order-status selon ton routing
+        $ne/xtjs_url = "https://miadmarket.abmcy.com/success";
+
+        // Construction de l'URL avec les paramètres de sécurité
+        $redirect_url = add_query_arg( array(
+            'order_id'  => $order_id,
+            'order_key' => $order_key,
+            'total'     => $order->get_total(),
+            'status'    => $order->get_status()
+        ), $nextjs_url );
+
+        // Redirection 301 immédiate
+        wp_redirect( $redirect_url );
+        exit;
+    }
+}

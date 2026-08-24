@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Rapport — Migration Infrastructure &amp; Sécurité MIAD Market</title>
+<style>
+  @page { margin: 2.2cm; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    color: #1a1a1a;
+    line-height: 1.55;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+  h1 { font-size: 22px; color: #0f172a; border-bottom: 3px solid #ea580c; padding-bottom: 10px; }
+  h2 { font-size: 16px; color: #0f172a; margin-top: 32px; border-left: 4px solid #ea580c; padding-left: 10px; }
+  h3 { font-size: 14px; color: #334155; margin-top: 20px; }
+  p, li { font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12.5px; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 10px; text-align: left; }
+  th { background: #f1f5f9; }
+  .meta { color: #64748b; font-size: 12px; margin-bottom: 24px; }
+  .status-ok { color: #15803d; font-weight: 600; }
+  .status-pending { color: #b45309; font-weight: 600; }
+  .status-na { color: #64748b; font-weight: 600; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .highlight { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+  ul { margin-top: 6px; }
+  @media print {
+    body { padding: 0; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Rapport — Migration d'infrastructure &amp; durcissement sécurité</h1>
+<p class="meta">MIAD Market — miadmarket.com<br>Préparé par : brunel<br>Date : 23 juin 2026</p>
+
+<h2>1. Contexte et déclencheur</h2>
+<p>
+Le site MIAD Market (frontend Next.js, backend WordPress/WooCommerce/Dokan sur <code>api.miadmarket.com</code>)
+était initialement hébergé sur <strong>Vercel</strong>. Le site a fait l'objet d'activité suspecte de type
+<strong>crawling agressif et tentatives d'attaque (DDoS / scraping automatisé)</strong>, consommant des ressources
+serveur et du quota de calcul de façon anormale.
+</p>
+<p>
+Décision a été prise de migrer l'infrastructure frontend vers <strong>Cloudflare</strong> (Workers / Pages),
+pour bénéficier de sa protection DDoS native, de son réseau de diffusion mondial, et de sa capacité à absorber
+le trafic de crawlers à moindre coût de calcul (par rapport à des fonctions serverless facturées à l'exécution).
+</p>
+
+<h2>2. Travaux réalisés</h2>
+
+<h3>2.1 Migration d'infrastructure</h3>
+<ul>
+  <li>Passage du frontend Next.js vers <strong>Cloudflare Pages</strong>, avec adaptation complète du code pour
+  fonctionner en <em>Edge Runtime</em> (environnement d'exécution distribué de Cloudflare, sans dépendances Node.js
+  classiques).</li>
+  <li>Réécriture de ~45 routes API et de l'authentification à deux facteurs (2FA) administrateur pour
+  compatibilité avec cet environnement.</li>
+  <li>Mise à jour de la configuration de build et de déploiement (<code>wrangler.jsonc</code>, scripts de
+  déploiement).</li>
+</ul>
+
+<h3>2.2 Incidents identifiés et corrigés en production</h3>
+<table>
+  <tr><th>Symptôme observé</th><th>Cause racine</th><th>Statut</th></tr>
+  <tr>
+    <td>Erreurs 401 répétées sur les appels catalogue (produits/catégories/boutiques)</td>
+    <td>Clé d'authentification WooCommerce expirée/invalide</td>
+    <td class="status-ok">Résolu — clé régénérée</td>
+  </tr>
+  <tr>
+    <td>Erreurs 502/blocage par challenge de sécurité sur les appels backend</td>
+    <td>Le pare-feu anti-bot du serveur backend (SiteGround) bloquait le trafic provenant du réseau Cloudflare,
+    perçu comme suspect (IP partagées par de nombreux services)</td>
+    <td class="status-ok">Résolu — IP autorisée via le support technique de l'hébergeur (ticket #5085817)</td>
+  </tr>
+  <tr>
+    <td>Sollicitation excessive du serveur backend par les appels catalogue</td>
+    <td>Politique de cache insuffisante (rafraîchissement quasi permanent)</td>
+    <td class="status-ok">Résolu — durée de cache augmentée (10 secondes → 5 minutes)</td>
+  </tr>
+  <tr>
+    <td>Image de prévisualisation pour les partages sur réseaux sociaux</td>
+    <td>Incompatibilité technique entre la bibliothèque de génération d'image et l'environnement Edge</td>
+    <td class="status-pending">En cours — fonctionnalité cosmétique, sans impact sur le fonctionnement du site</td>
+  </tr>
+</table>
+
+<div class="highlight">
+<strong>Point clé :</strong> l'ensemble des fonctionnalités critiques du site (catalogue produits, boutiques
+vendeurs, authentification, commandes) est <strong>opérationnel en production</strong> sur la nouvelle
+infrastructure Cloudflare.
+</div>
+
+<h3>2.3 Reconfiguration DNS et accès</h3>
+<ul>
+  <li>Révision des enregistrements DNS pour le sous-domaine API (<code>api.miadmarket.com</code>) afin de réduire
+  la surface d'exposition au filtrage anti-bot tiers.</li>
+  <li>Vérification et mise à jour des variables d'environnement et secrets applicatifs sur la nouvelle
+  plateforme d'hébergement.</li>
+</ul>
+
+<h2>3. État actuel</h2>
+<table>
+  <tr><th>Composant</th><th>Statut</th></tr>
+  <tr><td>Page d'accueil et navigation</td><td class="status-ok">Opérationnel</td></tr>
+  <tr><td>Catalogue produits / catégories / boutiques</td><td class="status-ok">Opérationnel</td></tr>
+  <tr><td>Authentification (connexion, code de vérification)</td><td class="status-na">Opérationnel</td></tr>
+  <tr><td>Authentification à deux facteurs (admin)</td><td class="status-na">Opérationnel</td></tr>
+  <tr><td>Téléversement d'images</td><td class="status-na">Opérationnel</td></tr>
+  <tr><td>Image de prévisualisation réseaux sociaux</td><td class="status-pending">Opérationnel</td></tr>
+</table>
+
+<h2>4. Prochaines étapes</h2>
+<ul>
+  <li>Finaliser l'image de prévisualisation pour les réseaux sociaux (cosmétique, non bloquant).</li>
+  <li>Effectuer une vérification fonctionnelle complète des parcours utilisateurs (connexion, paiement,
+  téléversement) sur l'infrastructure de production.</li>
+  <li>Surveiller les prochains jours pour confirmer l'absence de récidive du blocage anti-bot côté hébergeur
+  backend.</li>
+</ul>
+
+</body>
+</html>

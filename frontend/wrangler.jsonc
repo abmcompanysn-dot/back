@@ -1,0 +1,24 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "miad",
+	"pages_build_output_dir": ".vercel/output/static",
+	"compatibility_date": "2026-06-21",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"kv_namespaces": [
+		{
+			"binding": "CATALOG_KV",
+			"id": "15510ed6eb7b428d89857ca8fb1786c7"
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "miad-products"
+		}
+	]
+}
