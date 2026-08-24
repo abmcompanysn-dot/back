@@ -3,17 +3,26 @@
 # Les routes Next.js app/api/* pointent ici ; le contrat JSON
 # reste identique (généré à terme par grpc-gateway).
 #
+# Trois domaines nommés, HTTPS automatique (Let's Encrypt, géré par
+# Caddy — nécessite les ports 80 ET 443 ouverts sur le VPS, et les
+# enregistrements DNS déjà pointés vers l'IP du VPS avant le premier
+# démarrage, sinon la validation ACME échoue) :
+#   - origin.miadmarket.ca → toute l'API backend (bloc api_routes)
+#   - kante.miadmarket.ca  → même VPS, uniquement le dashboard /admin
+#   - img.miadmarket.ca    → même VPS, images produits/vendeurs (MinIO)
+#
 # Format multi-lignes obligatoire pour chaque bloc `handle { … }` —
 # la syntaxe one-liner `handle /path { directive }` est rejetée par
 # les versions récentes de Caddy 2 ("Unexpected next token after '{'
 # on same line"), confirmé le 2026-08-24 sur caddy:2-alpine.
 # ============================================================
 {
-	auto_https off
 	admin off
+	email admin@miadmarket.ca
 }
 
-:80 {
+# ---------- Snippet réutilisable : toutes les routes API ----------
+(api_routes) {
 	encode zstd gzip
 
 	# Catalogue — catalog-svc
@@ -118,4 +127,41 @@
 			body "{\"error\":{\"code\":\"not_found\",\"message\":\"route inconnue sur la passerelle\"}}"
 		}
 	}
+}
+
+# ---------- origin.miadmarket.ca : API backend complète ----------
+origin.miadmarket.ca {
+	import api_routes
+}
+
+# ---------- kante.miadmarket.ca : dashboard admin uniquement ----------
+kante.miadmarket.ca {
+	redir / /admin/ 302
+	handle /admin* {
+		reverse_proxy admin-svc:8088
+	}
+	handle {
+		respond 404 {
+			body "{\"error\":{\"code\":\"not_found\",\"message\":\"route inconnue — ce domaine ne sert que /admin\"}}"
+		}
+	}
+}
+
+# ---------- img.miadmarket.ca : images produits/vendeurs (MinIO) ----------
+# Bucket "miad-media" public en lecture seule anonyme (écriture protégée
+# par les credentials MinIO, jamais exposées côté client). rewrite ajoute
+# le préfixe du bucket : img.miadmarket.ca/x.jpg → minio:9000/miad-media/x.jpg
+img.miadmarket.ca {
+	handle {
+		reverse_proxy minio:9000 {
+			rewrite /miad-media{uri}
+		}
+	}
+}
+
+# ---------- Repli : IP directe / nom d'hôte non reconnu, HTTP simple ----------
+# Garde l'accès existant par IP (http://<ip-du-vps>/...) fonctionnel —
+# utile pour les tests et le diagnostic sans dépendre du DNS.
+:80 {
+	import api_routes
 }

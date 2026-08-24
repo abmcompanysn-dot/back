@@ -9,17 +9,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -151,6 +156,42 @@ func splitBrokers(s string) []string {
 		cur += string(r)
 	}
 	return out
+}
+
+// ---------- Stockage objet (MinIO — images produits/vendeurs) ----------
+
+// Media regroupe le client MinIO et la config nécessaire pour uploader
+// une image et obtenir son URL publique HTTPS (img.miadmarket.ca en prod).
+type Media struct {
+	client    *minio.Client
+	bucket    string
+	baseURL   string // ex: https://img.miadmarket.ca — pas de slash final
+}
+
+// NewMedia se connecte à MinIO via son endpoint interne au cluster
+// (minio:9000, jamais exposé directement — servi en HTTPS par Caddy sur
+// un domaine dédié, voir deploy/Caddyfile). useSSL=false car la liaison
+// service→service reste à l'intérieur du cluster, pas exposée au public.
+func NewMedia(endpoint, accessKey, secretKey, bucket, baseURL string) (*Media, error) {
+	client, err := minio.New(endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure: false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("client minio: %w", err)
+	}
+	return &Media{client: client, bucket: bucket, baseURL: strings.TrimRight(baseURL, "/")}, nil
+}
+
+// Upload envoie un fichier sous un nom unique (préfixé par la catégorie
+// d'usage, ex: "products/", "vendors/") et renvoie son URL HTTPS publique.
+func (m *Media) Upload(ctx context.Context, prefix, filename string, r io.Reader, size int64, contentType string) (string, error) {
+	key := path.Join(prefix, filename)
+	_, err := m.client.PutObject(ctx, m.bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		return "", fmt.Errorf("upload minio: %w", err)
+	}
+	return m.baseURL + "/" + key, nil
 }
 
 // ---------- Health-check natif (le point qui manquait sous WP) ----------

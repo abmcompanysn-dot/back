@@ -46,6 +46,7 @@ type server struct {
 	emailURL        string
 	fulfillmentURL  string
 	loyaltyURL      string
+	media           *kit.Media
 }
 
 func main() {
@@ -64,6 +65,18 @@ func main() {
 		fulfillmentURL:  kit.Env("FULFILLMENT_SVC_URL", "http://fulfillment-svc:8090"),
 		loyaltyURL:      kit.Env("LOYALTY_SVC_URL", "http://loyalty-svc:8091"),
 	}
+
+	media, err := kit.NewMedia(
+		kit.Env("MINIO_ENDPOINT", "minio:9000"),
+		kit.Env("MINIO_ROOT_USER", ""),
+		kit.Env("MINIO_ROOT_PASSWORD", ""),
+		kit.Env("MINIO_BUCKET", "miad-media"),
+		kit.Env("MEDIA_BASE_URL", "https://img.miadmarket.ca"),
+	)
+	if err != nil {
+		log.Error("client minio indisponible — upload d'images désactivé", "err", err)
+	}
+	s.media = media
 
 	health := kit.NewHealth()
 	for name, url := range s.allServiceURLs() {
@@ -87,6 +100,7 @@ func main() {
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
 		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
+		mux.HandleFunc("POST /admin/api/media/upload", s.requireAdmin(s.uploadMedia))
 
 		// SPA React : sert les assets embarqués, retombe sur index.html
 		// pour toute route côté client (/admin/orders, /admin/security, …)
@@ -204,6 +218,67 @@ func (s *server) proxyPath(target func(id string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		forward(w, r, target(r.PathValue("id")))
 	}
+}
+
+// uploadMedia reçoit un fichier multipart (champ "file") depuis le
+// dashboard React, l'envoie dans MinIO sous products/ ou vendors/ (champ
+// "prefix", "products" par défaut) et renvoie l'URL HTTPS publique
+// (img.miadmarket.ca) à coller dans --image côté scripts/miad.mjs ou à
+// utiliser directement dans le catalogue.
+func (s *server) uploadMedia(w http.ResponseWriter, r *http.Request) {
+	if s.media == nil {
+		kit.Fail(w, 503, "media_unavailable", "stockage d'images indisponible (MinIO non configuré)")
+		return
+	}
+	if err := r.ParseMultipartForm(20 << 20); err != nil {
+		kit.Fail(w, 400, "bad_request", "formulaire multipart invalide (max 20 Mo): "+err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		kit.Fail(w, 400, "bad_request", "champ 'file' manquant")
+		return
+	}
+	defer file.Close()
+
+	prefix := kit.EnvOr(r.FormValue("prefix"), "products")
+	if prefix != "products" && prefix != "vendors" && prefix != "categories" {
+		kit.Fail(w, 400, "bad_request", "prefix doit être products, vendors ou categories")
+		return
+	}
+	contentType := header.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	filename := fmt.Sprintf("%d-%s", time.Now().UnixNano(), sanitizeFilename(header.Filename))
+
+	url, err := s.media.Upload(r.Context(), prefix, filename, file, header.Size, contentType)
+	if err != nil {
+		kit.Fail(w, 502, "upload_failed", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]string{"url": url})
+}
+
+// sanitizeFilename retire les caractères qui n'ont rien à faire dans une
+// clé d'objet S3/MinIO (espaces, accents non gérés proprement par tous
+// les clients HTTP, séparateurs de chemin) — garde juste [a-zA-Z0-9._-].
+func sanitizeFilename(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteRune('-')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "image"
+	}
+	return out
 }
 
 // proxyAuth — même principe, mais vers auth-svc qui applique lui-même

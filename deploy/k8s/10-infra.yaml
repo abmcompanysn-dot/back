@@ -179,3 +179,100 @@ spec:
   ports:
     - { name: broker, port: 9092, targetPort: 9092 }
     - { name: controller, port: 9093, targetPort: 9093 }
+---
+# ============================================================
+# MinIO — stockage objet S3-compatible pour les images produits/
+# vendeurs. Le bucket "miad-media" est servi en HTTPS via Caddy
+# (origin.miadmarket.ca/media/* → proxy vers minio:9000, voir
+# deploy/Caddyfile) : jamais d'accès direct par IP:9000 en clair.
+# ============================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: miad
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio }
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: { name: miad-secrets, key: MINIO_ROOT_USER }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: miad-secrets, key: MINIO_ROOT_PASSWORD }
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            tcpSocket: { port: 9000 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests: { storage: 20Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: miad
+spec:
+  selector: { app: minio }
+  ports:
+    - { name: api, port: 9000, targetPort: 9000 }
+    - { name: console, port: 9001, targetPort: 9001 }
+---
+# Job unique : crée le bucket miad-media et le passe en lecture
+# publique anonyme (nécessaire pour que Caddy serve les images sans
+# authentification — écriture/suppression restent protégées par les
+# clés MINIO_ROOT_USER/PASSWORD, jamais exposées côté client).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init-bucket
+  namespace: miad
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: { name: miad-secrets, key: MINIO_ROOT_USER }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: miad-secrets, key: MINIO_ROOT_PASSWORD }
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 2; done
+              mc mb --ignore-existing local/miad-media
+              mc anonymous set download local/miad-media
+              echo "bucket miad-media prêt (lecture publique)."

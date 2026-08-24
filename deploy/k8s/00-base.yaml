@@ -41,6 +41,12 @@ data:
   PAYMENT_TIMEOUT_MINUTES: "30"
   OTP_TTL_MINUTES: "5"
   JWT_TTL_HOURS: "72"
+  # Stockage objet des images (MinIO, voir 10-infra.yaml) — servi en HTTPS
+  # sur son propre domaine img.miadmarket.ca (proxy Caddy vers minio:9000,
+  # voir deploy/Caddyfile), jamais exposé directement par IP:9000 en clair.
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_BUCKET: "miad-media"
+  MEDIA_BASE_URL: "https://img.miadmarket.ca"
 ---
 # GABARIT DOCUMENTÉ — écrasé par le bootstrap :
 #   kubectl -n miad create secret generic miad-secrets \
@@ -72,3 +78,5 @@ stringData:
   FIREBASE_WEB_CLIENT_ID: ""
   STOREFRONT_URL: ""
   SMS_PROVIDER_URL: ""
+  MINIO_ROOT_USER: CHANGE-MOI-SUR-LE-VPS
+  MINIO_ROOT_PASSWORD: CHANGE-MOI-SUR-LE-VPS

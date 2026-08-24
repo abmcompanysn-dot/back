@@ -3,6 +3,14 @@
 # depuis le ConfigMap créé par le bootstrap : source unique).
 # Service LoadBalancer : sur k3s, expose 80/443 sur le nœud.
 # C'est l'URL que pointera app/api/* du frontend Next.js.
+#
+# /data en PersistentVolumeClaim (PAS emptyDir) : Caddy y stocke les
+# certificats Let's Encrypt (HTTPS automatique sur origin.miadmarket.ca
+# et kante.miadmarket.ca) — un emptyDir perdrait ces certificats à
+# chaque redémarrage du pod, forçant une nouvelle demande à chaque
+# fois. Let's Encrypt limite le nombre de certificats délivrés par
+# domaine par semaine ; perdre le volume à répétition finit par
+# bloquer le renouvellement.
 # ============================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -40,7 +48,18 @@ spec:
         - name: caddyfile
           configMap: { name: caddyfile }
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim: { claimName: caddy-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: caddy-data
+  namespace: miad
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests: { storage: 1Gi }
 ---
 apiVersion: v1
 kind: Service
