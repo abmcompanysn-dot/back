@@ -89,7 +89,7 @@ func main() {
 
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
-	health.Add("redis", s.redis.Ping)
+	health.Add("redis", func(ctx context.Context) error { return s.redis.Ping(ctx).Err() })
 	health.Add("jwt_secret", func(ctx context.Context) error {
 		if string(s.jwtSec) == "change-me" {
 			return fmt.Errorf("JWT_SECRET par défaut — à changer avant la prod")
@@ -422,7 +422,8 @@ func (s *server) requireRole(r *http.Request, role string) error {
 	}
 	mac := hmac.New(sha256.New, s.jwtSec)
 	mac.Write([]byte(parts[0] + "." + parts[1]))
-	if base64.RawURLEncoding.EncodeToString(mac.Sum(nil)) != parts[2] {
+	wantSig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(mac.Sum(nil), wantSig) {
 		return fmt.Errorf("signature invalide")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
@@ -448,7 +449,7 @@ func (s *server) signJWT(claims map[string]any) (string, string) {
 	header := b64([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	payloadJSON, _ := json.Marshal(claims)
 	payload := b64(payloadJSON)
-	sig := b64(hmacSHA256(s.jwtSec, header+"."+payload))
+	sig := b64(hmacSHA256(s.jwtSec, []byte(header+"."+payload)))
 	exp, _ := claims["exp"].(int64)
 	return header + "." + payload + "." + sig, time.Unix(exp, 0).UTC().Format(time.RFC3339)
 }

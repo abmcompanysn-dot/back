@@ -1,6 +1,6 @@
 module github.com/miadmarket/miad-backend
 
-go 1.19
+go 1.22
 
 require (
 	github.com/IBM/sarama v1.43.3

@@ -1,6 +1,6 @@
-```
 # Dependencies
 vendor/
+node_modules/
 
 # Compiled and build artifacts
 *.o
@@ -14,10 +14,6 @@ vendor/
 # Go-specific
 *.test
 *.prof
-go.mod
-go.sum
-!go.mod
-!go.sum
 
 # Logs and temp files
 *.log
@@ -32,4 +28,3 @@ go.sum
 .env
 .env.local
 *.env.*
-```

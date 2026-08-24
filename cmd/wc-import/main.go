@@ -120,10 +120,32 @@ func extractTrid(p wcProduct) string {
 	return fmt.Sprintf("wc-%d", p.ID) // produit sans traduction : trid propre
 }
 
+// parsePrice — ATTENTION : le catalogue WooCommerce source stocke _price
+// en USD réel, PAS en FCFA (confirmé dans le CLAUDE.md du frontend v0-miad-front-end,
+// vérifié sur des produits réels : ex. price="16", price="37.78" — jamais
+// des montants à l'échelle FCFA). Mais products.price_xof (catalog-svc)
+// est nommée et traitée comme du FCFA partout dans ce service (colonne
+// "price_xof", champ JSON "currency":"XOF"). Convertir ici au taux du
+// moment (voir exchange_rates, §3/§4 du brief de migration — pas encore
+// implémenté dans ce dépôt) AVANT tout import réel, sinon chaque prix
+// importé serait ~600x trop bas (16 $ importé tel quel comme "16 FCFA").
 func parsePrice(s string) int64 {
-	var f float64
-	_, _ = fmt.Sscanf(s, "%f", &f)
-	return int64(f) // prix XOF entiers
+	var usd float64
+	_, _ = fmt.Sscanf(s, "%f", &usd)
+	rate := usdToXofRate()
+	return int64(usd * rate)
+}
+
+// usdToXofRate — taux fixe temporaire tant que la table exchange_rates
+// n'existe pas côté Go. Vérifier ce taux avant tout import réel.
+func usdToXofRate() float64 {
+	if v := os.Getenv("USD_TO_XOF_RATE"); v != "" {
+		var r float64
+		if _, err := fmt.Sscanf(v, "%f", &r); err == nil && r > 0 {
+			return r
+		}
+	}
+	return 600.0
 }
 
 var _ = base64.StdEncoding // réservé auth Basic si les clés query sont refusées

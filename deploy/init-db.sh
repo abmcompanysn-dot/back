@@ -1,8 +1,9 @@
 #!/bin/bash
 # ============================================================
 # Exécuté une seule fois par le conteneur postgres
-# (docker-entrypoint-initdb.d) : crée les 10 bases dédiées.
+# (docker-entrypoint-initdb.d) : crée les 7 bases dédiées.
 # Principe microservices : une base par service, jamais partagée.
+# admin-svc n'a pas de base : pur agrégateur HTTP des autres services.
 # ============================================================
 set -e
 
@@ -15,8 +16,6 @@ DATABASES=(
   miad_auth
   miad_notification
   miad_email
-  miad_admin
-  miad_users
 )
 
 for db in "${DATABASES[@]}"; do
@@ -26,4 +25,4 @@ for db in "${DATABASES[@]}"; do
 EOSQL
 done
 
-echo "→ 10 bases prêtes."
+echo "→ 7 bases prêtes."

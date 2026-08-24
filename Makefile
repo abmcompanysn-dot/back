@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-SERVICES := catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc admin-svc
+SERVICES := catalog-svc vendor-svc order-svc payment-svc shipping-svc auth-svc notification-svc email-svc admin-svc
 
 .PHONY: tidy proto build up down ps logs health import clean
 
@@ -34,7 +34,7 @@ ps:
 logs:
 	docker compose logs -f --tail=80
 
-## Agrège le /system-check des 7 services (le point qui manquait sous WordPress)
+## Agrège le /system-check des 8 services (le point qui manquait sous WordPress)
 health:
 	@bash scripts/system-check.sh
 

@@ -20,8 +20,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/IBM/sarama"

@@ -137,8 +137,8 @@ services:
     build: { context: ., dockerfile: Dockerfile, args: { SERVICE: notification-svc } }
     environment:
       DATABASE_URL_NOTIFICATION: ${DATABASE_URL_NOTIFICATION}
-      PORT_NOTIFICATION: "8086"
-    ports: ["127.0.0.1:8086:8086"]
+      PORT_NOTIFICATION: "8087"
+    ports: ["127.0.0.1:8087:8087"]
 
   # Console d'administration (interface embarquée + API agrégée)
   admin-svc:
@@ -173,14 +173,9 @@ services:
       - payment-svc
       - shipping-svc
       - auth-svc
-
-  user-svc:
-    <<: *service-defaults
-    build: { context: ., dockerfile: Dockerfile, args: { SERVICE: user-svc } }
-    environment:
-      DATABASE_URL_USER: ${DATABASE_URL_USER}
-      PORT_USER: "8090"
-    ports: ["127.0.0.1:8090:8090"]
+      - admin-svc
+      - notification-svc
+      - email-svc
 
 volumes:
   pgdata:

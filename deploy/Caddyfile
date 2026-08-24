@@ -39,8 +39,12 @@
 	# Console d'administration (interface + API) — admin-svc
 	handle /admin*         { reverse_proxy admin-svc:8088 }
 
-	# Admin transverse : voir scripts/system-check.sh (agrège les 7)
-	# En prod, placer ici un petit agrégateur dédié si besoin.
+	# Notifications (Kafka consumer, stats en lecture) — notification-svc
+	handle /notifications*  { reverse_proxy notification-svc:8087 }
+
+	# Emails transactionnels + webhooks entrants (Resend) — email-svc
+	handle /emails*         { reverse_proxy email-svc:8089 }
+	handle /webhooks/*      { reverse_proxy email-svc:8089 }
 
 	handle {
 		respond 404 {
