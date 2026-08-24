@@ -2,6 +2,10 @@
 vendor/
 node_modules/
 
+# Build React (admin-svc/webui) — généré par npm run build, embarqué
+# via go:embed au moment du build Docker (voir Dockerfile stage "webui")
+services/admin-svc/webui/dist/
+
 # Compiled and build artifacts
 *.o
 *.obj

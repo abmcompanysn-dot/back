@@ -125,20 +125,45 @@ bien `/auth/firebase` (pas une route admin).
 
 ## 5. Console d'administration
 
-`admin-svc` sert une interface complète sur `GET /admin` — embarquée dans le
-binaire Go (`embed`), en vanilla JS, **zéro build frontend**. Elle interroge
-l'API interne `/admin/api/*` qui exige un **JWT `role=admin`** sur chaque requête.
+`admin-svc` sert une interface React (Vite, `services/admin-svc/webui/`,
+**voir aussi** `services/admin-svc/webui/README.md` pour le détail du
+projet) sous `GET /admin/` — **build requis avant `go build`**, le résultat
+(`webui/dist/`) n'est pas committé (comme `node_modules/`) et est embarqué
+dans le binaire Go via `go:embed`. Sans ce build, `go build ./services/admin-svc`
+échoue explicitement (`pattern webui/dist: no matching files found`), jamais
+silencieusement. `Dockerfile` gère ce build automatiquement (stage Node
+dédié) — en dev local uniquement :
+
+```bash
+cd services/admin-svc/webui && npm install && npm run build
+```
+
+L'interface interroge l'API interne `/admin/api/*` qui exige un **JWT
+`role=admin`** sur chaque requête.
 
 **Vues** : Vue d'ensemble (compteurs + CA + état des services) · Commandes ·
 Produits (FR/EN) · Boutiques · Clients · Paiements (Stripe/PayDunya) · Livraison
-(devis interactif) · Système (health-check par dépendance).
+(devis interactif) · Marketing (coupons/fidélité, tracking publicitaire — en
+construction) · **Sécurité** (activation/désactivation de la 2FA) ·
+Système (health-check par dépendance).
 
 **Authentification** (auth-svc) :
 - **Acheteur** — `POST /auth/otp/send` → `/auth/otp/verify` (code 6 chiffres en
   Redis, TTL borné, jamais renvoyé dans la réponse) ou `POST /auth/firebase`
   (connexion Google, voir section 4)
 - **Admin** — `POST /auth/admin/login` (email + mot de passe, sel + 10 000 itérations
-  SHA-256, seedé depuis `ADMIN_EMAIL`/`ADMIN_PASSWORD`)
+  SHA-256, seedé depuis `ADMIN_EMAIL`/`ADMIN_PASSWORD`). Flux en **deux temps**
+  si la 2FA est active sur le compte : sans `totp_code`, la réponse est
+  `{"totp_required":true}` (pas une erreur) plutôt qu'un JWT — le dashboard
+  affiche alors un second champ pour le code.
+- **2FA (TOTP, RFC 6238)** — `POST /auth/admin/2fa/setup` (génère un secret,
+  exige un JWT admin déjà valide), `POST /auth/admin/2fa/verify` (confirme
+  avec un premier code — la 2FA ne s'active qu'après cette preuve, jamais
+  automatiquement, pour éviter qu'un admin se verrouille lui-même hors de son
+  compte avec un secret mal scanné), `POST /auth/admin/2fa/disable` (exige un
+  code TOTP valide, pas seulement le JWT — un JWT volé seul ne doit jamais
+  suffire à désactiver la 2FA). Implémentation en Go pur (pas de dépendance
+  externe), validée contre les vecteurs de test officiels RFC 6238.
 - **Admin via Firebase** — `POST /auth/admin/firebase` (jeton Google vérifié
   auprès de `oauth2.googleapis.com`, puis email croisé avec la table `admins`)
 
@@ -243,6 +268,19 @@ Vérifier que tout est bien sur la branche :
 ```bash
 git log origin/main --oneline -5     # doit montrer tes derniers commits
 ```
+
+**Redéployer UN SEUL service** (ex : modification isolée dans `catalog-svc`,
+sans reconstruire ni redémarrer les 10 autres) :
+```bash
+# Sur le VPS, dans /opt/miad-backend, après git pull :
+bash scripts/deploy-service.sh catalog-svc
+```
+Build l'image de ce service uniquement, l'importe dans containerd,
+redémarre son `Deployment` k8s, attend le rollout, vérifie son
+`/system-check` — les autres `Deployment` ne sont ni reconstruits ni
+redémarrés. `scripts/vps-bootstrap.sh` reste la commande à utiliser pour
+un premier déploiement ou une mise à jour large touchant plusieurs
+services (il rebuild les 11 images à chaque fois).
 
 ## 10. État du socle — câblé vs signalé
 

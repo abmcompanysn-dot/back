@@ -14,12 +14,15 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +34,8 @@ import (
 
 	"github.com/miadmarket/miad-backend/internal/kit"
 )
+
+var base32NoPadding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 const schema = `
 CREATE TABLE IF NOT EXISTS customers (
@@ -48,6 +53,8 @@ CREATE TABLE IF NOT EXISTS admins (
   password_hash TEXT NOT NULL DEFAULT '',
   salt          TEXT NOT NULL DEFAULT '',
   role          TEXT NOT NULL DEFAULT 'admin',
+  totp_secret   TEXT DEFAULT '',            -- base32, vide = 2FA non configurée
+  totp_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `
@@ -104,6 +111,9 @@ func main() {
 		mux.HandleFunc("POST /auth/admin/login", s.adminLogin)
 		mux.HandleFunc("POST /auth/admin/firebase", s.firebaseAdminLogin)
 		mux.HandleFunc("POST /auth/firebase", s.firebaseCustomerLogin)
+		mux.HandleFunc("POST /auth/admin/2fa/setup", s.setup2FA) // exige un JWT role=admin déjà valide (post-login sans 2FA, ou 2FA déjà active pour la remplacer)
+		mux.HandleFunc("POST /auth/admin/2fa/verify", s.verify2FASetup)
+		mux.HandleFunc("POST /auth/admin/2fa/disable", s.disable2FA)
 		mux.HandleFunc("GET /customers", s.listCustomers) // role admin exigé
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)
 	})
@@ -146,20 +156,27 @@ func hashPassword(salt, pwd string) string {
 	return base64.StdEncoding.EncodeToString(h)
 }
 
+// adminLogin — flux en DEUX temps si la 2FA est active (comportement
+// standard : mot de passe seul ne suffit jamais à obtenir un JWT une
+// fois totp_enabled=true). Sans code TOTP fourni, renvoie
+// {"totp_required":true} sans JWT — pas d'erreur, c'est une étape
+// normale du flux, pas un échec.
 func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		TOTPCode string `json:"totp_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
 		return
 	}
 	var id int64
-	var hash, salt, role string
+	var hash, salt, role, totpSecret string
+	var totpEnabled bool
 	err := s.db.QueryRow(r.Context(),
-		"SELECT id, password_hash, salt, role FROM admins WHERE lower(email) = lower($1)", body.Email,
-	).Scan(&id, &hash, &salt, &role)
+		"SELECT id, password_hash, salt, role, totp_secret, totp_enabled FROM admins WHERE lower(email) = lower($1)", body.Email,
+	).Scan(&id, &hash, &salt, &role, &totpSecret, &totpEnabled)
 	if err == pgx.ErrNoRows || hashPassword(salt, body.Password) != hash {
 		kit.Fail(w, 401, "invalid_credentials", "email ou mot de passe incorrect")
 		return
@@ -167,6 +184,18 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+
+	if totpEnabled {
+		if body.TOTPCode == "" {
+			kit.JSON(w, 200, map[string]any{"totp_required": true, "email": body.Email})
+			return
+		}
+		if !verifyTOTP(totpSecret, body.TOTPCode) {
+			kit.Fail(w, 401, "invalid_totp_code", "code de vérification incorrect ou expiré")
+			return
+		}
+	}
+
 	jwt, expires := s.signJWT(map[string]any{
 		"sub": id, "iss": "miad-auth", "role": role, "email": body.Email,
 		"exp": time.Now().Add(s.jwtTTL).Unix(),
@@ -270,6 +299,166 @@ func (s *server) firebaseCustomerLogin(w http.ResponseWriter, r *http.Request) {
 		"customer_id":     id,
 		"email":           info.Email,
 	})
+}
+
+/* ---------- 2FA (TOTP, RFC 6238) ---------- */
+
+// setup2FA — génère un nouveau secret TOTP, le stocke en attente
+// (totp_enabled reste FALSE tant que verify2FASetup n'a pas confirmé
+// un premier code valide — jamais d'activation sans preuve que
+// l'admin a bien scanné le bon secret). Exige un JWT role=admin déjà
+// valide : réutilisable aussi bien pour la mise en place initiale
+// (juste après un login sans 2FA) que pour régénérer un secret perdu.
+func (s *server) setup2FA(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil || claims["role"] != "admin" {
+		kit.Fail(w, 403, "admin_required", "JWT admin valide requis")
+		return
+	}
+	email, _ := claims["email"].(string)
+	secret := randomBase32Secret(20) // 160 bits, standard TOTP
+	if _, err := s.db.Exec(r.Context(),
+		"UPDATE admins SET totp_secret = $2, totp_enabled = FALSE WHERE lower(email) = lower($1)",
+		email, secret); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	issuer := "MIAD Market Admin"
+	otpauthURL := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&algorithm=SHA1&digits=6&period=30",
+		urlEscape(issuer), urlEscape(email), secret, urlEscape(issuer))
+	kit.JSON(w, 200, map[string]any{
+		"secret": secret, "otpauth_url": otpauthURL,
+		"note": "scannez otpauth_url dans Google Authenticator/Authy, puis confirmez avec POST /auth/admin/2fa/verify",
+	})
+}
+
+// verify2FASetup — confirme la mise en place : sans ce premier code
+// valide, totp_enabled reste FALSE et adminLogin n'exige jamais de
+// code (évite qu'un admin se verrouille lui-même hors de son compte
+// avec un secret mal scanné).
+func (s *server) verify2FASetup(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil || claims["role"] != "admin" {
+		kit.Fail(w, 403, "admin_required", "JWT admin valide requis")
+		return
+	}
+	email, _ := claims["email"].(string)
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	var secret string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT totp_secret FROM admins WHERE lower(email) = lower($1)", email,
+	).Scan(&secret); err != nil || secret == "" {
+		kit.Fail(w, 400, "no_pending_setup", "aucune configuration 2FA en attente — appelez /auth/admin/2fa/setup d'abord")
+		return
+	}
+	if !verifyTOTP(secret, body.Code) {
+		kit.Fail(w, 401, "invalid_totp_code", "code incorrect — vérifiez l'heure de votre téléphone et réessayez")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(),
+		"UPDATE admins SET totp_enabled = TRUE WHERE lower(email) = lower($1)", email); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"totp_enabled": true})
+}
+
+// disable2FA — exige un code TOTP valide pour désactiver (pas juste le
+// JWT admin) : un JWT volé seul ne doit jamais suffire à retirer la
+// 2FA d'un compte.
+func (s *server) disable2FA(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil || claims["role"] != "admin" {
+		kit.Fail(w, 403, "admin_required", "JWT admin valide requis")
+		return
+	}
+	email, _ := claims["email"].(string)
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	var secret string
+	var enabled bool
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT totp_secret, totp_enabled FROM admins WHERE lower(email) = lower($1)", email,
+	).Scan(&secret, &enabled); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if !enabled {
+		kit.Fail(w, 409, "totp_not_enabled", "la 2FA n'est pas active sur ce compte")
+		return
+	}
+	if !verifyTOTP(secret, body.Code) {
+		kit.Fail(w, 401, "invalid_totp_code", "code incorrect")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(),
+		"UPDATE admins SET totp_enabled = FALSE, totp_secret = '' WHERE lower(email) = lower($1)", email); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"totp_enabled": false})
+}
+
+// randomBase32Secret — secret TOTP aléatoire encodé en base32 sans
+// padding (format attendu par Google Authenticator/Authy).
+func randomBase32Secret(nBytes int) string {
+	b := make([]byte, nBytes)
+	_, _ = rand.Read(b)
+	return strings.ToUpper(base32NoPadding.EncodeToString(b))
+}
+
+// verifyTOTP — RFC 6238 (TOTP), période 30s, 6 chiffres, SHA1 (standard
+// Google Authenticator/Authy). Tolère ±1 période (30s) de dérive
+// d'horloge, comme la quasi-totalité des implémentations TOTP réelles —
+// sans cette tolérance, un décalage d'horloge mineur sur le téléphone
+// de l'admin le verrouillerait hors de son propre compte.
+func verifyTOTP(base32Secret, code string) bool {
+	if len(code) != 6 || base32Secret == "" {
+		return false
+	}
+	secret, err := base32NoPadding.DecodeString(strings.ToUpper(base32Secret))
+	if err != nil {
+		return false
+	}
+	now := time.Now().Unix() / 30
+	for _, step := range []int64{now - 1, now, now + 1} {
+		if generateTOTP(secret, step) == code {
+			return true
+		}
+	}
+	return false
+}
+
+func generateTOTP(secret []byte, timeStep int64) string {
+	msg := make([]byte, 8)
+	for i := 7; i >= 0; i-- {
+		msg[i] = byte(timeStep & 0xff)
+		timeStep >>= 8
+	}
+	mac := hmac.New(sha1.New, secret)
+	mac.Write(msg)
+	sum := mac.Sum(nil)
+	offset := sum[len(sum)-1] & 0x0f
+	code := (uint32(sum[offset])&0x7f)<<24 |
+		uint32(sum[offset+1])<<16 |
+		uint32(sum[offset+2])<<8 |
+		uint32(sum[offset+3])
+	return fmt.Sprintf("%06d", code%1_000_000)
+}
+
+func urlEscape(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
 type firebaseInfo struct {
@@ -470,36 +659,48 @@ func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
 /* ---------- requireRole (vérifie le JWT de la requête) ---------- */
 
 func (s *server) requireRole(r *http.Request, role string) error {
-	h := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(h, prefix) {
-		return fmt.Errorf("Authorization: Bearer <jwt> attendu")
-	}
-	parts := strings.Split(h[len(prefix):], ".")
-	if len(parts) != 3 {
-		return fmt.Errorf("JWT malformé")
-	}
-	mac := hmac.New(sha256.New, s.jwtSec)
-	mac.Write([]byte(parts[0] + "." + parts[1]))
-	wantSig, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || !hmac.Equal(mac.Sum(nil), wantSig) {
-		return fmt.Errorf("signature invalide")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	claims, err := s.claimsFromRequest(r)
 	if err != nil {
-		return fmt.Errorf("payload illisible")
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return fmt.Errorf("payload JSON invalide")
-	}
-	if exp, ok := claims["exp"].(float64); ok && time.Now().Unix() > int64(exp) {
-		return fmt.Errorf("session expirée")
+		return err
 	}
 	if claims["role"] != role {
 		return fmt.Errorf("rôle %q requis", role)
 	}
 	return nil
+}
+
+// claimsFromRequest — vérifie signature + expiration du JWT porté par la
+// requête et renvoie ses claims (utilisé par requireRole et par les
+// endpoints 2FA, qui ont besoin de l'email de l'admin courant en plus
+// du rôle).
+func (s *server) claimsFromRequest(r *http.Request) (map[string]any, error) {
+	h := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if !strings.HasPrefix(h, prefix) {
+		return nil, fmt.Errorf("Authorization: Bearer <jwt> attendu")
+	}
+	parts := strings.Split(h[len(prefix):], ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("JWT malformé")
+	}
+	mac := hmac.New(sha256.New, s.jwtSec)
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	wantSig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(mac.Sum(nil), wantSig) {
+		return nil, fmt.Errorf("signature invalide")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("payload illisible")
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("payload JSON invalide")
+	}
+	if exp, ok := claims["exp"].(float64); ok && time.Now().Unix() > int64(exp) {
+		return nil, fmt.Errorf("session expirée")
+	}
+	return claims, nil
 }
 
 /* ---------- JWT ---------- */

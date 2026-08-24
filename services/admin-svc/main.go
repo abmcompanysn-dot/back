@@ -1,7 +1,8 @@
 // ============================================================
 // admin-svc — console d'administration + API agrégée.
-// L'interface (dashboard.html) est EMBARQUÉE dans le binaire Go
-// (go:embed), vanilla JS, zéro build frontend. Toute route
+// L'interface (webui/, React + Vite) est EMBARQUÉE dans le binaire Go
+// (go:embed du dossier webui/dist, généré par `npm run build` — voir
+// webui/README ou le Dockerfile pour l'étape de build). Toute route
 // /admin/api/* exige un JWT role=admin (émis par auth-svc).
 // admin-svc ne possède aucune donnée : il interroge les autres
 // services par HTTP (gRPC après codegen) et agrège la réponse.
@@ -17,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 	"time"
@@ -24,8 +26,13 @@ import (
 	"github.com/miadmarket/miad-backend/internal/kit"
 )
 
-//go:embed dashboard.html
-var dashboardFS embed.FS
+//go:embed webui/dist
+var webuiFS embed.FS
+
+// webuiStatic — sous-arbre webui/dist (sans le préfixe "webui/dist" que
+// go:embed conserve autrement dans les chemins), pour servir directement
+// depuis la racine attendue par http.FileServer.
+var webuiStatic, _ = fs.Sub(webuiFS, "webui/dist")
 
 type server struct {
 	jwtSec          []byte
@@ -65,7 +72,6 @@ func main() {
 	}
 
 	kit.Run("admin-svc", kit.Env("PORT_ADMIN", "8088"), log, health, func(mux *http.ServeMux) {
-		mux.HandleFunc("GET /admin", s.serveDashboard)
 		mux.HandleFunc("GET /admin/api/overview", s.requireAdmin(s.overview))
 		mux.HandleFunc("GET /admin/api/orders", s.requireAdmin(s.proxy(func() string { return s.orderURL + "/orders" })))
 		mux.HandleFunc("GET /admin/api/orders/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
@@ -81,7 +87,37 @@ func main() {
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
 		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
+
+		// SPA React : sert les assets embarqués, retombe sur index.html
+		// pour toute route côté client (/admin/orders, /admin/security, …)
+		// que React Router résout lui-même — dernier handler, jamais
+		// derrière /admin/api/* qui est déjà capturé au-dessus.
+		mux.Handle("GET /admin/", http.StripPrefix("/admin/", spaHandler{fs: webuiStatic}))
 	})
+}
+
+// spaHandler — sert un fichier statique s'il existe dans webuiStatic,
+// sinon retombe sur index.html (fallback SPA classique : React Router
+// gère la route côté client une fois le bundle chargé).
+type spaHandler struct{ fs fs.FS }
+
+func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	if path == "" {
+		path = "index.html"
+	}
+	if f, err := h.fs.Open(path); err == nil {
+		f.Close()
+		http.FileServerFS(h.fs).ServeHTTP(w, r)
+		return
+	}
+	index, err := fs.ReadFile(h.fs, "index.html")
+	if err != nil {
+		kit.Fail(w, 500, "webui_missing", "build webui/dist absent — voir Dockerfile")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(index)
 }
 
 func (s *server) allServiceURLs() map[string]string {
@@ -91,16 +127,6 @@ func (s *server) allServiceURLs() map[string]string {
 		"notification-svc": s.notificationURL, "email-svc": s.emailURL,
 		"fulfillment-svc": s.fulfillmentURL, "loyalty-svc": s.loyaltyURL,
 	}
-}
-
-func (s *server) serveDashboard(w http.ResponseWriter, r *http.Request) {
-	body, err := dashboardFS.ReadFile("dashboard.html")
-	if err != nil {
-		kit.Fail(w, 500, "dashboard_missing", err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(body)
 }
 
 // ---------- overview : compteurs + CA + état des services ----------
