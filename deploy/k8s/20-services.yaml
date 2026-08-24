@@ -38,7 +38,7 @@ kind: Service
 metadata: { name: catalog-svc, namespace: miad }
 spec:
   selector: { app: catalog-svc }
-  ports: [{ port: 80, targetPort: 8081 }]
+  ports: [{ port: 8081, targetPort: 8081 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -74,7 +74,7 @@ kind: Service
 metadata: { name: vendor-svc, namespace: miad }
 spec:
   selector: { app: vendor-svc }
-  ports: [{ port: 80, targetPort: 8082 }]
+  ports: [{ port: 8082, targetPort: 8082 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -110,7 +110,7 @@ kind: Service
 metadata: { name: order-svc, namespace: miad }
 spec:
   selector: { app: order-svc }
-  ports: [{ port: 80, targetPort: 8083 }]
+  ports: [{ port: 8083, targetPort: 8083 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -146,7 +146,7 @@ kind: Service
 metadata: { name: payment-svc, namespace: miad }
 spec:
   selector: { app: payment-svc }
-  ports: [{ port: 80, targetPort: 8084 }]
+  ports: [{ port: 8084, targetPort: 8084 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -182,7 +182,7 @@ kind: Service
 metadata: { name: shipping-svc, namespace: miad }
 spec:
   selector: { app: shipping-svc }
-  ports: [{ port: 80, targetPort: 8085 }]
+  ports: [{ port: 8085, targetPort: 8085 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -218,7 +218,7 @@ kind: Service
 metadata: { name: auth-svc, namespace: miad }
 spec:
   selector: { app: auth-svc }
-  ports: [{ port: 80, targetPort: 8086 }]
+  ports: [{ port: 8086, targetPort: 8086 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -254,7 +254,7 @@ kind: Service
 metadata: { name: notification-svc, namespace: miad }
 spec:
   selector: { app: notification-svc }
-  ports: [{ port: 80, targetPort: 8087 }]
+  ports: [{ port: 8087, targetPort: 8087 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -290,7 +290,7 @@ kind: Service
 metadata: { name: email-svc, namespace: miad }
 spec:
   selector: { app: email-svc }
-  ports: [{ port: 80, targetPort: 8089 }]
+  ports: [{ port: 8089, targetPort: 8089 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -326,7 +326,7 @@ kind: Service
 metadata: { name: fulfillment-svc, namespace: miad }
 spec:
   selector: { app: fulfillment-svc }
-  ports: [{ port: 80, targetPort: 8090 }]
+  ports: [{ port: 8090, targetPort: 8090 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -362,4 +362,4 @@ kind: Service
 metadata: { name: loyalty-svc, namespace: miad }
 spec:
   selector: { app: loyalty-svc }
-  ports: [{ port: 80, targetPort: 8091 }]
+  ports: [{ port: 8091, targetPort: 8091 }]

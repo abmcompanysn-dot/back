@@ -123,8 +123,20 @@ func main() {
 
 		// Représentants
 		mux.HandleFunc("GET /representative/{id}", s.getRepresentative)
-		mux.HandleFunc("GET /representative/country/{country}", s.getRepresentativeByCountry)
-		mux.HandleFunc("GET /representative/{id}/dashboard", s.repDashboard)
+		// by-country (pas /representative/country/{country}) : {id} et
+		// country/{country} sont tous deux à profondeur 2, {id}/dashboard
+		// (profondeur 3) était ambigu avec eux — net/http (Go 1.22+) panique
+		// au démarrage sur un conflit de pattern, pas un simple avertissement
+		// (confirmé le 2026-08-24, premier déploiement réel).
+		// dashboard/{id} (pas /representative/{id}/dashboard) : un segment
+		// littéral suivi d'une variable ne peut jamais être ambigu avec
+		// by-country/{country} (même forme), contrairement à {id}/dashboard
+		// qui inverse variable et littéral et rend les deux patterns
+		// indécidables pour net/http (Go 1.22+ panique au démarrage sur ce
+		// genre de conflit — confirmé deux fois de suite le 2026-08-24,
+		// premier déploiement réel).
+		mux.HandleFunc("GET /representative/by-country/{country}", s.getRepresentativeByCountry)
+		mux.HandleFunc("GET /representative/dashboard/{id}", s.repDashboard)
 		mux.HandleFunc("POST /representative/messages", s.createMessage)
 		mux.HandleFunc("GET /representative/messages", s.listMessages)
 		mux.HandleFunc("PATCH /representative/messages/{id}", s.updateMessageStatus)
