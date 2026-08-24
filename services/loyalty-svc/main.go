@@ -136,6 +136,11 @@ func main() {
 		// genre de conflit — confirmé deux fois de suite le 2026-08-24,
 		// premier déploiement réel).
 		mux.HandleFunc("GET /representative/by-country/{country}", s.getRepresentativeByCountry)
+		// by-email/{email} : même forme (littéral + variable) que
+		// by-country/{country} — pas de risque de conflit avec dashboard/{id}
+		// (voir note ci-dessus). Résout un représentant à partir de l'email
+		// porté par le JWT (auth-svc n'a pas de claim representative_id dédié).
+		mux.HandleFunc("GET /representative/by-email/{email}", s.getRepresentativeByEmail)
 		mux.HandleFunc("GET /representative/dashboard/{id}", s.repDashboard)
 		mux.HandleFunc("POST /representative/messages", s.createMessage)
 		mux.HandleFunc("GET /representative/messages", s.listMessages)
@@ -341,6 +346,18 @@ func (s *server) getRepresentativeByCountry(w http.ResponseWriter, r *http.Reque
 	}
 	if err != nil {
 		kit.Fail(w, 404, "no_representative", fmt.Sprintf("aucun représentant pour %q (ni super-rep configuré)", country))
+		return
+	}
+	s.writeRepresentative(w, r, "id", id)
+}
+
+func (s *server) getRepresentativeByEmail(w http.ResponseWriter, r *http.Request) {
+	email := r.PathValue("email")
+	var id int64
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT id FROM representatives WHERE lower(email) = lower($1)", email,
+	).Scan(&id); err != nil {
+		kit.Fail(w, 404, "representative_not_found", fmt.Sprintf("aucun représentant pour %q", email))
 		return
 	}
 	s.writeRepresentative(w, r, "id", id)
