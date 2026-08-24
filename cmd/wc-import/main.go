@@ -119,12 +119,33 @@ type dokanStore struct {
 	Gravatar string `json:"gravatar"`
 	Banner   string `json:"banner"`
 	Enabled  bool   `json:"enabled"`
-	Address  struct {
-		Country string `json:"country"`
-		City    string `json:"city"`
-	} `json:"address"`
-	Phone string `json:"phone"`
-	Email string `json:"email"`
+	Address  dokanAddress `json:"address"`
+	Phone    string       `json:"phone"`
+	Email    string       `json:"email"`
+}
+
+type dokanAddress struct {
+	Country string
+	City    string
+}
+
+// UnmarshalJSON — Dokan/PHP sérialise un tableau associatif vide en JSON
+// comme "[]" (tableau) au lieu de "{}" (objet), ce que fait PHP dès qu'un
+// vendeur n'a renseigné aucun champ d'adresse. Sans ce cas géré
+// explicitement, tout l'import échouait dès le premier vendeur sans
+// adresse — confirmé en migration réelle le 2026-08-24.
+func (a *dokanAddress) UnmarshalJSON(data []byte) error {
+	if string(data) == "[]" || string(data) == "null" {
+		*a = dokanAddress{}
+		return nil
+	}
+	type alias dokanAddress
+	var v alias
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*a = dokanAddress(v)
+	return nil
 }
 
 type wcCategory struct {
