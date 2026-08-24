@@ -13,6 +13,14 @@
 // Après cet import, lancer cmd/migrate-images séparément pour les images
 // produits (voir son propre en-tête) — ce script ne migre PAS les images,
 // il se contente d'importer les métadonnées produit/vendeur en base.
+//
+// Protections anti-blocage SiteGround (incident du 2026-08-20 documenté
+// dans le dépôt frontend — le WAF/Anti-Bot AI peut bloquer un client qui
+// enchaîne trop d'appels) : un seul appel HTTP en vol à la fois (jamais de
+// parallélisme sur les pages), pause entre chaque page, retry avec backoff
+// exponentiel sur erreur réseau/5xx, mais JAMAIS sur 401/403 (un blocage
+// d'auth ne doit jamais être retenté en boucle — ça ressemble à une
+// attaque et aggraverait un éventuel verrou déjà actif).
 // ============================================================
 package main
 
@@ -21,12 +29,82 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/miadmarket/miad-backend/internal/kit"
 )
+
+const (
+	pageDelay  = 1500 * time.Millisecond // pause entre chaque page — jamais de rafale
+	maxRetries = 4
+)
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// fetchJSONPaginated récupère une page (déjà décodée dans out, qui doit
+// être un pointeur vers slice) avec retry/backoff — jamais sur 401/403.
+// Impose une pause après l'appel, réussi ou non, pour ne jamais enchaîner
+// deux requêtes sans délai même en cas de retry.
+func fetchJSONPaginated(url string, out any) error {
+	defer time.Sleep(pageDelay)
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * time.Second
+			time.Sleep(backoff)
+		}
+
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", "MIAD-Go-Migration-Import")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			resp.Body.Close()
+			return fmt.Errorf("authentification refusée (%d) — vérifier les clés ou un verrou anti-bot actif, ne pas relancer immédiatement", resp.StatusCode)
+		}
+		if resp.StatusCode >= 500 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("erreur serveur %d", resp.StatusCode)
+			continue
+		}
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("statut inattendu %d: %s", resp.StatusCode, string(body))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Vérifie que c'est bien du JSON exploitable — une réponse HTML
+		// (page d'erreur WAF) casserait silencieusement l'import sans ce
+		// contrôle explicite.
+		if err := json.Unmarshal(body, out); err != nil {
+			lastErr = fmt.Errorf("réponse non-JSON (probable blocage WAF/HTML) : %w", err)
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("échec après %d tentatives: %w", maxRetries, lastErr)
+}
 
 var (
 	wcURL    = flag.String("wc-url", "", "https://api.miadmarket.com")
@@ -236,18 +314,9 @@ func fetchStores() ([]dokanStore, error) {
 	for {
 		url := fmt.Sprintf("%s/wp-json/dokan/v1/stores?per_page=100&page=%d&consumer_key=%s&consumer_secret=%s",
 			*wcURL, page, *wcKey, *wcSecret)
-		res, err := http.Get(url)
-		if err != nil {
-			return nil, err
-		}
 		var batch []dokanStore
-		err = json.NewDecoder(res.Body).Decode(&batch)
-		res.Body.Close()
-		if err != nil {
+		if err := fetchJSONPaginated(url, &batch); err != nil {
 			return nil, fmt.Errorf("page %d: %w", page, err)
-		}
-		if res.StatusCode != 200 {
-			return nil, fmt.Errorf("page %d: HTTP %d", page, res.StatusCode)
 		}
 		all = append(all, batch...)
 		if len(batch) < 100 {
@@ -261,16 +330,8 @@ func fetchStores() ([]dokanStore, error) {
 func fetchCategories(lang string) ([]wcCategory, error) {
 	url := fmt.Sprintf("%s/wp-json/wc/v3/products/categories?per_page=100&lang=%s&consumer_key=%s&consumer_secret=%s",
 		*wcURL, lang, *wcKey, *wcSecret)
-	res, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d", res.StatusCode)
-	}
 	var out []wcCategory
-	return out, json.NewDecoder(res.Body).Decode(&out)
+	return out, fetchJSONPaginated(url, &out)
 }
 
 func fetchProducts(page int, lang string) ([]wcProduct, error) {
@@ -279,16 +340,8 @@ func fetchProducts(page int, lang string) ([]wcProduct, error) {
 	url := fmt.Sprintf("%s/wp-json/wc/v3/products?per_page=100&page=%d&lang=%s&consumer_key=%s&consumer_secret=%s"+
 		"&_fields=id,name,slug,description,price,status,author,categories,images,meta_data",
 		*wcURL, page, lang, *wcKey, *wcSecret)
-	res, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d — échec EXPLICITE, on n'avance pas à l'aveugle", res.StatusCode)
-	}
 	var out []wcProduct
-	return out, json.NewDecoder(res.Body).Decode(&out)
+	return out, fetchJSONPaginated(url, &out)
 }
 
 func extractTrid(p wcProduct) string {
