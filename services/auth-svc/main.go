@@ -569,9 +569,10 @@ func (s *server) sendOTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		OtpRef   string `json:"otp_ref"`
-		Code     string `json:"code"`
-		FullName string `json:"full_name"`
+		OtpRef       string `json:"otp_ref"`
+		Code         string `json:"code"`
+		FullName     string `json:"full_name"`
+		ReferralCode string `json:"referral_code"` // ?ref= au moment de l'inscription (module Parrainage) — vrai flux d'inscription actif, contrairement à registerCustomer
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
@@ -609,7 +610,8 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 		isNew = true
 		kit.Publish(s.kafka, "customer.registered", fmt.Sprint(id), map[string]any{
 			"customer_id": id, col: identifier,
-			"at": time.Now().UTC().Format(time.RFC3339),
+			"referral_code": body.ReferralCode, // consommé par loyalty-svc, vide si absent
+			"at":            time.Now().UTC().Format(time.RFC3339),
 		})
 	} else if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())

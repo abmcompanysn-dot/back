@@ -73,16 +73,20 @@ export function RegisterPage({ onBack, onLoginSuccess }: RegisterPageProps) {
     if (otp.length < 6) { setError('Entrez les 6 chiffres du code.'); return }
     setIsLoading(true); setError(null)
     try {
+      const referralCode = localStorage.getItem('miad_referral_code') || ''
       const res  = await fetch('/api/auth/otp/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code: otp, otp_ref: otpRef, name: name.trim(), phone: phone.trim(), account_type: accountType }),
+        body: JSON.stringify({ email, code: otp, otp_ref: otpRef, name: name.trim(), phone: phone.trim(), account_type: accountType, referral_code: referralCode }),
       })
       const data = await res.json()
       if (res.ok && data.token) {
         localStorage.setItem('miad_token', data.token)
         localStorage.setItem('miad_user',  JSON.stringify({ display_name: data.user_display_name, user_email: data.user_email, user_nicename: data.user_nicename, id: data.id, avatar: data.avatar }))
         localStorage.setItem('miad_role',  data.role || accountType)
+        // Consommé une fois — un même code réutilisé pour une inscription
+        // future (autre compte sur ce navigateur) ne doit pas re-parrainer.
+        if (referralCode) localStorage.removeItem('miad_referral_code')
         if (onLoginSuccess) {
           onLoginSuccess((data.role || accountType) as 'buyer' | 'vendor', data)
         } else {

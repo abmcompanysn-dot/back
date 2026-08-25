@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   if (!rl.allowed) return tooManyRequests(rl.resetAt)
 
   try {
-    const { email, code, otp_ref, name, account_type } = await request.json()
+    const { email, code, otp_ref, name, account_type, referral_code } = await request.json()
     const cleaned = (code || '').replace(/\D/g, '')
 
     if (!email || cleaned.length !== 6) {
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
     const res = await fetch(`${AUTH_SVC_URL}/auth/otp/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ otp_ref, code: cleaned, full_name: name || '' }),
+      body: JSON.stringify({ otp_ref, code: cleaned, full_name: name || '', referral_code: referral_code || '' }),
     })
 
     const data: any = await res.json().catch(() => ({}))

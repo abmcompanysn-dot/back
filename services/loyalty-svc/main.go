@@ -8,11 +8,16 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
+	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -57,6 +62,23 @@ CREATE TABLE IF NOT EXISTS representatives (
   commission_pct REAL NOT NULL DEFAULT 0,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Parrainage : fonctionnalité neuve (n'existait pas côté WooCommerce),
+-- referral_code généré à la première consultation du dashboard (pas à la
+-- création du représentant — évite de générer un code jamais utilisé
+-- pour un représentant créé manuellement sans jamais se connecter).
+ALTER TABLE representatives ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;
+
+-- Un client parrainé (via ?ref=<code> au moment de l'inscription, câblé
+-- côté auth-svc/registerCustomer) est enregistré UNE fois — pas de
+-- double-parrainage. Les totaux (commandes/CA) restent calculés à la
+-- volée depuis order-svc (customer_id), pas dupliqués ici : cette table
+-- ne fait que la liaison représentant ↔ client parrainé.
+CREATE TABLE IF NOT EXISTS referrals (
+  representative_id BIGINT NOT NULL REFERENCES representatives(id),
+  customer_id        BIGINT NOT NULL UNIQUE, -- un client n'a qu'un seul parrain
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_referrals_rep ON referrals (representative_id);
 
 CREATE TABLE IF NOT EXISTS rep_messages (
   id             BIGSERIAL PRIMARY KEY,
@@ -109,6 +131,11 @@ func main() {
 		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 	}
+	// Module Parrainage : un client inscrit avec ?ref=<code> est lié à son
+	// représentant via cet événement, plutôt qu'un appel HTTP synchrone
+	// depuis auth-svc/registerCustomer (couplage dur évité — l'inscription
+	// ne doit jamais échouer à cause d'un souci de parrainage).
+	go s.consumeCustomerEvents(log)
 
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
@@ -324,6 +351,115 @@ func (s *server) validateCoupon(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{"code": body.Code, "type": cType, "amount": amount, "valid": true})
 }
 
+/* ---------- Parrainage : consommation customer.registered ---------- */
+
+// consumeCustomerEvents — même pattern que fulfillment-svc.consumeOrderEvents
+// (retry/backoff sur Kafka indisponible, jamais fatal pour le service).
+func (s *server) consumeCustomerEvents(log *slog.Logger) {
+	brokers := kit.Env("KAFKA_BROKERS", "kafka:9092")
+	if brokers == "" {
+		log.Warn("KAFKA_BROKERS vide — consommation désactivée (mode dev)")
+		return
+	}
+	cfg := sarama.NewConfig()
+	cfg.Consumer.Offsets.Initial = sarama.OffsetOldest
+	cfg.Version = sarama.V2_8_0_0
+
+	for {
+		group, err := sarama.NewConsumerGroup([]string{brokers}, "loyalty-svc", cfg)
+		if err != nil {
+			log.Error("kafka injoignable — retry 5 s", "err", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		handler := loyaltyConsumer{s: s, log: log}
+		_ = group.Consume(context.Background(), []string{"customer.registered"}, handler)
+		group.Close()
+	}
+}
+
+type loyaltyConsumer struct {
+	s   *server
+	log *slog.Logger
+}
+
+func (c loyaltyConsumer) Setup(sarama.ConsumerGroupSession) error   { return nil }
+func (c loyaltyConsumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+func (c loyaltyConsumer) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for msg := range claim.Messages() {
+		var payload struct {
+			CustomerID   int64  `json:"customer_id"`
+			ReferralCode string `json:"referral_code"`
+		}
+		if err := json.Unmarshal(msg.Value, &payload); err == nil && payload.ReferralCode != "" && payload.CustomerID > 0 {
+			c.s.linkReferral(sess.Context(), c.log, payload.CustomerID, payload.ReferralCode)
+		}
+		sess.MarkMessage(msg, "")
+	}
+	return nil
+}
+
+// linkReferral — best-effort : un code invalide/inconnu ne doit jamais
+// faire échouer l'inscription (déjà actée côté auth-svc, publiée avant
+// que ce handler ne s'exécute). ON CONFLICT (customer_id) DO NOTHING :
+// un client déjà parrainé garde son premier parrain, jamais réécrasé par
+// un second referral_code (ex: reconsommation du même événement Kafka).
+func (s *server) linkReferral(ctx context.Context, log *slog.Logger, customerID int64, code string) {
+	var repID int64
+	if err := s.db.QueryRow(ctx,
+		"SELECT id FROM representatives WHERE referral_code = $1", code,
+	).Scan(&repID); err != nil {
+		log.Info("code de parrainage inconnu, ignoré", "customer_id", customerID, "code", code)
+		return
+	}
+	if _, err := s.db.Exec(ctx,
+		"INSERT INTO referrals (representative_id, customer_id) VALUES ($1,$2) ON CONFLICT (customer_id) DO NOTHING",
+		repID, customerID,
+	); err != nil {
+		log.Error("liaison parrainage échouée", "customer_id", customerID, "representative_id", repID, "err", err)
+	}
+}
+
+// ensureReferralCode — génère le code au premier accès (pas à la création
+// du représentant, voir doc-comment du schéma) : 8 caractères
+// alphanumériques majuscules, assez court pour être partagé oralement,
+// assez d'entropie pour ~des centaines de représentants sans collision
+// pratique (36^8). Retry sur collision UNIQUE plutôt que de la prévenir
+// (assez rare pour ne jamais boucler plus d'une fois en pratique).
+func (s *server) ensureReferralCode(ctx context.Context, repID int64) string {
+	var existing *string
+	_ = s.db.QueryRow(ctx, "SELECT referral_code FROM representatives WHERE id = $1", repID).Scan(&existing)
+	if existing != nil && *existing != "" {
+		return *existing
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		code := randomReferralCode()
+		if _, err := s.db.Exec(ctx,
+			"UPDATE representatives SET referral_code = $1 WHERE id = $2", code, repID); err == nil {
+			return code
+		}
+	}
+	return "" // 5 collisions de suite — statistiquement jamais atteint, dashboard affiche "indisponible" plutôt que planter
+}
+
+const referralAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // sans O/0/I/1 (ambiguïté visuelle à l'oral/écrit)
+
+func randomReferralCode() string {
+	b := make([]byte, 8)
+	for i := range b {
+		n, err := crand.Int(crand.Reader, big.NewInt(int64(len(referralAlphabet))))
+		if err != nil {
+			// crypto/rand indisponible : cas quasi inexistant en pratique — un
+			// code prévisible dans ce scénario dégradé reste préférable à un
+			// crash du dashboard représentant.
+			b[i] = referralAlphabet[i%len(referralAlphabet)]
+			continue
+		}
+		b[i] = referralAlphabet[n.Int64()]
+	}
+	return string(b)
+}
+
 /* ---------- Représentants pays ---------- */
 
 // listRepresentatives — module Utilisateurs (back-office) : nécessaire
@@ -419,45 +555,209 @@ func (s *server) writeRepresentative(w http.ResponseWriter, r *http.Request, col
 // repDashboard — agrège vendor-svc (boutiques du pays) et order-svc
 // (commandes recentes) par HTTP, comme vendor-svc le fait déjà pour
 // catalog-svc/order-svc (en prod : gRPC après codegen).
+// COUNTRY_NAMES — même besoin que frontend/lib/shipping-utils.ts
+// (ALL_WORLD_COUNTRIES), mais ce backend n'a pas accès à ce fichier
+// TypeScript : sous-ensemble minimal (pays où la marketplace a
+// effectivement des représentants aujourd'hui), pas la liste complète
+// des ~190 pays. Un pays absent retombe sur son code ISO tel quel plutôt
+// que d'échouer.
+var repCountryNames = map[string]string{
+	"SN": "Sénégal", "CI": "Côte d'Ivoire", "CM": "Cameroun", "GN": "Guinée",
+	"BJ": "Bénin", "TG": "Togo", "ML": "Mali", "BF": "Burkina Faso",
+	"NG": "Nigeria", "GH": "Ghana", "CD": "RDC", "MA": "Maroc",
+}
+
+func countryName(code string) string {
+	if n, ok := repCountryNames[code]; ok {
+		return n
+	}
+	return code
+}
+
+// repDashboard — GET /representative/dashboard/{id} : format EXACT attendu
+// par RepresentantPage.tsx (frontend), voir RepData. Contrairement à la
+// version précédente (juste vendors/open_messages/acknowledged_orders,
+// insuffisant — la page accédait à des champs absents et plantait),
+// agrège aussi les commandes/clients/CA de la zone (order-svc) et le
+// parrainage (referrals, cette table).
 func (s *server) repDashboard(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		kit.Fail(w, 400, "invalid_id", "id invalide")
 		return
 	}
-	var country string
+	var name, email, country string
 	var isSuper bool
-	if err := s.db.QueryRow(r.Context(),
-		"SELECT country, is_super_rep FROM representatives WHERE id = $1", id,
-	).Scan(&country, &isSuper); err != nil {
+	var commissionPct float32
+	var referralCode *string
+	if err := s.db.QueryRow(ctx,
+		"SELECT name, email, country, is_super_rep, commission_pct, referral_code FROM representatives WHERE id = $1", id,
+	).Scan(&name, &email, &country, &isSuper, &commissionPct, &referralCode); err != nil {
 		kit.Fail(w, 404, "representative_not_found", "représentant introuvable")
 		return
 	}
+	if referralCode == nil || *referralCode == "" {
+		code := s.ensureReferralCode(ctx, id)
+		referralCode = &code
+	}
 
-	out := map[string]any{"representative_id": id, "country": country, "is_super_rep": isSuper}
-
-	vendorsURL := s.vendorURL + "/stores"
+	// ---------- Vendeurs de la zone ----------
+	vendorsURL := s.vendorURL + "/stores?page_size=200"
 	if !isSuper {
-		vendorsURL += "?country=" + country
+		vendorsURL += "&country=" + country
 	}
-	if body, err := proxyGetJSON(r.Context(), vendorsURL); err == nil {
-		out["vendors"] = body
-	} else {
-		out["vendors_error"] = fmt.Sprintf("vendor-svc injoignable — erreur EXPLICITE : %v", err)
+	repVendors := []map[string]any{}
+	vendorIDs := []string{}
+	if body, err := proxyGetJSON(ctx, vendorsURL); err == nil {
+		var parsed struct {
+			Items []struct {
+				ID            int64   `json:"id"`
+				Name          string  `json:"name"`
+				LogoURL       string  `json:"logo_url"`
+				ProductsCount int     `json:"products_count"`
+				RatingAvg     float64 `json:"rating_avg"`
+			} `json:"items"`
+		}
+		if json.Unmarshal(body, &parsed) == nil {
+			for _, v := range parsed.Items {
+				vendorIDs = append(vendorIDs, strconv.FormatInt(v.ID, 10))
+				repVendors = append(repVendors, map[string]any{
+					"id": v.ID, "name": v.Name, "email": "", "avatar": v.LogoURL,
+					"products": v.ProductsCount, "orders": 0, "total": 0.0, "phone": "",
+				})
+			}
+		}
 	}
 
-	var openMessages, ackOrders int64
-	_ = s.db.QueryRow(r.Context(),
+	// ---------- Commandes de la zone (tous les vendeurs ci-dessus) ----------
+	zoneOrders, zoneTotal := 0, 0.0
+	zoneClientSet := map[int64]bool{}
+	recentOrders := []map[string]any{}
+	// Compte par vendeur, pour enrichir repVendors[].orders/.total sans un
+	// second passage — construit pendant qu'on parcourt les commandes.
+	vendorStats := map[int64]struct {
+		orders int
+		total  float64
+	}{}
+	if len(vendorIDs) > 0 {
+		ordersURL := s.orderURL + "/orders?page_size=200&vendor_ids=" + strings.Join(vendorIDs, ",")
+		if body, err := proxyGetJSON(ctx, ordersURL); err == nil {
+			var parsed struct {
+				Items []struct {
+					ID            int64   `json:"id"`
+					Reference     string  `json:"reference"`
+					CustomerID    int64   `json:"customer_id"`
+					VendorID      int64   `json:"vendor_id"`
+					Status        string  `json:"status"`
+					TotalUSD      float64 `json:"total_usd"`
+					PaymentMethod string  `json:"payment_method"`
+					CreatedAt     string  `json:"created_at"`
+				} `json:"items"`
+				Total int64 `json:"total"`
+			}
+			if json.Unmarshal(body, &parsed) == nil {
+				zoneOrders = int(parsed.Total)
+				for _, o := range parsed.Items {
+					zoneTotal += o.TotalUSD
+					if o.CustomerID > 0 {
+						zoneClientSet[o.CustomerID] = true
+					}
+					st := vendorStats[o.VendorID]
+					st.orders++
+					st.total += o.TotalUSD
+					vendorStats[o.VendorID] = st
+				}
+				// recent_orders : les 10 plus récentes (déjà triées id DESC côté
+				// order-svc), format attendu par RepOrder — vendors/client/email
+				// restent minimaux (order-svc ne référence qu'un customer_id, pas
+				// de jointure client ici pour ne pas multiplier les appels réseau
+				// sur un dashboard déjà lourd).
+				for i, o := range parsed.Items {
+					if i >= 10 {
+						break
+					}
+					recentOrders = append(recentOrders, map[string]any{
+						"id": o.ID, "number": o.Reference, "date": o.CreatedAt, "status": o.Status,
+						"client": fmt.Sprintf("Client #%d", o.CustomerID), "email": "", "phone": "",
+						"vendors": []string{}, "total": o.TotalUSD, "shipping_method": "",
+						"tracking": "",
+					})
+				}
+			}
+		}
+	}
+	for i, v := range repVendors {
+		vid, _ := v["id"].(int64)
+		if st, ok := vendorStats[vid]; ok {
+			repVendors[i]["orders"] = st.orders
+			repVendors[i]["total"] = st.total
+		}
+	}
+
+	// ---------- Parrainage ----------
+	referralClients := []map[string]any{}
+	referralOrders, referralEarned := 0, 0.0
+	rows, err := s.db.Query(ctx,
+		"SELECT customer_id, created_at FROM referrals WHERE representative_id = $1 ORDER BY created_at DESC", id)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var customerID int64
+			var createdAt time.Time
+			if rows.Scan(&customerID, &createdAt) == nil {
+				// Commandes/CA de CE client parrainé — appel dédié (peu de clients
+				// parrainés en pratique, contrairement aux commandes de zone).
+				cOrders, cTotal := 0, 0.0
+				if body, err := proxyGetJSON(ctx, fmt.Sprintf("%s/orders?customer_id=%d&page_size=100", s.orderURL, customerID)); err == nil {
+					var p struct {
+						Items []struct {
+							TotalUSD float64 `json:"total_usd"`
+						} `json:"items"`
+						Total int64 `json:"total"`
+					}
+					if json.Unmarshal(body, &p) == nil {
+						cOrders = int(p.Total)
+						for _, o := range p.Items {
+							cTotal += o.TotalUSD
+						}
+					}
+				}
+				referralOrders += cOrders
+				referralEarned += cTotal * float64(commissionPct) / 100
+				referralClients = append(referralClients, map[string]any{
+					"name": fmt.Sprintf("Client #%d", customerID), "email": "",
+					"orders": cOrders, "total": cTotal, "date": createdAt.UTC().Format(time.RFC3339),
+				})
+			}
+		}
+	}
+
+	var openMessages int64
+	_ = s.db.QueryRow(ctx,
 		"SELECT count(*) FROM rep_messages WHERE representative_id = $1 AND status = 'open'", id,
 	).Scan(&openMessages)
-	_ = s.db.QueryRow(r.Context(),
-		"SELECT count(*) FROM rep_order_acknowledgements WHERE representative_id = $1", id,
-	).Scan(&ackOrders)
-	out["open_messages"] = openMessages
-	out["acknowledged_orders"] = ackOrders
 
-	kit.JSON(w, 200, out)
+	kit.JSON(w, 200, map[string]any{
+		"success": true, "id": id, "name": name, "email": email, "avatar": "",
+		"country_code": country, "country_name": countryNameOrAll(country, isSuper),
+		"whatsapp": "", "referral_code": *referralCode, "commission_rate": commissionPct,
+		"referral_earned": round2(referralEarned), "referral_clients": referralClients, "referral_orders": referralOrders,
+		"vendors": repVendors, "vendors_count": len(repVendors),
+		"recent_orders": recentOrders,
+		"zone_orders":   zoneOrders, "zone_total": round2(zoneTotal), "zone_clients": len(zoneClientSet),
+		"unread_messages": openMessages,
+	})
 }
+
+func countryNameOrAll(code string, isSuper bool) string {
+	if isSuper {
+		return "Tous les pays"
+	}
+	return countryName(code)
+}
+
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 func proxyGetJSON(ctx context.Context, url string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server'
-import { fetchWpUser, fetchRepresentative } from '@/lib/miad-server-auth'
+import { fetchWpUser, fetchRepresentative, LOYALTY_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge'
 
+// Dashboard représentant complet (module Parrainage + zone) : by-email
+// résout seulement l'identité (id/nom/pays), repDashboard agrège tout le
+// reste (vendeurs zone, commandes zone, clients zone, parrainage) —
+// RepresentantPage.tsx (670 lignes) attend ce format complet, un simple
+// by-email la faisait planter sur des tableaux undefined.
 export async function GET(request: Request) {
   const authHeader = request.headers.get('Authorization')
   if (!authHeader?.startsWith('Bearer ')) {
@@ -20,14 +25,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Accès réservé aux représentants' }, { status: 403 })
   }
 
-  return NextResponse.json({
-    success: true,
-    id: rep.id,
-    name: rep.name,
-    email: rep.email,
-    country_code: rep.is_super_rep ? 'ALL' : rep.country,
-    country_name: rep.is_super_rep ? 'Tous les pays' : rep.country,
-    is_super_rep: rep.is_super_rep,
-    commission_rate: rep.commission_pct,
-  })
+  const res = await fetch(`${LOYALTY_SVC_URL}/representative/dashboard/${rep.id}`, { cache: 'no-store' })
+  if (!res.ok) {
+    return NextResponse.json({ error: 'Dashboard représentant indisponible' }, { status: 502 })
+  }
+  const dashboard = await res.json()
+  return NextResponse.json(dashboard)
 }

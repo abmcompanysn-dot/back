@@ -126,7 +126,17 @@ export function RepresentantPage() {
       })
       .then(d => {
         if (d?.success) {
-          setData(d)
+          // Filet de sécurité : le backend (repDashboard) construit déjà ces
+          // tableaux, mais un service tiers injoignable (vendor-svc/order-svc)
+          // au moment de l'agrégation peut laisser un champ absent plutôt que
+          // vide — mieux vaut un tableau vide affiché qu'un crash sur
+          // data.recent_orders.length d'un champ undefined.
+          setData({
+            ...d,
+            vendors: d.vendors ?? [],
+            recent_orders: d.recent_orders ?? [],
+            referral_clients: d.referral_clients ?? [],
+          })
           import('@/lib/push').then(({ initPushNotifications, saveTokenToServer }) => {
             initPushNotifications().then(token => {
               if (token) saveTokenToServer(token, d.id)

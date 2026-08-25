@@ -343,6 +343,20 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     else if (navigator.language.startsWith('en')) setLanguage('en')
   }, [initialLang])
 
+  // Capture du code de parrainage représentant (?ref=CODE) — persisté en
+  // localStorage (pas juste l'URL courante) car le visiteur navigue
+  // souvent avant de s'inscrire, transmis à /api/auth/otp/verify par
+  // RegisterPage.tsx au moment de la création réelle du compte. Ne remplace
+  // jamais un code déjà enregistré (premier lien cliqué gagne, cohérent
+  // avec ON CONFLICT DO NOTHING côté loyalty-svc — pas de re-parrainage
+  // silencieux si le visiteur reclique un autre lien plus tard).
+  useEffect(() => {
+    const ref = searchParams.get('ref')
+    if (ref && !localStorage.getItem('miad_referral_code')) {
+      localStorage.setItem('miad_referral_code', ref)
+    }
+  }, [searchParams])
+
   useEffect(() => {
     if (!forcedView) {
       const saved = sessionStorage.getItem('miad_view') as View

@@ -21,6 +21,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -371,6 +372,21 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("vendor_id"); v != "" {
 		where += fmt.Sprintf(" AND vendor_id = $%d", len(args)+1)
 		args = append(args, atoi(v))
+	}
+	// vendor_ids (CSV) — filtre "zone représentant" (module Utilisateurs) :
+	// agréger les commandes de TOUS les vendeurs d'un pays en un seul appel
+	// plutôt que N requêtes vendor_id= côté loyalty-svc.
+	if v := q.Get("vendor_ids"); v != "" {
+		ids := []int64{}
+		for _, part := range strings.Split(v, ",") {
+			if id := atoi(strings.TrimSpace(part)); id > 0 {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) > 0 {
+			where += fmt.Sprintf(" AND vendor_id = ANY($%d)", len(args)+1)
+			args = append(args, ids)
+		}
 	}
 	if v := q.Get("customer_id"); v != "" {
 		where += fmt.Sprintf(" AND customer_id = $%d", len(args)+1)
