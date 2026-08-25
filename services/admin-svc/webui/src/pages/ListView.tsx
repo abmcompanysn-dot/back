@@ -59,15 +59,6 @@ export function ListView({ path, columns, title, subtitle, emptyIcon, emptyTitle
   )
 }
 
-export const ORDER_COLUMNS: Column[] = [
-  { key: 'id', label: 'id' },
-  { key: 'reference', label: 'reference' },
-  { key: 'vendor_id', label: 'vendor_id' },
-  { key: 'status', label: 'status', badge: true },
-  { key: 'total_usd', label: 'total_usd' },
-  { key: 'created_at', label: 'created_at' },
-]
-
 export const CUSTOMER_COLUMNS: Column[] = [
   { key: 'id', label: 'id' },
   { key: 'email', label: 'email' },

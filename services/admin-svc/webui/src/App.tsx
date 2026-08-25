@@ -3,12 +3,7 @@ import { AuthProvider, useAuth } from './lib/auth'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Overview } from './pages/Overview'
-import {
-  CUSTOMER_COLUMNS,
-  ListView,
-  ORDER_COLUMNS,
-  PAYMENT_COLUMNS,
-} from './pages/ListView'
+import { CUSTOMER_COLUMNS, ListView, PAYMENT_COLUMNS } from './pages/ListView'
 import { Shipping } from './pages/Shipping'
 import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
@@ -25,7 +20,10 @@ import { VendorDetail } from './pages/vendors/VendorDetail'
 import { VendorKYC } from './pages/vendors/VendorKYC'
 import { NewVendor } from './pages/vendors/NewVendor'
 import { Payouts } from './pages/vendors/Payouts'
-import { IconCustomers, IconFinance, IconOrders } from './components/Icons'
+import { AllOrders } from './pages/orders/AllOrders'
+import { OrderDetail } from './pages/orders/OrderDetail'
+import { Returns } from './pages/orders/Returns'
+import { IconCustomers, IconFinance } from './components/Icons'
 
 const emptyIconProps = { width: 40, height: 40, strokeWidth: 1.4 } as const
 
@@ -52,20 +50,19 @@ function AppRoutes() {
         }
       >
         <Route index element={<Overview />} />
+        <Route path="orders" element={<AllOrders />} />
         <Route
-          path="orders"
+          path="orders/pending"
           element={
-            <ListView
-              path="/admin/api/orders"
-              columns={ORDER_COLUMNS}
-              title="Commandes"
-              subtitle="Suivi des commandes multi-boutiques"
-              emptyIcon={<IconOrders {...emptyIconProps} />}
-              emptyTitle="Aucune commande enregistrée pour le moment"
-              emptyDescription="Les nouvelles commandes de vos clients apparaîtront ici automatiquement."
+            <AllOrders
+              fixedStatuses={['pending_payment', 'paid', 'processing']}
+              title="Commandes en attente de traitement"
+              subtitle="Paiement en attente, payées ou en préparation"
             />
           }
         />
+        <Route path="orders/returns" element={<Returns />} />
+        <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="products" element={<Navigate to="/admin/catalog/products" replace />} />
         <Route path="catalog" element={<Navigate to="/admin/catalog/products" replace />} />
         <Route path="catalog/products" element={<AllProducts />} />
