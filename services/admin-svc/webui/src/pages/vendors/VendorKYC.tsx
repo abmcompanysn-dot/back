@@ -82,7 +82,7 @@ export function VendorKYC() {
               <div className="cell-primary">{v.name}</div>
               <div className="cell-secondary">
                 {v.email} · {v.city ? `${v.city}, ` : ''}
-                {v.country} · {v.kyc_documents.length} document(s)
+                {v.country} · {(v.kyc_documents ?? []).length} document(s)
               </div>
             </div>
             <button className="btn-ghost" onClick={() => navigate(`/admin/vendors/${v.id}`)}>

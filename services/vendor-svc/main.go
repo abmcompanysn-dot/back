@@ -51,6 +51,14 @@ ALTER TABLE vendors ADD COLUMN IF NOT EXISTS badges JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE vendors ADD COLUMN IF NOT EXISTS suspended_until TIMESTAMPTZ;
 ALTER TABLE vendors ADD COLUMN IF NOT EXISTS suspension_message TEXT DEFAULT '';
 ALTER TABLE vendors ADD COLUMN IF NOT EXISTS address TEXT DEFAULT '';
+-- Formulaire "Paramètres de la boutique" (dashboard vendeur) : proposait
+-- déjà email/adresse/description côté UI mais updateProfile n'écrivait ni
+-- l'un ni l'autre — le vrai appel réseau se faisait en dur vers l'ancien
+-- WordPress mort (wp-json/dokan/v1/settings), silencieusement avalé par un
+-- toast "enregistré localement" même en cas d'échec. email/address
+-- existaient déjà en base mais jamais exposés en écriture ; description
+-- n'existait pas du tout.
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
 `
 
 type server struct {
@@ -206,8 +214,8 @@ func (s *server) listVendorsAdmin(w http.ResponseWriter, r *http.Request) {
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
 		SELECT id, name, slug, logo_url, banner_url, country, city, phone, email,
-		       verified, rating_avg, product_count, kyc_status, commission_rate,
-		       badges, suspended_until
+		       verified, rating_avg, product_count, kyc_status, kyc_documents,
+		       commission_rate, badges, suspended_until
 		FROM vendors %s ORDER BY id DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -222,11 +230,12 @@ func (s *server) listVendorsAdmin(w http.ResponseWriter, r *http.Request) {
 		var verified bool
 		var rating float64
 		var count int
+		var kycDocsJSON []byte
 		var commissionRate *float64
 		var badgesJSON []byte
 		var suspendedUntil *time.Time
 		if err := rows.Scan(&id, &name, &slug, &logo, &banner, &country, &city, &phone, &email,
-			&verified, &rating, &count, &kycStatus, &commissionRate, &badgesJSON, &suspendedUntil); err != nil {
+			&verified, &rating, &count, &kycStatus, &kycDocsJSON, &commissionRate, &badgesJSON, &suspendedUntil); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -234,6 +243,7 @@ func (s *server) listVendorsAdmin(w http.ResponseWriter, r *http.Request) {
 		item["phone"] = phone
 		item["email"] = email
 		item["kyc_status"] = kycStatus
+		item["kyc_documents"] = json.RawMessage(kycDocsJSON)
 		item["commission_rate"] = commissionRate
 		item["badges"] = json.RawMessage(badgesJSON)
 		item["suspended"] = suspendedUntil != nil && suspendedUntil.After(time.Now())
@@ -330,21 +340,21 @@ func (s *server) createVendor(w http.ResponseWriter, r *http.Request) {
 func (s *server) updateVendorAdmin(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	var body struct {
-		Name              *string  `json:"name"`
-		Email             *string  `json:"email"`
-		Phone             *string  `json:"phone"`
-		Country           *string  `json:"country"`
-		City              *string  `json:"city"`
-		Address           *string  `json:"address"`
-		LogoURL           *string  `json:"logo_url"`
-		BannerURL         *string  `json:"banner_url"`
-		Verified          *bool    `json:"verified"`
-		CommissionRate    *float64 `json:"commission_rate"`
-		ClearCommission   bool     `json:"clear_commission"`
-		RequireModeration *bool    `json:"require_moderation"`
+		Name              *string   `json:"name"`
+		Email             *string   `json:"email"`
+		Phone             *string   `json:"phone"`
+		Country           *string   `json:"country"`
+		City              *string   `json:"city"`
+		Address           *string   `json:"address"`
+		LogoURL           *string   `json:"logo_url"`
+		BannerURL         *string   `json:"banner_url"`
+		Verified          *bool     `json:"verified"`
+		CommissionRate    *float64  `json:"commission_rate"`
+		ClearCommission   bool      `json:"clear_commission"`
+		RequireModeration *bool     `json:"require_moderation"`
 		Badges            *[]string `json:"badges"`
-		SuspendedUntil    *string  `json:"suspended_until"` // RFC3339, "" = lever la suspension
-		SuspensionMessage *string  `json:"suspension_message"`
+		SuspendedUntil    *string   `json:"suspended_until"` // RFC3339, "" = lever la suspension
+		SuspensionMessage *string   `json:"suspension_message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
@@ -491,12 +501,15 @@ func (s *server) vendorProducts(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) updateProfile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		VendorID  int64  `json:"vendor_id"`
-		Name      string `json:"name"`
-		LogoURL   string `json:"logo_url"`
-		BannerURL string `json:"banner_url"`
-		Phone     string `json:"phone"`
-		City      string `json:"city"`
+		VendorID    int64  `json:"vendor_id"`
+		Name        string `json:"name"`
+		LogoURL     string `json:"logo_url"`
+		BannerURL   string `json:"banner_url"`
+		Phone       string `json:"phone"`
+		City        string `json:"city"`
+		Email       string `json:"email"`
+		Address     string `json:"address"`
+		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
@@ -512,15 +525,18 @@ func (s *server) updateProfile(w http.ResponseWriter, r *http.Request) {
 			logo_url = COALESCE(NULLIF($3,''), logo_url),
 			banner_url = COALESCE(NULLIF($4,''), banner_url),
 			phone = COALESCE(NULLIF($5,''), phone),
-			city = COALESCE(NULLIF($6,''), city)
+			city = COALESCE(NULLIF($6,''), city),
+			email = COALESCE(NULLIF($7,''), email),
+			address = COALESCE(NULLIF($8,''), address),
+			description = COALESCE(NULLIF($9,''), description)
 		WHERE id = $1
-		RETURNING id, name, slug, logo_url, banner_url, country, city, phone, email, verified`,
-		body.VendorID, body.Name, body.LogoURL, body.BannerURL, body.Phone, body.City)
+		RETURNING id, name, slug, logo_url, banner_url, country, city, phone, email, verified, address, description`,
+		body.VendorID, body.Name, body.LogoURL, body.BannerURL, body.Phone, body.City, body.Email, body.Address, body.Description)
 
 	var id int64
-	var name, slug, logo, banner, country, city, phone, email string
+	var name, slug, logo, banner, country, city, phone, email, address, description string
 	var verified bool
-	if err := row.Scan(&id, &name, &slug, &logo, &banner, &country, &city, &phone, &email, &verified); err != nil {
+	if err := row.Scan(&id, &name, &slug, &logo, &banner, &country, &city, &phone, &email, &verified, &address, &description); err != nil {
 		kit.Fail(w, 404, "vendor_not_found", fmt.Sprintf("boutique %d introuvable", body.VendorID))
 		return
 	}
@@ -530,6 +546,8 @@ func (s *server) updateProfile(w http.ResponseWriter, r *http.Request) {
 	out := vendorToDokanShape(id, name, slug, logo, banner, country, city, 0, 0, verified)
 	out["phone"] = phone
 	out["email"] = email
+	out["address"] = address
+	out["description"] = description
 	kit.JSON(w, 200, out)
 }
 
