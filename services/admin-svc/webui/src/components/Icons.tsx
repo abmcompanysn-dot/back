@@ -187,3 +187,65 @@ export function IconInbox(props: SVGProps<SVGSVGElement>) {
     </Base>
   )
 }
+
+export function IconPlus(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </Base>
+  )
+}
+
+export function IconTag(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M20.59 13.41L13 21l-9-9V4h8l8.59 8.59a2 2 0 0 1 0 2.82z" />
+      <circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none" />
+    </Base>
+  )
+}
+
+export function IconStar(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M12 3.5l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" />
+    </Base>
+  )
+}
+
+export function IconTree(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M4 4h6v6H4z" />
+      <path d="M14 9h6v6h-6z" />
+      <path d="M14 4h6v3h-6z" />
+      <path d="M10 7h4" />
+      <path d="M17 7v2" />
+      <path d="M14 17h6v3h-6z" />
+      <path d="M17 12v5" />
+    </Base>
+  )
+}
+
+export function IconMoreVertical(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <circle cx="12" cy="5" r="0.8" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="0.8" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="19" r="0.8" fill="currentColor" stroke="none" />
+    </Base>
+  )
+}
+
+export function IconTrash(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M4 7h16" />
+      <path d="M9 7V4h6v3" />
+      <path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </Base>
+  )
+}

@@ -51,6 +51,36 @@ CREATE INDEX IF NOT EXISTS idx_products_vendor  ON products (vendor_id);
 CREATE INDEX IF NOT EXISTS idx_products_slug    ON products (slug);
 CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON products (name); -- + extension pg_trgm en prod
 ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price_usd DOUBLE PRECISION;
+-- Back-office admin (module Catalogue) : un produit simple n'avait ni
+-- SKU/stock propres (seules les variations en avaient) ni marque/poids/SEO.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sku TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS barcode TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS stock INT NOT NULL DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INT NOT NULL DEFAULT 3;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS backorders_allowed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS brand_id BIGINT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_kg DOUBLE PRECISION;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS length_cm DOUBLE PRECISION;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS width_cm DOUBLE PRECISION;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS shipping_class TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS short_description TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS meta_title TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS meta_description TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_products_sku ON products (sku) WHERE sku <> '';
+CREATE INDEX IF NOT EXISTS idx_products_brand ON products (brand_id);
+
+CREATE TABLE IF NOT EXISTS brands (
+  id          BIGSERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  slug        TEXT UNIQUE NOT NULL,
+  logo_url    TEXT DEFAULT '',
+  description TEXT DEFAULT '',
+  website_url TEXT DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS product_variations (
   id         BIGSERIAL PRIMARY KEY,
@@ -73,6 +103,20 @@ CREATE TABLE IF NOT EXISTS categories (
   image_url TEXT DEFAULT '',
   UNIQUE (wc_id, lang)
 );
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS commission_rate DOUBLE PRECISION; -- NULL = taux global de la plateforme (loyalty-svc), sinon override
+
+CREATE TABLE IF NOT EXISTS attributes (
+  id   BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  slug TEXT UNIQUE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attribute_values (
+  id           BIGSERIAL PRIMARY KEY,
+  attribute_id BIGINT NOT NULL REFERENCES attributes(id) ON DELETE CASCADE,
+  value        TEXT NOT NULL,  -- ex: "Rouge"
+  meta         TEXT DEFAULT '' -- ex: code hex #FF0000 pour un attribut Couleur
+);
 
 CREATE TABLE IF NOT EXISTS reviews (
   id         BIGSERIAL PRIMARY KEY,
@@ -84,6 +128,8 @@ CREATE TABLE IF NOT EXISTS reviews (
   verified_purchase BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'; -- pending/approved/rejected — modération admin
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS admin_reply TEXT DEFAULT '';
 `
 
 type server struct {
@@ -132,6 +178,13 @@ func main() {
 		mux.HandleFunc("GET /search/suggestions", s.suggestions)
 		mux.HandleFunc("POST /vendor/products", s.createProduct)
 		mux.HandleFunc("PUT /products/{id}/images", s.updateProductImages)
+		mux.HandleFunc("PATCH /products/{id}", s.updateProduct)
+		mux.HandleFunc("DELETE /products/{id}", s.deleteProduct)
+		mux.HandleFunc("POST /products/bulk", s.bulkUpdateProducts)
+		mux.HandleFunc("GET /brands", s.listBrands)
+		mux.HandleFunc("POST /brands", s.createBrand)
+		mux.HandleFunc("PATCH /brands/{id}", s.updateBrand)
+		mux.HandleFunc("DELETE /brands/{id}", s.deleteBrand)
 	})
 }
 
@@ -151,7 +204,18 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	args := []any{lang}
-	where := "WHERE lang = $1 AND status = 'active'"
+	where := "WHERE lang = $1"
+	// admin=true (back-office uniquement, jamais le storefront public) lève
+	// le filtre "actifs seulement" pour laisser ?status= choisir librement —
+	// sans ce param, le comportement public existant ne change pas.
+	if q.Get("admin") == "true" {
+		if v := q.Get("status"); v != "" {
+			where += fmt.Sprintf(" AND status = $%d", len(args)+1)
+			args = append(args, v)
+		}
+	} else {
+		where += " AND status = 'active'"
+	}
 	if v := q.Get("category_id"); v != "" {
 		where += fmt.Sprintf(" AND category_id = $%d", len(args)+1)
 		args = append(args, atoi(v))
@@ -161,7 +225,7 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		args = append(args, atoi(v))
 	}
 	if v := q.Get("q"); v != "" {
-		where += fmt.Sprintf(" AND name ILIKE $%d", len(args)+1)
+		where += fmt.Sprintf(" AND (name ILIKE $%d OR sku ILIKE $%d)", len(args)+1, len(args)+1)
 		args = append(args, "%"+v+"%")
 	}
 	if v := q.Get("slug"); v != "" {
@@ -200,7 +264,7 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, sale_price_usd, status, is_variable, images
+	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, sale_price_usd, status, is_variable, images, sku, stock, low_stock_threshold, brand_id
 	          FROM products ` + where + " ORDER BY id"
 	if includeIDs == nil {
 		query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
@@ -214,17 +278,23 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, vendorID, categoryID int64
+		var id, vendorID, categoryID, brandID int64
 		var price float64
 		var salePrice *float64
-		var trid, l, name, slug, status string
+		var trid, l, name, slug, status, sku string
 		var isVar bool
 		var images []byte
-		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &salePrice, &status, &isVar, &images); err != nil {
+		var stock, lowStockThreshold int
+		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &salePrice, &status, &isVar, &images, &sku, &stock, &lowStockThreshold, &brandID); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
-		items = append(items, productToWooShape(id, trid, l, vendorID, categoryID, name, slug, "", price, salePrice, status, isVar, images, nil))
+		item := productToWooShape(id, trid, l, vendorID, categoryID, name, slug, "", price, salePrice, status, isVar, images, nil)
+		item["sku"] = sku
+		item["stock"] = stock
+		item["low_stock_threshold"] = lowStockThreshold
+		item["brand_id"] = brandID
+		items = append(items, item)
 	}
 
 	kit.JSON(w, 200, map[string]any{
@@ -614,6 +684,10 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 		NameEN     string           `json:"name_en"`
 		PriceUSD   float64          `json:"price_usd"`
 		CategoryID int64            `json:"category_id"`
+		BrandID    int64            `json:"brand_id"`
+		SKU        string           `json:"sku"`
+		Barcode    string           `json:"barcode"`
+		Stock      int              `json:"stock"`
 		Images     []string         `json:"images"`
 		IsVariable bool             `json:"is_variable"`
 		Variations []map[string]any `json:"variations"`
@@ -641,9 +715,10 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	insertLang := func(lang, name string) (int64, error) {
 		var id int64
 		err := tx.QueryRow(ctx, `
-			INSERT INTO products (trid, lang, vendor_id, category_id, name, slug, price_usd, images, is_variable)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-			trid, lang, body.VendorID, body.CategoryID, name, slugify(name), body.PriceUSD, imagesJSON, body.IsVariable,
+			INSERT INTO products (trid, lang, vendor_id, category_id, brand_id, name, slug, price_usd, images, is_variable, sku, barcode, stock)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+			trid, lang, body.VendorID, body.CategoryID, nullIfZero(body.BrandID), name, slugify(name), body.PriceUSD, imagesJSON, body.IsVariable,
+			body.SKU, body.Barcode, body.Stock,
 		).Scan(&id)
 		return id, err
 	}
@@ -724,7 +799,331 @@ func (s *server) updateProductImages(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{"trid": trid, "rows_updated": tag.RowsAffected()})
 }
 
+// updateProduct — édition admin d'UNE langue d'un produit (le back-office
+// édite fr et en séparément, chacune ayant son propre id). Tous les champs
+// sont optionnels dans le body : seuls ceux présents (pointeurs non-nil)
+// sont modifiés, pour permettre un PATCH partiel depuis l'UI (ex: juste le
+// stock depuis le toggle rapide) sans devoir renvoyer tout le produit.
+func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Name              *string  `json:"name"`
+		Description       *string  `json:"description"`
+		ShortDescription  *string  `json:"short_description"`
+		CategoryID        *int64   `json:"category_id"`
+		BrandID           *int64   `json:"brand_id"`
+		PriceUSD          *float64 `json:"price_usd"`
+		SalePriceUSD      *float64 `json:"sale_price_usd"`
+		SKU               *string  `json:"sku"`
+		Barcode           *string  `json:"barcode"`
+		Stock             *int     `json:"stock"`
+		LowStockThreshold *int     `json:"low_stock_threshold"`
+		BackordersAllowed *bool    `json:"backorders_allowed"`
+		WeightKg          *float64 `json:"weight_kg"`
+		LengthCm          *float64 `json:"length_cm"`
+		WidthCm           *float64 `json:"width_cm"`
+		HeightCm          *float64 `json:"height_cm"`
+		ShippingClass     *string  `json:"shipping_class"`
+		MetaTitle         *string  `json:"meta_title"`
+		MetaDescription   *string  `json:"meta_description"`
+		Images            *[]string `json:"images"`
+		Status            *string  `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
+		return
+	}
+
+	set := []string{}
+	args := []any{}
+	add := func(col string, v any) {
+		args = append(args, v)
+		set = append(set, fmt.Sprintf("%s = $%d", col, len(args)))
+	}
+	if body.Name != nil {
+		add("name", *body.Name)
+	}
+	if body.Description != nil {
+		add("description", *body.Description)
+	}
+	if body.ShortDescription != nil {
+		add("short_description", *body.ShortDescription)
+	}
+	if body.CategoryID != nil {
+		add("category_id", *body.CategoryID)
+	}
+	if body.BrandID != nil {
+		add("brand_id", nullIfZero(*body.BrandID))
+	}
+	if body.PriceUSD != nil {
+		add("price_usd", *body.PriceUSD)
+	}
+	if body.SalePriceUSD != nil {
+		add("sale_price_usd", *body.SalePriceUSD)
+	}
+	if body.SKU != nil {
+		add("sku", *body.SKU)
+	}
+	if body.Barcode != nil {
+		add("barcode", *body.Barcode)
+	}
+	if body.Stock != nil {
+		add("stock", *body.Stock)
+	}
+	if body.LowStockThreshold != nil {
+		add("low_stock_threshold", *body.LowStockThreshold)
+	}
+	if body.BackordersAllowed != nil {
+		add("backorders_allowed", *body.BackordersAllowed)
+	}
+	if body.WeightKg != nil {
+		add("weight_kg", *body.WeightKg)
+	}
+	if body.LengthCm != nil {
+		add("length_cm", *body.LengthCm)
+	}
+	if body.WidthCm != nil {
+		add("width_cm", *body.WidthCm)
+	}
+	if body.HeightCm != nil {
+		add("height_cm", *body.HeightCm)
+	}
+	if body.ShippingClass != nil {
+		add("shipping_class", *body.ShippingClass)
+	}
+	if body.MetaTitle != nil {
+		add("meta_title", *body.MetaTitle)
+	}
+	if body.MetaDescription != nil {
+		add("meta_description", *body.MetaDescription)
+	}
+	if body.Images != nil {
+		imagesJSON, _ := json.Marshal(*body.Images)
+		add("images", imagesJSON)
+	}
+	if body.Status != nil {
+		add("status", *body.Status)
+	}
+	if len(set) == 0 {
+		kit.Fail(w, 400, "empty_update", "aucun champ à modifier fourni")
+		return
+	}
+	add("updated_at", time.Now())
+	args = append(args, id)
+
+	tag, err := s.db.Exec(r.Context(),
+		fmt.Sprintf("UPDATE products SET %s WHERE id = $%d", strings.Join(set, ", "), len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "updated": true})
+}
+
+// deleteProduct — suppression admin. CASCADE supprime les variations et
+// avis liés (voir contraintes FK product_variations/reviews).
+func (s *server) deleteProduct(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	tag, err := s.db.Exec(r.Context(), "DELETE FROM products WHERE id = $1", id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "deleted": true})
+}
+
+// bulkUpdateProducts — actions groupées du back-office (sélection multiple
+// dans la DataTable) : changer le statut, la catégorie, ou supprimer
+// plusieurs produits en un seul appel plutôt que N requêtes séquentielles.
+func (s *server) bulkUpdateProducts(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs        []int64 `json:"ids"`
+		Action     string  `json:"action"` // "set_status" | "set_category" | "delete"
+		Status     string  `json:"status"`
+		CategoryID int64   `json:"category_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
+		return
+	}
+	if len(body.IDs) == 0 {
+		kit.Fail(w, 400, "missing_ids", "ids requis")
+		return
+	}
+	if len(body.IDs) > 500 {
+		body.IDs = body.IDs[:500]
+	}
+
+	var tag interface{ RowsAffected() int64 }
+	var err error
+	switch body.Action {
+	case "set_status":
+		if body.Status == "" {
+			kit.Fail(w, 400, "missing_status", "status requis pour set_status")
+			return
+		}
+		t, e := s.db.Exec(r.Context(), "UPDATE products SET status = $1, updated_at = now() WHERE id = ANY($2)", body.Status, body.IDs)
+		tag, err = t, e
+	case "set_category":
+		t, e := s.db.Exec(r.Context(), "UPDATE products SET category_id = $1, updated_at = now() WHERE id = ANY($2)", body.CategoryID, body.IDs)
+		tag, err = t, e
+	case "delete":
+		t, e := s.db.Exec(r.Context(), "DELETE FROM products WHERE id = ANY($1)", body.IDs)
+		tag, err = t, e
+	default:
+		kit.Fail(w, 400, "unknown_action", "action doit être set_status, set_category ou delete")
+		return
+	}
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"action": body.Action, "rows_affected": tag.RowsAffected()})
+}
+
+// ---------- marques (brands) ----------
+
+func (s *server) listBrands(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT b.id, b.name, b.slug, b.logo_url, b.description, b.website_url, b.status,
+		       (SELECT count(*) FROM products p WHERE p.brand_id = b.id) AS product_count
+		FROM brands b ORDER BY b.name`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, count int64
+		var name, slug, logo, desc, website, status string
+		if err := rows.Scan(&id, &name, &slug, &logo, &desc, &website, &status, &count); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "name": name, "slug": slug, "logo_url": logo,
+			"description": desc, "website_url": website, "status": status,
+			"product_count": count,
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items, "total": len(items)})
+}
+
+func (s *server) createBrand(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name       string `json:"name"`
+		LogoURL    string `json:"logo_url"`
+		Description string `json:"description"`
+		WebsiteURL string `json:"website_url"`
+		Status     string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Name == "" {
+		kit.Fail(w, 400, "missing_name", "name requis")
+		return
+	}
+	if body.Status == "" {
+		body.Status = "active"
+	}
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO brands (name, slug, logo_url, description, website_url, status)
+		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+		body.Name, slugify(body.Name), body.LogoURL, body.Description, body.WebsiteURL, body.Status,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": id})
+}
+
+func (s *server) updateBrand(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Name        *string `json:"name"`
+		LogoURL     *string `json:"logo_url"`
+		Description *string `json:"description"`
+		WebsiteURL  *string `json:"website_url"`
+		Status      *string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	set := []string{}
+	args := []any{}
+	add := func(col string, v any) {
+		args = append(args, v)
+		set = append(set, fmt.Sprintf("%s = $%d", col, len(args)))
+	}
+	if body.Name != nil {
+		add("name", *body.Name)
+	}
+	if body.LogoURL != nil {
+		add("logo_url", *body.LogoURL)
+	}
+	if body.Description != nil {
+		add("description", *body.Description)
+	}
+	if body.WebsiteURL != nil {
+		add("website_url", *body.WebsiteURL)
+	}
+	if body.Status != nil {
+		add("status", *body.Status)
+	}
+	if len(set) == 0 {
+		kit.Fail(w, 400, "empty_update", "aucun champ à modifier fourni")
+		return
+	}
+	args = append(args, id)
+	tag, err := s.db.Exec(r.Context(),
+		fmt.Sprintf("UPDATE brands SET %s WHERE id = $%d", strings.Join(set, ", "), len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "brand_not_found", fmt.Sprintf("marque %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "updated": true})
+}
+
+func (s *server) deleteBrand(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	tag, err := s.db.Exec(r.Context(), "DELETE FROM brands WHERE id = $1", id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "brand_not_found", fmt.Sprintf("marque %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "deleted": true})
+}
+
 // ---------- helpers ----------
+
+func nullIfZero(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
 
 func def(v, d string) string {
 	if v == "" {

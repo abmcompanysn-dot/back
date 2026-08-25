@@ -20,7 +20,7 @@ import {
 
 const TABS = [
   { path: '/admin/', label: "Tableau de bord", icon: IconDashboard, end: true },
-  { path: '/admin/products', label: 'Catalogue', icon: IconCatalog },
+  { path: '/admin/catalog/products', label: 'Catalogue', icon: IconCatalog },
   { path: '/admin/vendors', label: 'Vendeurs', icon: IconStore },
   { path: '/admin/orders', label: 'Commandes', icon: IconOrders },
   { path: '/admin/customers', label: 'Clients', icon: IconCustomers },
@@ -34,7 +34,11 @@ const TABS = [
 
 const PAGE_TITLES: Record<string, string> = {
   '/admin/': "Tableau de bord",
-  '/admin/products': 'Catalogue',
+  '/admin/catalog/products': 'Catalogue',
+  '/admin/catalog/products/new': 'Catalogue',
+  '/admin/catalog/brands': 'Catalogue',
+  '/admin/catalog/categories': 'Catalogue',
+  '/admin/catalog/reviews': 'Catalogue',
   '/admin/vendors': 'Vendeurs',
   '/admin/orders': 'Commandes',
   '/admin/customers': 'Clients',
@@ -59,7 +63,9 @@ export function Layout() {
   }
 
   const location = useLocation()
-  const currentTitle = PAGE_TITLES[location.pathname] ?? 'MIAD Market'
+  const currentTitle =
+    PAGE_TITLES[location.pathname] ??
+    (location.pathname.startsWith('/admin/catalog/') ? 'Catalogue' : 'MIAD Market')
 
   return (
     <div className="app-shell">

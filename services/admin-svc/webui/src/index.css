@@ -443,3 +443,304 @@ button:disabled {
   opacity: 0.4;
   cursor: default;
 }
+
+/* ---------- Sous-navigation d'un module (ex: Catalogue) ---------- */
+.subnav {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e4e6e9;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.subnav a {
+  padding: 9px 14px;
+  font-size: 13px;
+  color: #555;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.subnav a:hover {
+  color: #111;
+}
+.subnav a.active {
+  color: #005826;
+  border-bottom-color: #005826;
+  font-weight: 600;
+}
+
+/* ---------- Thumbnails produit dans une table ---------- */
+.thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #f0f1f3;
+  display: block;
+}
+.thumb-placeholder {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: #f0f1f3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #b7bec6;
+}
+.cell-primary {
+  font-weight: 600;
+  color: #111;
+}
+.cell-secondary {
+  font-size: 11.5px;
+  color: #888;
+}
+
+/* ---------- Toggle switch (statut publié/masqué) ---------- */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle .slider {
+  position: absolute;
+  inset: 0;
+  background: #d7dbe0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.toggle .slider::before {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.toggle input:checked + .slider {
+  background: #38ef7d;
+}
+.toggle input:checked + .slider::before {
+  transform: translateX(16px);
+}
+.toggle input:disabled + .slider {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- Filtres combinés au-dessus d'une DataTable ---------- */
+.filters-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.filters-bar select {
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+}
+
+/* ---------- Barre d'actions groupées (sélection multiple) ---------- */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #eefaf1;
+  border: 1px solid #bfe8cc;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #0a5c22;
+}
+.bulk-bar .spacer {
+  flex: 1;
+}
+.bulk-bar select,
+.bulk-bar button {
+  font-size: 12.5px;
+}
+
+/* ---------- Menu d'actions à 3 points ---------- */
+.row-menu {
+  position: relative;
+  display: inline-block;
+}
+.row-menu-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: #555;
+  display: inline-flex;
+}
+.row-menu-btn:hover {
+  background: #f0f1f3;
+}
+.row-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  background: #fff;
+  border: 1px solid #e4e6e9;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  min-width: 160px;
+  z-index: 20;
+  overflow: hidden;
+}
+.row-menu-dropdown button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: #222;
+}
+.row-menu-dropdown button:hover {
+  background: #f4f5f7;
+}
+.row-menu-dropdown button.danger {
+  color: #c02020;
+}
+
+/* ---------- Formulaire produit (onglets) ---------- */
+.form-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e4e6e9;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.form-tabs button {
+  padding: 9px 14px;
+  font-size: 13px;
+  color: #555;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.form-tabs button.active {
+  color: #005826;
+  border-bottom-color: #005826;
+  font-weight: 600;
+}
+.form-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.form-field.full {
+  grid-column: 1 / -1;
+}
+.form-field label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #333;
+}
+.form-field input,
+.form-field select,
+.form-field textarea {
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.form-field .hint {
+  font-size: 11px;
+  color: #888;
+}
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
+}
+
+/* ---------- Galerie d'images (drag & drop) ---------- */
+.image-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.image-gallery .image-slot {
+  width: 90px;
+  height: 90px;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  background: #f0f1f3;
+}
+.image-gallery .image-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.image-gallery .image-slot .remove-btn {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.image-dropzone {
+  width: 90px;
+  height: 90px;
+  border: 1.5px dashed #ccc;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #999;
+  font-size: 22px;
+  background: #fafbfc;
+}
+.image-dropzone.dragover {
+  border-color: #005826;
+  background: #eefaf1;
+  color: #005826;
+}

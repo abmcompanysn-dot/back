@@ -8,7 +8,6 @@ import {
   ListView,
   ORDER_COLUMNS,
   PAYMENT_COLUMNS,
-  PRODUCT_COLUMNS,
   VENDOR_COLUMNS,
 } from './pages/ListView'
 import { Shipping } from './pages/Shipping'
@@ -16,7 +15,12 @@ import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
 import { Security } from './pages/Security'
 import { System } from './pages/System'
-import { IconCatalog, IconCustomers, IconFinance, IconOrders, IconStore } from './components/Icons'
+import { AllProducts } from './pages/catalog/AllProducts'
+import { ProductForm } from './pages/catalog/ProductForm'
+import { Brands } from './pages/catalog/Brands'
+import { CategoriesAttributes } from './pages/catalog/CategoriesAttributes'
+import { Reviews } from './pages/catalog/Reviews'
+import { IconCustomers, IconFinance, IconOrders, IconStore } from './components/Icons'
 
 const emptyIconProps = { width: 40, height: 40, strokeWidth: 1.4 } as const
 
@@ -57,20 +61,14 @@ function AppRoutes() {
             />
           }
         />
-        <Route
-          path="products"
-          element={
-            <ListView
-              path="/admin/api/products"
-              columns={PRODUCT_COLUMNS}
-              title="Catalogue"
-              subtitle="Produits publiés par les vendeurs"
-              emptyIcon={<IconCatalog {...emptyIconProps} />}
-              emptyTitle="Aucun produit dans le catalogue"
-              emptyDescription="Les produits créés par les vendeurs apparaîtront ici."
-            />
-          }
-        />
+        <Route path="products" element={<Navigate to="/admin/catalog/products" replace />} />
+        <Route path="catalog" element={<Navigate to="/admin/catalog/products" replace />} />
+        <Route path="catalog/products" element={<AllProducts />} />
+        <Route path="catalog/products/new" element={<ProductForm />} />
+        <Route path="catalog/products/:id/edit" element={<ProductForm />} />
+        <Route path="catalog/brands" element={<Brands />} />
+        <Route path="catalog/categories" element={<CategoriesAttributes />} />
+        <Route path="catalog/reviews" element={<Reviews />} />
         <Route
           path="vendors"
           element={

@@ -318,24 +318,77 @@ func updateCatalogImages(ctx context.Context, wcID int64, images []string) error
 	return nil
 }
 
+// fetchAllProducts lit la pagination WooCommerce avec la même prudence
+// anti-blocage SiteGround que cmd/wc-import (voir son en-tête) : pause
+// entre pages, retry/backoff sauf sur 401/403, validation stricte du JSON.
+const (
+	pageDelay  = 1500 * time.Millisecond
+	maxRetries = 4
+)
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+func fetchJSONPaginated(url string, out any) error {
+	defer time.Sleep(pageDelay)
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*attempt) * time.Second)
+		}
+
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", "MIAD-Go-Migration-Import")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			resp.Body.Close()
+			return fmt.Errorf("authentification refusée (%d) — vérifier les clés ou un verrou anti-bot actif, ne pas relancer immédiatement", resp.StatusCode)
+		}
+		if resp.StatusCode >= 500 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("erreur serveur %d", resp.StatusCode)
+			continue
+		}
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("statut inattendu %d: %s", resp.StatusCode, string(body))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := json.Unmarshal(body, out); err != nil {
+			lastErr = fmt.Errorf("réponse non-JSON (probable blocage WAF/HTML) : %w", err)
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("échec après %d tentatives: %w", maxRetries, lastErr)
+}
+
 func fetchAllProducts(log *slog.Logger) ([]wcProduct, error) {
 	var all []wcProduct
 	page := 1
 	for {
 		url := fmt.Sprintf("%s/wp-json/wc/v3/products?per_page=100&page=%d&consumer_key=%s&consumer_secret=%s",
 			*wcURL, page, *wcKey, *wcSecret)
-		resp, err := http.Get(url)
-		if err != nil {
-			return nil, err
-		}
 		var batch []wcProduct
-		err = json.NewDecoder(resp.Body).Decode(&batch)
-		resp.Body.Close()
-		if err != nil {
+		if err := fetchJSONPaginated(url, &batch); err != nil {
 			return nil, fmt.Errorf("page %d: %w", page, err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("page %d: statut HTTP %d", page, resp.StatusCode)
 		}
 		all = append(all, batch...)
 		log.Info("page WooCommerce lue", "page", page, "n", len(batch))
