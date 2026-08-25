@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Image from 'next/image'
-import { mutate } from 'swr'
+import useSWR, { mutate } from 'swr'
 import { HeroSection } from './HeroSection'
 import { CategoriesSection } from './CategoriesSection'
 import { CountrySection } from './CountrySection'
@@ -131,10 +131,21 @@ function SponsoredStoresSection({ stores, products, onStoreClick, onNavigate, t 
   const [current, setCurrent] = useState(0)
   const [broken, setBroken] = useState<Set<string>>(new Set())
   const sponsored = stores.filter(s => s.verified).slice(0, 6)
-  if (sponsored.length === 0) return null
+  const vendor = sponsored.length > 0 ? sponsored[current] : undefined
 
-  const vendor = sponsored[current]
-  const vendorProducts = products
+  // La boutique sponsorisée affichée peut ne pas faire partie du lot de
+  // `products` déjà chargé en page d'accueil (produits vedettes par pays,
+  // pas le catalogue complet) — sans ce fetch dédié, les 3 vignettes
+  // restaient vides pour toute boutique dont aucun produit n'était déjà en
+  // mémoire (ex: JMK Créations, repéré le 2026-08-25). Même endpoint que
+  // prefetchStoreProducts, en lecture réactive plutôt qu'en simple prefetch.
+  const storeProductsURL = vendor ? `/api/products?vendor=${vendor.id}&per_page=100` : null
+  const { data: fetchedStoreProducts } = useSWR(storeProductsURL, storeProductsFetcher, { revalidateOnFocus: false })
+
+  if (!vendor) return null
+
+  const productPool: WooProduct[] = fetchedStoreProducts?.products ?? products
+  const vendorProducts = productPool
     .filter(p => (p.vendor?.id === vendor.id || p.vendor?.name === vendor.name) && !broken.has(p.id))
     .slice(0, 4)
 
