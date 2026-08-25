@@ -33,6 +33,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/miadmarket/miad-backend/internal/kit"
@@ -405,11 +406,9 @@ func imageURLs(images []struct {
 // le dernier segment sert de slug — même logique que l'ancien frontend
 // (mapStore côté woo-server.ts avant migration).
 func slugFromShopURL(shopURL string, fallbackID int64) string {
+	shopURL = strings.TrimRight(shopURL, "/")
 	for i := len(shopURL) - 1; i >= 0; i-- {
 		if shopURL[i] == '/' {
-			if i == len(shopURL)-1 {
-				continue // URL finissant par "/" — continuer à chercher le vrai dernier segment
-			}
 			return shopURL[i+1:]
 		}
 	}
