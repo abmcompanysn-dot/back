@@ -162,6 +162,17 @@ func main() {
 		mux.HandleFunc("PATCH /admin/api/returns/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPatch, s.orderURL+"/returns/"+r.PathValue("id"))
 		}))
+		// Documents (module Commandes §1.5). Renommés order-invoice/order-packing-slip
+		// (au lieu de orders/{id}/invoice) : même conflit net/http déjà rencontré
+		// avec orders/{id}/events vs orders/parent/{id} — "GET /orders/{id}/invoice"
+		// et "GET /orders/parent/{id}" matchent tous deux "/orders/parent/invoice"
+		// sans qu'aucun des deux ne soit plus spécifique (panic constaté au test).
+		mux.HandleFunc("GET /admin/api/order-invoice/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.orderURL + "/order-invoice/" + id
+		})))
+		mux.HandleFunc("GET /admin/api/order-packing-slip/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.orderURL + "/order-packing-slip/" + id
+		})))
 		mux.HandleFunc("GET /admin/api/products", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/products?admin=true" })))
 		mux.HandleFunc("GET /admin/api/products/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
 			return s.catalogURL + "/products/" + id

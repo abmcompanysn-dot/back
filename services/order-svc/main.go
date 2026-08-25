@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -50,6 +51,49 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_vendor ON orders (vendor_id);
 CREATE INDEX IF NOT EXISTS idx_orders_parent ON orders (parent_order_id);
+
+-- Module Commandes (back-office admin) : le champ status ci-dessus mélangeait
+-- statut de paiement (paid/refunded/payment_expired) et étape logistique
+-- (processing/shipped/delivered) dans un seul enum fourre-tout — le cahier
+-- des charges demande explicitement de séparer les deux (une commande peut
+-- être "payée" ET "en préparation" en même temps, ce que status seul ne
+-- pouvait pas représenter). status reste en base tel quel (compatibilité :
+-- le payload Kafka order.status_changed, lu par fulfillment-svc/email-svc/
+-- notification-svc, et le marqueur 'group' des commandes parent en
+-- dépendent) — payment_status/fulfillment_stage sont désormais la source de
+-- vérité pour l'affichage admin, status continue d'être tenu à jour en
+-- parallèle à chaque mutation pour ne rien casser côté Kafka.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_stage TEXT NOT NULL DEFAULT 'pending';
+-- Backfill unique (idempotent : ne réécrit que les lignes encore à leur
+-- valeur par défaut) à partir du status existant au moment de la migration.
+UPDATE orders SET
+  payment_status = CASE status
+    WHEN 'pending_payment' THEN 'pending'
+    WHEN 'payment_expired' THEN 'expired'
+    WHEN 'paid' THEN 'paid'
+    WHEN 'processing' THEN 'paid'
+    WHEN 'shipped' THEN 'paid'
+    WHEN 'delivered' THEN 'paid'
+    WHEN 'cancelled' THEN 'pending'
+    WHEN 'refunded' THEN 'refunded'
+    ELSE payment_status
+  END,
+  fulfillment_stage = CASE status
+    WHEN 'pending_payment' THEN 'pending'
+    WHEN 'payment_expired' THEN 'pending'
+    WHEN 'paid' THEN 'pending'
+    WHEN 'processing' THEN 'preparing'
+    WHEN 'shipped' THEN 'in_transit'
+    WHEN 'delivered' THEN 'delivered'
+    WHEN 'cancelled' THEN 'cancelled'
+    WHEN 'refunded' THEN 'cancelled'
+    ELSE fulfillment_stage
+  END
+WHERE payment_status = 'pending' AND fulfillment_stage = 'pending'
+  AND status IN ('processing', 'shipped', 'delivered', 'refunded', 'payment_expired', 'cancelled');
+CREATE INDEX IF NOT EXISTS idx_orders_fulfillment_stage ON orders (fulfillment_stage, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders (payment_status);
 
 CREATE TABLE IF NOT EXISTS coupons (
   code        TEXT PRIMARY KEY,
@@ -89,20 +133,29 @@ CREATE INDEX IF NOT EXISTS idx_returns_order ON returns (order_id);
 `
 
 type server struct {
-	db          *pgxpool.Pool
-	kafka       sarama.SyncProducer
-	timeout     time.Duration
-	shippingURL string
-	catalogURL  string // restock au moment de l'annulation (module Commandes)
+	db             *pgxpool.Pool
+	kafka          sarama.SyncProducer
+	timeout        time.Duration
+	shippingURL    string
+	catalogURL     string  // restock au moment de l'annulation (module Commandes)
+	vendorURL      string  // résolution du taux de commission par vendeur (module Commandes §1.2.A)
+	commissionRate float64 // taux plateforme par défaut si le vendeur n'a pas d'override (vendors.commission_rate NULL)
 }
 
+// line — commission_rate/commission_usd/net_usd sont calculés ET FIGÉS au
+// moment de la création de la commande (pas recalculés à la lecture) :
+// pratique comptable standard — un changement de taux vendeur après coup ne
+// doit jamais modifier rétroactivement une commission déjà facturée.
 type line struct {
-	ProductID   int64   `json:"product_id"`
-	VariationID int64   `json:"variation_id"`
-	VendorID    int64   `json:"vendor_id"`
-	Name        string  `json:"name"`
-	Quantity    int     `json:"quantity"`
-	UnitPrice   float64 `json:"unit_price_usd"`
+	ProductID      int64   `json:"product_id"`
+	VariationID    int64   `json:"variation_id"`
+	VendorID       int64   `json:"vendor_id"`
+	Name           string  `json:"name"`
+	Quantity       int     `json:"quantity"`
+	UnitPrice      float64 `json:"unit_price_usd"`
+	CommissionRate float64 `json:"commission_rate,omitempty"`
+	CommissionUSD  float64 `json:"commission_usd,omitempty"`
+	NetUSD         float64 `json:"net_usd,omitempty"`
 }
 
 func main() {
@@ -120,12 +173,18 @@ func main() {
 	}
 
 	mins, _ := strconv.Atoi(kit.Env("PAYMENT_TIMEOUT_MINUTES", "30"))
+	commissionRate, err := strconv.ParseFloat(kit.Env("PLATFORM_COMMISSION_RATE", "0.10"), 64)
+	if err != nil {
+		commissionRate = 0.10
+	}
 	s := &server{
-		db:          db,
-		kafka:       kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		timeout:     time.Duration(mins) * time.Minute,
-		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
-		catalogURL:  kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
+		db:             db,
+		kafka:          kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		timeout:        time.Duration(mins) * time.Minute,
+		shippingURL:    kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
+		catalogURL:     kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
+		vendorURL:      kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+		commissionRate: commissionRate,
 	}
 
 	// Reaper : le cas d'échec partiel est géré, pas tu.
@@ -147,6 +206,18 @@ func main() {
 		mux.HandleFunc("POST /returns", s.createReturn)
 		mux.HandleFunc("GET /returns", s.listReturns)
 		mux.HandleFunc("PATCH /returns/{id}", s.moderateReturn)
+
+		// Documents (module Commandes §1.5) : données structurées seulement —
+		// pas de génération PDF serveur (aucune lib PDF dans le dépôt, cohérent
+		// avec l'existant DHL où seul le label vient de l'API DHL elle-même).
+		// Le frontend admin compose la vue imprimable (window.print()).
+		// Renommés order-invoice/order-packing-slip (au lieu de orders/{id}/...) :
+		// même conflit net/http que order-events vs orders/parent/{id} déjà
+		// rencontré ailleurs — "GET /orders/{id}/invoice" et
+		// "GET /orders/parent/{parent_id}" matchent tous deux
+		// "/orders/parent/invoice" sans qu'aucun ne soit plus spécifique.
+		mux.HandleFunc("GET /order-invoice/{id}", s.getOrderInvoice)
+		mux.HandleFunc("GET /order-packing-slip/{id}", s.getOrderPackingSlip)
 	})
 }
 
@@ -211,11 +282,19 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 	created := []map[string]any{}
 	seq := 1
 	for vendorID, lines := range byVendor {
-		var subtotal float64
+		// Commission figée au moment de la vente (voir doc-comment de line) —
+		// un seul appel vendor-svc par boutique, pas par ligne.
+		rate := s.resolveCommissionRate(ctx, vendorID)
+		var subtotal, commissionTotal float64
 		itemCount := 0
-		for _, l := range lines {
-			subtotal += l.UnitPrice * float64(l.Quantity)
-			itemCount += l.Quantity
+		for i := range lines {
+			lineTotal := lines[i].UnitPrice * float64(lines[i].Quantity)
+			subtotal += lineTotal
+			itemCount += lines[i].Quantity
+			lines[i].CommissionRate = rate
+			lines[i].CommissionUSD = round2(lineTotal * rate)
+			lines[i].NetUSD = round2(lineTotal - lines[i].CommissionUSD)
+			commissionTotal += lines[i].CommissionUSD
 		}
 		shippingUSD := s.quoteShippingUSD(ctx, destCountry, itemCount)
 		total := subtotal + shippingUSD
@@ -225,9 +304,10 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 		orderRef := fmt.Sprintf("%s-%d", ref, seq)
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO orders (reference, customer_id, vendor_id, parent_order_id, status,
+			                    payment_status, fulfillment_stage,
 			                    lines, subtotal_usd, shipping_usd, total_usd, coupon_code,
 			                    shipping_address, billing_address, payment_method)
-			VALUES ($1,$2,$3,$4,'pending_payment',$5,$6,$7,$8,$9,$10,$11,$12)
+			VALUES ($1,$2,$3,$4,'pending_payment','pending','pending',$5,$6,$7,$8,$9,$10,$11,$12)
 			RETURNING id`,
 			orderRef, body.CustomerID, vendorID, parentID,
 			linesJSON, subtotal, shippingUSD, total, body.CouponCode,
@@ -240,6 +320,7 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 			"id": id, "reference": orderRef, "vendor_id": vendorID,
 			"status": "pending_payment", "subtotal_usd": subtotal,
 			"shipping_usd": shippingUSD, "total_usd": total,
+			"commission_usd": round2(commissionTotal), "net_usd": round2(subtotal - commissionTotal),
 		})
 		seq++
 	}
@@ -288,6 +369,17 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 		where += fmt.Sprintf(" AND status = $%d", len(args)+1)
 		args = append(args, v)
 	}
+	// Filtres combinés module Commandes §1.1 : statut de paiement et étape
+	// logistique sont désormais deux critères indépendants (voir
+	// statusToStages) — un admin peut par ex. lister "payé + en préparation".
+	if v := q.Get("payment_status"); v != "" {
+		where += fmt.Sprintf(" AND payment_status = $%d", len(args)+1)
+		args = append(args, v)
+	}
+	if v := q.Get("fulfillment_stage"); v != "" {
+		where += fmt.Sprintf(" AND fulfillment_stage = $%d", len(args)+1)
+		args = append(args, v)
+	}
 	if v := q.Get("payment_method"); v != "" {
 		where += fmt.Sprintf(" AND payment_method = $%d", len(args)+1)
 		args = append(args, v)
@@ -303,7 +395,8 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, reference, customer_id, vendor_id, status, total_usd, payment_method, created_at
+		SELECT id, reference, customer_id, vendor_id, status, payment_status, fulfillment_stage,
+		       total_usd, payment_method, created_at
 		FROM orders `+where+` ORDER BY id DESC
 		LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize), args...)
 	if err != nil {
@@ -315,12 +408,13 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, cust, vendor int64
 		var total float64
-		var ref, status, paymentMethod string
+		var ref, status, paymentStatus, fulfillmentStage, paymentMethod string
 		var at time.Time
-		_ = rows.Scan(&id, &ref, &cust, &vendor, &status, &total, &paymentMethod, &at)
+		_ = rows.Scan(&id, &ref, &cust, &vendor, &status, &paymentStatus, &fulfillmentStage, &total, &paymentMethod, &at)
 		items = append(items, map[string]any{
 			"id": id, "reference": ref, "customer_id": cust, "vendor_id": vendor,
-			"status": status, "total_usd": total, "payment_method": paymentMethod,
+			"status": status, "payment_status": paymentStatus, "fulfillment_stage": fulfillmentStage,
+			"total_usd": total, "payment_method": paymentMethod,
 			"created_at": at.UTC().Format(time.RFC3339),
 		})
 	}
@@ -333,22 +427,24 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	row := s.db.QueryRow(r.Context(), `
-		SELECT id, reference, customer_id, vendor_id, parent_order_id, status, lines,
+		SELECT id, reference, customer_id, vendor_id, parent_order_id, status, payment_status, fulfillment_stage, lines,
 		       subtotal_usd, shipping_usd, total_usd, coupon_code, shipping_address, billing_address, created_at, updated_at
 		FROM orders WHERE id = $1`, id)
 	var oid, cust, vendor, parent int64
 	var subtotal, shipping, total float64
-	var ref, status, coupon string
+	var ref, status, paymentStatus, fulfillmentStage, coupon string
 	var lines, shipAddr, billAddr []byte
 	var createdAt, updatedAt time.Time
-	if err := row.Scan(&oid, &ref, &cust, &vendor, &parent, &status, &lines,
+	if err := row.Scan(&oid, &ref, &cust, &vendor, &parent, &status, &paymentStatus, &fulfillmentStage, &lines,
 		&subtotal, &shipping, &total, &coupon, &shipAddr, &billAddr, &createdAt, &updatedAt); err != nil {
 		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande %d introuvable", id))
 		return
 	}
 	out := map[string]any{
 		"id": oid, "reference": ref, "customer_id": cust, "vendor_id": vendor,
-		"parent_order_id": parent, "status": status, "lines": json.RawMessage(lines),
+		"parent_order_id": parent, "status": status,
+		"payment_status": paymentStatus, "fulfillment_stage": fulfillmentStage,
+		"lines":        json.RawMessage(lines),
 		"subtotal_usd": subtotal, "shipping_usd": shipping, "total_usd": total,
 		"coupon_code": coupon,
 		"created_at":  createdAt.UTC().Format(time.RFC3339),
@@ -359,6 +455,92 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(billAddr) > 0 {
 		out["billing_address"] = json.RawMessage(billAddr)
+	}
+	kit.JSON(w, 200, out)
+}
+
+// getOrderInvoice — facture client (module Commandes §1.5). Données
+// structurées uniquement, voir doc-comment de la route pour le pourquoi.
+func (s *server) getOrderInvoice(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	row := s.db.QueryRow(r.Context(), `
+		SELECT id, reference, customer_id, vendor_id, status, payment_status, lines,
+		       subtotal_usd, shipping_usd, total_usd, coupon_code, billing_address, payment_method, created_at
+		FROM orders WHERE id = $1`, id)
+	var oid, cust, vendor int64
+	var subtotal, shipping, total float64
+	var ref, status, paymentStatus, coupon, paymentMethod string
+	var lines, billAddr []byte
+	var createdAt time.Time
+	if err := row.Scan(&oid, &ref, &cust, &vendor, &status, &paymentStatus, &lines,
+		&subtotal, &shipping, &total, &coupon, &billAddr, &paymentMethod, &createdAt); err != nil {
+		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande %d introuvable", id))
+		return
+	}
+	var vendorLines []line
+	_ = json.Unmarshal(lines, &vendorLines)
+	items := []map[string]any{}
+	for _, l := range vendorLines {
+		items = append(items, map[string]any{
+			"name": l.Name, "quantity": l.Quantity,
+			"unit_price_usd": strconv.FormatFloat(l.UnitPrice, 'f', 2, 64),
+			"line_total_usd": strconv.FormatFloat(l.UnitPrice*float64(l.Quantity), 'f', 2, 64),
+		})
+	}
+	out := map[string]any{
+		"order_id": oid, "invoice_number": "INV-" + ref, "reference": ref,
+		"vendor_id": vendor, "customer_id": cust,
+		"status": status, "payment_status": paymentStatus, "payment_method": paymentMethod,
+		"items":        items,
+		"subtotal_usd": strconv.FormatFloat(subtotal, 'f', 2, 64),
+		"shipping_usd": strconv.FormatFloat(shipping, 'f', 2, 64),
+		"total_usd":    strconv.FormatFloat(total, 'f', 2, 64),
+		"coupon_code":  coupon,
+		"issued_at":    createdAt.UTC().Format(time.RFC3339),
+		// TVA : aucun taux/numéro fiscal configuré nulle part dans le backend
+		// actuel (pas de champ dédié côté vendor-svc/admin-svc) — signalé
+		// explicitement plutôt que d'inventer un taux, la facture reste hors
+		// taxe tant que ce n'est pas configuré.
+		"tax_note": "aucune TVA appliquée — non configurée côté plateforme",
+	}
+	if len(billAddr) > 0 {
+		out["billing_address"] = json.RawMessage(billAddr)
+	}
+	kit.JSON(w, 200, out)
+}
+
+// getOrderPackingSlip — bordereau d'expédition vendeur (module Commandes
+// §1.5) : ce que le vendeur imprime pour préparer le colis, pas de prix ni
+// de coordonnées de paiement (contrairement à la facture).
+func (s *server) getOrderPackingSlip(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	row := s.db.QueryRow(r.Context(), `
+		SELECT id, reference, vendor_id, lines, shipping_address, created_at
+		FROM orders WHERE id = $1`, id)
+	var oid, vendor int64
+	var ref string
+	var lines, shipAddr []byte
+	var createdAt time.Time
+	if err := row.Scan(&oid, &ref, &vendor, &lines, &shipAddr, &createdAt); err != nil {
+		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande %d introuvable", id))
+		return
+	}
+	var vendorLines []line
+	_ = json.Unmarshal(lines, &vendorLines)
+	items := []map[string]any{}
+	for _, l := range vendorLines {
+		items = append(items, map[string]any{
+			"product_id": l.ProductID, "variation_id": l.VariationID,
+			"name": l.Name, "quantity": l.Quantity,
+		})
+	}
+	out := map[string]any{
+		"order_id": oid, "reference": ref, "vendor_id": vendor,
+		"items":      items,
+		"created_at": createdAt.UTC().Format(time.RFC3339),
+	}
+	if len(shipAddr) > 0 {
+		out["shipping_address"] = json.RawMessage(shipAddr)
 	}
 	kit.JSON(w, 200, out)
 }
@@ -418,6 +600,11 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 				"name": l.Name, "quantity": l.Quantity,
 				"price": strconv.FormatFloat(l.UnitPrice, 'f', 2, 64),
 				"total": strconv.FormatFloat(l.UnitPrice*float64(l.Quantity), 'f', 2, 64),
+				// Répartition par vendeur (module Commandes §1.2.A) : commission
+				// figée à la création de la commande, jamais recalculée ici.
+				"commission_rate": l.CommissionRate,
+				"commission_usd":  strconv.FormatFloat(l.CommissionUSD, 'f', 2, 64),
+				"net_usd":         strconv.FormatFloat(l.NetUSD, 'f', 2, 64),
 			})
 		}
 	}
@@ -502,7 +689,7 @@ func (s *server) quoteShippingUSD(ctx context.Context, country string, itemCount
 func (s *server) confirmPayment(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	res, err := s.db.Exec(r.Context(), `
-		UPDATE orders SET status = 'paid', updated_at = now()
+		UPDATE orders SET status = 'paid', payment_status = 'paid', fulfillment_stage = 'pending', updated_at = now()
 		WHERE id = $1 AND status = 'pending_payment'`, id)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -527,6 +714,34 @@ var validOrderStatuses = map[string]bool{
 	"payment_expired": true,
 }
 
+// statusToStages — correspondance status (legacy, fourre-tout) →
+// (payment_status, fulfillment_stage) séparés, utilisée partout où status
+// est écrit pour que les deux nouveaux champs restent synchronisés. Même
+// table que le backfill du schéma (voir const schema) — une seule source
+// de vérité pour ce mapping.
+func statusToStages(status string) (paymentStatus, fulfillmentStage string) {
+	switch status {
+	case "pending_payment":
+		return "pending", "pending"
+	case "payment_expired":
+		return "expired", "pending"
+	case "paid":
+		return "paid", "pending"
+	case "processing":
+		return "paid", "preparing"
+	case "shipped":
+		return "paid", "in_transit"
+	case "delivered":
+		return "paid", "delivered"
+	case "cancelled":
+		return "pending", "cancelled"
+	case "refunded":
+		return "refunded", "cancelled"
+	default:
+		return "pending", "pending"
+	}
+}
+
 func (s *server) updateOrderStatus(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	var body struct {
@@ -540,8 +755,10 @@ func (s *server) updateOrderStatus(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 400, "invalid_status", fmt.Sprintf("statut %q inconnu", body.Status))
 		return
 	}
+	paymentStatus, fulfillmentStage := statusToStages(body.Status)
 	res, err := s.db.Exec(r.Context(),
-		"UPDATE orders SET status = $2, updated_at = now() WHERE id = $1", id, body.Status)
+		"UPDATE orders SET status = $2, payment_status = $3, fulfillment_stage = $4, updated_at = now() WHERE id = $1",
+		id, body.Status, paymentStatus, fulfillmentStage)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -618,7 +835,7 @@ func (s *server) cancelOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := s.db.Exec(r.Context(),
-		"UPDATE orders SET status = 'cancelled', updated_at = now() WHERE id = $1", id); err != nil {
+		"UPDATE orders SET status = 'cancelled', payment_status = 'pending', fulfillment_stage = 'cancelled', updated_at = now() WHERE id = $1", id); err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
@@ -689,6 +906,35 @@ func (s *server) restockProduct(ctx context.Context, productID int64, qty int) e
 	}
 	return nil
 }
+
+// resolveCommissionRate — vendors.commission_rate (posé par le module
+// Vendeurs) prioritaire s'il est renseigné, sinon repli sur le taux
+// plateforme global (PLATFORM_COMMISSION_RATE). Best-effort : vendor-svc
+// injoignable ou vendeur introuvable ne doit jamais bloquer la création
+// d'une commande — repli silencieux sur le taux global dans ce cas.
+func (s *server) resolveCommissionRate(ctx context.Context, vendorID int64) float64 {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendor/%d", s.vendorURL, vendorID), nil)
+	if err != nil {
+		return s.commissionRate
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return s.commissionRate
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return s.commissionRate
+	}
+	var vendor struct {
+		CommissionRate *float64 `json:"commission_rate"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&vendor); err != nil || vendor.CommissionRate == nil {
+		return s.commissionRate
+	}
+	return *vendor.CommissionRate
+}
+
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 /* ---------- Retours & litiges (module Commandes) ---------- */
 
@@ -882,7 +1128,7 @@ func (s *server) expireUnpaidLoop(log interface{ Info(string, ...any) }) {
 	for range tick.C {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		res, err := s.db.Exec(ctx, `
-			UPDATE orders SET status = 'payment_expired', updated_at = now()
+			UPDATE orders SET status = 'payment_expired', payment_status = 'expired', fulfillment_stage = 'pending', updated_at = now()
 			WHERE status = 'pending_payment' AND created_at < now() - $1::interval`,
 			fmt.Sprintf("%d minutes", int(s.timeout.Minutes())))
 		cancel()
