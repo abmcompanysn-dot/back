@@ -34,6 +34,7 @@ export function MediaLibrary() {
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [folder, setFolder] = useState('')
+  const [uploadFolder, setUploadFolder] = useState('products')
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [selected, setSelected] = useState<MediaFile | null>(null)
@@ -71,7 +72,7 @@ export function MediaLibrary() {
       for (const file of Array.from(files)) {
         const form = new FormData()
         form.append('file', file)
-        form.append('prefix', folder || 'products')
+        form.append('prefix', uploadFolder)
         const res = await fetch('/admin/api/media/upload', {
           method: 'POST',
           headers: { Authorization: `Bearer ${localStorage.getItem('miad_admin_jwt') || ''}` },
@@ -126,6 +127,17 @@ export function MediaLibrary() {
           <button className="btn-ghost" disabled={scanningOrphans} onClick={scanOrphans}>
             {scanningOrphans ? 'Analyse…' : 'Détecter les orphelins'}
           </button>
+          <select
+            value={uploadFolder}
+            onChange={(e) => setUploadFolder(e.target.value)}
+            title="Dossier de destination pour le prochain téléversement"
+          >
+            {FOLDERS.filter((f) => f.value).map((f) => (
+              <option key={f.value} value={f.value}>
+                Envoyer vers : {f.label}
+              </option>
+            ))}
+          </select>
           <button className="btn-primary" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
             {uploading ? 'Envoi…' : '+ Téléverser'}
           </button>
