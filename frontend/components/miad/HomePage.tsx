@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Image from 'next/image'
 import { mutate } from 'swr'
-import { getFavoriteCategoryFromHistory } from '@/lib/recommendations'
 import { HeroSection } from './HeroSection'
 import { CategoriesSection } from './CategoriesSection'
 import { CountrySection } from './CountrySection'
@@ -12,7 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { countries, type WooProduct, type WooVendor, translations } from '@/lib/woocommerce'
 import { proxyIfLocalWp } from '@/lib/image-utils'
 import { useCurrency } from '@/contexts/CurrencyContext'
-import { Store, Truck, ShieldCheck, Headphones, Star, Package, ChevronLeft, ChevronRight, ArrowRight, Check, MapPin } from 'lucide-react'
+import { Store, Truck, ShieldCheck, Headphones, Star, Package, ChevronLeft, ChevronRight, ArrowRight, Check } from 'lucide-react'
 
 interface HomePageProps {
   language: 'fr' | 'en'
@@ -401,21 +400,6 @@ export function HomePage({
     return selected ? [selected, ...others] : filtered
   }, [selectedCountry, normalizedProductsByCountry, normalizedStoresByCountry])
 
-  // Vrai si le pays détecté du visiteur a du contenu réel (produits/boutiques)
-  // — sinon la bannière de bienvenue ne mènerait vers une section vide.
-  const detectedCountry = orderedCountries[0]?.code === selectedCountry.toLowerCase() ? orderedCountries[0] : null
-
-  // Personnalisation de la bannière au-delà du pays : catégorie la plus
-  // consultée par ce visiteur (historique localStorage, pas de compte requis).
-  // Reste `null` pour un premier visiteur — la bannière retombe alors sur le
-  // message générique par pays.
-  const [favoriteCategory, setFavoriteCategory] = useState<{ slug: string; name: string } | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    getFavoriteCategoryFromHistory().then((cat) => { if (!cancelled) setFavoriteCategory(cat) })
-    return () => { cancelled = true }
-  }, [])
-
   // Marché [Pays] retiré de l'accueil par défaut (demandé le 2026-07-24/25),
   // MAIS ce composant est aussi le rendu des résultats de recherche/filtre
   // catégorie (cf. MiadMarketClient.tsx : HomePage sert de repli dès qu'un
@@ -503,40 +487,6 @@ export function HomePage({
         onNavigate={onNavigate}
         t={t}
       />
-
-      {/* Bannière de bienvenue — personnalisée par pays détecté, et par
-          catégorie la plus consultée par ce visiteur si on a ce signal
-          (favoriteCategory) : message + destination du clic changent tous
-          les deux, pas juste le texte. */}
-      {detectedCountry && (
-        <div className="container mx-auto px-4 pt-6">
-          <button
-            type="button"
-            onClick={() => {
-              if (favoriteCategory) onCategoryChange(favoriteCategory.slug)
-              document.getElementById(filterActive ? 'country-sections' : 'categories-section')?.scrollIntoView({ behavior: 'smooth' })
-            }}
-            className="w-full flex items-center gap-4 bg-linear-to-r from-primary to-primary/80 text-primary-foreground rounded-2xl px-6 py-4 shadow-lg hover:shadow-xl transition-shadow group text-left"
-          >
-            <span className="text-3xl shrink-0">{favoriteCategory ? '✨' : detectedCountry.flag}</span>
-            <div className="flex-1 min-w-0">
-              <p className="font-black text-sm sm:text-base truncate">
-                {favoriteCategory
-                  ? `${favoriteCategory.name} ${t.nearYou}, ${detectedCountry.name} !`
-                  : `${t.welcomeFrom} ${detectedCountry.name} !`}
-              </p>
-              <p className="text-xs opacity-80 truncate">
-                {favoriteCategory
-                  ? t.basedOnVisits
-                  : t.welcomeSub}
-              </p>
-            </div>
-            <div className="hidden sm:flex items-center gap-1 text-xs font-bold shrink-0 group-hover:translate-x-1 transition-transform">
-              <MapPin size={14} /> {t.seeMore} <ChevronRight size={14} />
-            </div>
-          </button>
-        </div>
-      )}
 
       {/* Skeleton sections pays — uniquement pendant une recherche/filtre
           (résultats affichés via CountrySection ci-dessous) ; en navigation
