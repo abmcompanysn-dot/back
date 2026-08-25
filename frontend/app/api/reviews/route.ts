@@ -1,14 +1,8 @@
 import { NextResponse } from 'next/server'
 import { headers } from 'next/headers'
+import { CATALOG_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
-
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
-const WOO_CK = process.env.WOO_CONSUMER_KEY || ''
-const WOO_CS = process.env.WOO_CONSUMER_SECRET || ''
-
-const wooAuth = () =>
-  'Basic ' + Buffer.from(`${WOO_CK}:${WOO_CS}`).toString('base64')
 
 // Simple in-memory rate limiter: max 3 reviews per IP per hour
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
@@ -36,21 +30,19 @@ export async function GET(req: Request) {
   }
 
   try {
-    const url = `${WOO_URL}/wp-json/wc/v3/products/reviews?product=${productId}&per_page=20&status=approved`
-    const res = await fetch(url, {
-      headers: { Authorization: wooAuth(), Accept: 'application/json' },
+    const res = await fetch(`${CATALOG_SVC_URL}/products/${productId}/reviews?page_size=20`, {
       next: { revalidate: 120 },
     })
     if (!res.ok) return NextResponse.json({ reviews: [] })
-    const raw: any[] = await res.json()
+    const data: any = await res.json()
 
-    const reviews = raw.map((r) => ({
+    const reviews = (data.items || []).map((r: any) => ({
       id: r.id,
       reviewer: r.reviewer || 'Client',
       rating: r.rating || 5,
-      review: r.review?.replace(/<[^>]*>/g, '') || '',
-      date: r.date_created || '',
-      verified: r.verified ?? false,
+      review: r.comment || '',
+      date: r.created_at || '',
+      verified: r.verified_purchase ?? false,
     }))
 
     return NextResponse.json({ reviews }, { headers: { 'Cache-Control': 'public, s-maxage=120' } })
@@ -83,7 +75,6 @@ export async function POST(req: Request) {
 
   const { product_id, rating, review, reviewer, reviewer_email } = body
 
-  // Validation stricte
   if (!product_id || typeof product_id !== 'number') {
     return NextResponse.json({ success: false, message: 'product_id manquant.' }, { status: 400 })
   }
@@ -104,34 +95,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, message: 'Email invalide.' }, { status: 400 })
   }
 
-  // Sanitize: strip HTML tags from text fields
   const cleanReview = review.trim().replace(/<[^>]*>/g, '')
   const cleanName = reviewer.trim().replace(/<[^>]*>/g, '').slice(0, 100)
   const cleanEmail = reviewer_email.trim().slice(0, 200)
 
   try {
-    const res = await fetch(`${WOO_URL}/wp-json/wc/v3/products/reviews`, {
+    const res = await fetch(`${CATALOG_SVC_URL}/products/${product_id}/reviews`, {
       method: 'POST',
-      headers: {
-        Authorization: wooAuth(),
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        product_id,
+        guest_name: cleanName,
+        guest_email: cleanEmail,
         rating,
-        review: cleanReview,
-        reviewer: cleanName,
-        reviewer_email: cleanEmail,
-        status: 'hold', // pending moderation by default
+        comment: cleanReview,
       }),
     })
 
-    const data = await res.json()
+    const data = await res.json().catch(() => ({}))
 
     if (!res.ok) {
-      const msg = data?.message || 'Erreur WooCommerce.'
-      return NextResponse.json({ success: false, message: msg }, { status: res.status })
+      return NextResponse.json({ success: false, message: data?.error?.message || 'Erreur serveur.' }, { status: res.status })
     }
 
     return NextResponse.json({

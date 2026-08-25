@@ -1,34 +1,17 @@
 import { NextResponse } from 'next/server'
+import { CATALOG_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
-
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
-const WOO_CK  = process.env.WOO_CONSUMER_KEY  || ''
-const WOO_CS  = process.env.WOO_CONSUMER_SECRET || ''
-import { requireEnv } from '@/lib/require-env'
-const INTERNAL_SECRET = requireEnv('INTERNAL_API_SECRET')
-
-function wooHeaders() {
-  return {
-    Authorization: 'Basic ' + Buffer.from(`${WOO_CK}:${WOO_CS}`).toString('base64'),
-    'Content-Type': 'application/json',
-    'X-Headless-Secret': INTERNAL_SECRET,
-    'User-Agent': 'MIAD-Headless-Client',
-  }
-}
 
 // GET /api/products/[id]/variations
 export async function GET(
   _: Request,
   { params }: { params: { id: string } }
 ) {
-  const res = await fetch(
-    `${WOO_URL}/wp-json/wc/v3/products/${params.id}/variations?per_page=100`,
-    { headers: wooHeaders() }
-  )
-  const data = await res.json()
-  if (!res.ok) return NextResponse.json({ error: data.message }, { status: res.status })
-  return NextResponse.json({ variations: data }, {
+  const res = await fetch(`${CATALOG_SVC_URL}/products/${params.id}?lang=fr`, { next: { revalidate: 60 } })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return NextResponse.json({ error: data?.error?.message }, { status: res.status })
+  return NextResponse.json({ variations: data.variations || [] }, {
     headers: { 'Cache-Control': 'public, max-age=60, s-maxage=3600' },
   })
 }
@@ -50,26 +33,22 @@ export async function POST(
   const results = await Promise.all(
     variations.map(async (v: any) => {
       const regular = v.regularPrice || v.price
-      const sale    = v.regularPrice && v.regularPrice !== v.price ? v.price : (v.salePrice || '')
 
       const payload: Record<string, any> = {
-        regular_price:  String(regular || ''),
-        sale_price:     String(sale),
-        manage_stock:   true,
-        stock_quantity: parseInt(v.stock) || 0,
-        attributes: Object.entries(v.attrs || {}).map(([name, option]) => ({ name, option })),
+        price_usd: Number(regular || 0),
+        stock: parseInt(v.stock) || 0,
+        attributes: v.attrs || {},
       }
-
-      if (v.imageId) payload.image = { id: v.imageId }
+      if (v.imageUrl) payload.image_url = v.imageUrl
 
       const isUpdate = !!v.id
-      const url    = isUpdate
-        ? `${WOO_URL}/wp-json/wc/v3/products/${params.id}/variations/${v.id}`
-        : `${WOO_URL}/wp-json/wc/v3/products/${params.id}/variations`
+      const url = isUpdate
+        ? `${CATALOG_SVC_URL}/products/${params.id}/variations/${v.id}`
+        : `${CATALOG_SVC_URL}/products/${params.id}/variations`
       const method = isUpdate ? 'PUT' : 'POST'
 
-      const res = await fetch(url, { method, headers: wooHeaders(), body: JSON.stringify(payload) })
-      return res.json()
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      return res.json().catch(() => ({}))
     })
   )
 
@@ -91,10 +70,10 @@ export async function DELETE(
   if (!variationId) return NextResponse.json({ error: 'variationId requis' }, { status: 400 })
 
   const res = await fetch(
-    `${WOO_URL}/wp-json/wc/v3/products/${params.id}/variations/${variationId}?force=true`,
-    { method: 'DELETE', headers: wooHeaders() }
+    `${CATALOG_SVC_URL}/products/${params.id}/variations/${variationId}`,
+    { method: 'DELETE' }
   )
-  const data = await res.json()
-  if (!res.ok) return NextResponse.json({ error: data.message }, { status: res.status })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return NextResponse.json({ error: data?.error?.message }, { status: res.status })
   return NextResponse.json({ success: true })
 }

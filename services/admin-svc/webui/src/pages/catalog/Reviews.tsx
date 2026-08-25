@@ -8,7 +8,9 @@ interface Review {
   id: number
   product_id: number
   product_name: string
-  customer_id: number
+  customer_id: number | null
+  guest_name: string
+  guest_email: string
   rating: number
   comment: string
   verified_purchase: boolean
@@ -127,7 +129,8 @@ export function Reviews() {
               <div>
                 <div className="cell-primary">{r.product_name || `Produit #${r.product_id}`}</div>
                 <div className="cell-secondary">
-                  Client #{r.customer_id} · {new Date(r.created_at).toLocaleDateString('fr-FR')}
+                  {r.guest_name || (r.customer_id ? `Client #${r.customer_id}` : 'Anonyme')}
+                  {r.guest_email && ` (${r.guest_email})`} · {new Date(r.created_at).toLocaleDateString('fr-FR')}
                   {r.verified_purchase && <span className="badge badge-blue" style={{ marginLeft: 8 }}>Achat vérifié</span>}
                 </div>
               </div>

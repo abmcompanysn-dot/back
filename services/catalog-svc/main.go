@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS attribute_values (
 CREATE TABLE IF NOT EXISTS reviews (
   id         BIGSERIAL PRIMARY KEY,
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  customer_id BIGINT NOT NULL,
+  customer_id BIGINT,                   -- NULL = avis invité (guest_name/guest_email)
   order_id   BIGINT,                    -- vérifié via order-svc (anti-faux avis)
   rating     INT NOT NULL CHECK (rating BETWEEN 1 AND 5),
   comment    TEXT DEFAULT '',
@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'; -- pending/approved/rejected — modération admin
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS admin_reply TEXT DEFAULT '';
+-- Avis "invité" (sans compte) : le frontend collecte nom+email sans exiger
+-- de connexion — customer_id devient nullable (0 = anonyme, migré depuis
+-- l'ancien NOT NULL) plutôt que de forcer une création de compte fantôme.
+ALTER TABLE reviews ALTER COLUMN customer_id DROP NOT NULL;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS guest_name TEXT DEFAULT '';
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS guest_email TEXT DEFAULT '';
 `
 
 type server struct {
@@ -172,6 +178,9 @@ func main() {
 		mux.HandleFunc("GET /products/{id}", s.getProduct)
 		mux.HandleFunc("GET /products/{id}/similar", s.similar)
 		mux.HandleFunc("GET /products/variations", s.listVariationsBatch)
+		mux.HandleFunc("POST /products/{id}/variations", s.createVariation)
+		mux.HandleFunc("PUT /products/{id}/variations/{variation_id}", s.updateVariation)
+		mux.HandleFunc("DELETE /products/{id}/variations/{variation_id}", s.deleteVariation)
 		mux.HandleFunc("GET /products/{id}/reviews", s.listReviews)
 		mux.HandleFunc("POST /products/{id}/reviews", s.createReview)
 		mux.HandleFunc("GET /reviews", s.listReviewsAdmin)
@@ -522,7 +531,7 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, customer_id, order_id, rating, comment, verified_purchase, created_at
+		SELECT id, customer_id, guest_name, order_id, rating, comment, verified_purchase, created_at
 		FROM reviews WHERE product_id = $1 AND status = 'approved'
 		ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
 		productID, pageSize, (page-1)*pageSize)
@@ -534,18 +543,27 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, customerID int64
+		var id int64
+		var customerID *int64
 		var orderID *int64
 		var rating int
-		var comment string
+		var guestName, comment string
 		var verified bool
 		var createdAt time.Time
-		if err := rows.Scan(&id, &customerID, &orderID, &rating, &comment, &verified, &createdAt); err != nil {
+		if err := rows.Scan(&id, &customerID, &guestName, &orderID, &rating, &comment, &verified, &createdAt); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
+		// reviewer : nom de l'invité si présent, sinon "Client #<id>" pour
+		// un compte connecté (aucun accès au vrai nom depuis catalog-svc,
+		// qui ne possède pas la table customers — resterait un appel
+		// cross-service pour si peu, jamais bloquant si absent).
+		reviewerName := guestName
+		if reviewerName == "" && customerID != nil {
+			reviewerName = fmt.Sprintf("Client #%d", *customerID)
+		}
 		items = append(items, map[string]any{
-			"id": id, "customer_id": customerID, "order_id": orderID,
+			"id": id, "reviewer": reviewerName, "order_id": orderID,
 			"rating": rating, "comment": comment, "verified_purchase": verified,
 			"created_at": createdAt.UTC().Format(time.RFC3339),
 		})
@@ -586,7 +604,7 @@ func (s *server) listReviewsAdmin(w http.ResponseWriter, r *http.Request) {
 
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
-		SELECT rv.id, rv.product_id, p.name, rv.customer_id, rv.rating, rv.comment,
+		SELECT rv.id, rv.product_id, p.name, rv.customer_id, rv.guest_name, rv.guest_email, rv.rating, rv.comment,
 		       rv.verified_purchase, rv.status, rv.admin_reply, rv.created_at
 		FROM reviews rv
 		LEFT JOIN products p ON p.id = rv.product_id AND p.lang = 'fr'
@@ -599,18 +617,20 @@ func (s *server) listReviewsAdmin(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, productID, customerID int64
+		var id, productID int64
+		var customerID *int64
 		var rating int
-		var productName, comment, status, adminReply string
+		var productName, guestName, guestEmail, comment, status, adminReply string
 		var verified bool
 		var createdAt time.Time
-		if err := rows.Scan(&id, &productID, &productName, &customerID, &rating, &comment, &verified, &status, &adminReply, &createdAt); err != nil {
+		if err := rows.Scan(&id, &productID, &productName, &customerID, &guestName, &guestEmail, &rating, &comment, &verified, &status, &adminReply, &createdAt); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
 		items = append(items, map[string]any{
 			"id": id, "product_id": productID, "product_name": productName,
-			"customer_id": customerID, "rating": rating, "comment": comment,
+			"customer_id": customerID, "guest_name": guestName, "guest_email": guestEmail,
+			"rating": rating, "comment": comment,
 			"verified_purchase": verified, "status": status, "admin_reply": adminReply,
 			"created_at": createdAt.UTC().Format(time.RFC3339),
 		})
@@ -676,6 +696,8 @@ func (s *server) createReview(w http.ResponseWriter, r *http.Request) {
 	productID := atoi(r.PathValue("id"))
 	var body struct {
 		CustomerID int64  `json:"customer_id"`
+		GuestName  string `json:"guest_name"`
+		GuestEmail string `json:"guest_email"`
 		OrderID    *int64 `json:"order_id"`
 		Rating     int    `json:"rating"`
 		Comment    string `json:"comment"`
@@ -684,21 +706,29 @@ func (s *server) createReview(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
 		return
 	}
-	if body.CustomerID == 0 || body.Rating < 1 || body.Rating > 5 {
-		kit.Fail(w, 400, "missing_fields", "customer_id et rating (1-5) sont obligatoires")
+	// Un avis vient soit d'un compte client (customer_id), soit d'un visiteur
+	// non connecté (guest_name/guest_email — jamais affiché publiquement,
+	// juste conservé pour trace/contact éventuel côté modération).
+	if (body.CustomerID == 0 && (body.GuestName == "" || body.GuestEmail == "")) || body.Rating < 1 || body.Rating > 5 {
+		kit.Fail(w, 400, "missing_fields", "rating (1-5) et soit customer_id soit guest_name+guest_email sont obligatoires")
 		return
 	}
 
 	verified := false
-	if body.OrderID != nil {
+	if body.OrderID != nil && body.CustomerID != 0 {
 		verified = s.verifyPurchase(r.Context(), *body.OrderID, body.CustomerID, productID)
+	}
+
+	var customerID *int64
+	if body.CustomerID != 0 {
+		customerID = &body.CustomerID
 	}
 
 	var id int64
 	err := s.db.QueryRow(r.Context(), `
-		INSERT INTO reviews (product_id, customer_id, order_id, rating, comment, verified_purchase)
-		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		productID, body.CustomerID, body.OrderID, body.Rating, body.Comment, verified,
+		INSERT INTO reviews (product_id, customer_id, guest_name, guest_email, order_id, rating, comment, verified_purchase)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+		productID, customerID, body.GuestName, body.GuestEmail, body.OrderID, body.Rating, body.Comment, verified,
 	).Scan(&id)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -1410,6 +1440,109 @@ func (s *server) bulkUpdateProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kit.JSON(w, 200, map[string]any{"action": body.Action, "rows_affected": tag.RowsAffected()})
+}
+
+// createVariation — nouvelle déclinaison (taille/couleur/...) pour un
+// produit variable. Marque aussi le produit is_variable=true si ce n'était
+// pas déjà le cas (un vendeur peut convertir un produit simple en variable
+// en ajoutant sa première variation).
+func (s *server) createVariation(w http.ResponseWriter, r *http.Request) {
+	productID := atoi(r.PathValue("id"))
+	var body struct {
+		SKU        string         `json:"sku"`
+		Attributes map[string]any `json:"attributes"`
+		PriceUSD   float64        `json:"price_usd"`
+		Stock      int            `json:"stock"`
+		ImageURL   string         `json:"image_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	attrsJSON, _ := json.Marshal(body.Attributes)
+
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO product_variations (product_id, sku, attributes, price_usd, stock, image_url)
+		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+		productID, body.SKU, attrsJSON, body.PriceUSD, body.Stock, body.ImageURL,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), "UPDATE products SET is_variable = TRUE WHERE id = $1", productID); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": id})
+}
+
+func (s *server) updateVariation(w http.ResponseWriter, r *http.Request) {
+	variationID := atoi(r.PathValue("variation_id"))
+	var body struct {
+		SKU        *string        `json:"sku"`
+		Attributes map[string]any `json:"attributes"`
+		PriceUSD   *float64       `json:"price_usd"`
+		Stock      *int           `json:"stock"`
+		ImageURL   *string        `json:"image_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	set := []string{}
+	args := []any{}
+	add := func(col string, v any) {
+		args = append(args, v)
+		set = append(set, fmt.Sprintf("%s = $%d", col, len(args)))
+	}
+	if body.SKU != nil {
+		add("sku", *body.SKU)
+	}
+	if body.Attributes != nil {
+		attrsJSON, _ := json.Marshal(body.Attributes)
+		add("attributes", attrsJSON)
+	}
+	if body.PriceUSD != nil {
+		add("price_usd", *body.PriceUSD)
+	}
+	if body.Stock != nil {
+		add("stock", *body.Stock)
+	}
+	if body.ImageURL != nil {
+		add("image_url", *body.ImageURL)
+	}
+	if len(set) == 0 {
+		kit.Fail(w, 400, "empty_update", "aucun champ à modifier fourni")
+		return
+	}
+	args = append(args, variationID)
+	tag, err := s.db.Exec(r.Context(),
+		fmt.Sprintf("UPDATE product_variations SET %s WHERE id = $%d", strings.Join(set, ", "), len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "variation_not_found", fmt.Sprintf("variation %d introuvable", variationID))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": variationID, "updated": true})
+}
+
+func (s *server) deleteVariation(w http.ResponseWriter, r *http.Request) {
+	variationID := atoi(r.PathValue("variation_id"))
+	tag, err := s.db.Exec(r.Context(), "DELETE FROM product_variations WHERE id = $1", variationID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "variation_not_found", fmt.Sprintf("variation %d introuvable", variationID))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": variationID, "deleted": true})
 }
 
 // ---------- marques (brands) ----------
