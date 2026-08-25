@@ -145,10 +145,16 @@ origin.miadmarket.ca {
 }
 
 # ---------- kante.miadmarket.ca : dashboard admin uniquement ----------
+# /auth/admin/* ajouté car le webui admin (api.ts) suppose que /auth/*
+# passe par la même origine que le dashboard — sans cette route, login
+# et 2FA échouent en 404 (le domaine ne routait avant que /admin*).
 kante.miadmarket.ca {
 	redir / /admin/ 302
 	handle /admin* {
 		reverse_proxy admin-svc:8088
+	}
+	handle /auth/admin/* {
+		reverse_proxy auth-svc:8086
 	}
 	handle {
 		respond 404 {
