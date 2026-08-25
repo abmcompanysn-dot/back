@@ -122,6 +122,10 @@ func main() {
 		mux.HandleFunc("POST /coupons/validate", s.validateCoupon)
 
 		// Représentants
+		// "representatives" (pluriel, sans variable) — pas de conflit avec
+		// "representative/{id}" (segment littéral différent : les deux
+		// premiers segments distinguent déjà les patterns).
+		mux.HandleFunc("GET /representatives", s.listRepresentatives)
 		mux.HandleFunc("GET /representative/{id}", s.getRepresentative)
 		// by-country (pas /representative/country/{country}) : {id} et
 		// country/{country} sont tous deux à profondeur 2, {id}/dashboard
@@ -321,6 +325,37 @@ func (s *server) validateCoupon(w http.ResponseWriter, r *http.Request) {
 }
 
 /* ---------- Représentants pays ---------- */
+
+// listRepresentatives — module Utilisateurs (back-office) : nécessaire
+// pour croiser par email avec customers/admins et afficher les rôles
+// cumulés d'un même compte (voir admin-svc.listUnifiedUsers).
+func (s *server) listRepresentatives(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, name, email, country, is_super_rep, commission_pct, created_at FROM representatives ORDER BY id")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var name, email, country string
+		var isSuper bool
+		var commission float32
+		var at time.Time
+		if err := rows.Scan(&id, &name, &email, &country, &isSuper, &commission, &at); err != nil {
+			kit.Fail(w, 500, "db_error", "lecture représentant échouée : "+err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "name": name, "email": email, "country": country,
+			"is_super_rep": isSuper, "commission_pct": commission,
+			"created_at": at.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items, "total": len(items)})
+}
 
 func (s *server) getRepresentative(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

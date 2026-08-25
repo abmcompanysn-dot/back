@@ -281,6 +281,8 @@ func main() {
 		}))
 		// Module Utilisateurs : vue unifiée boutiques/clients/admins.
 		mux.HandleFunc("GET /admin/api/admins", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/admins" })))
+		mux.HandleFunc("GET /admin/api/users", s.requireAdmin(s.listUnifiedUsers))
+		mux.HandleFunc("GET /admin/api/representatives", s.requireAdmin(s.proxyAuth(func() string { return s.loyaltyURL + "/representatives" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))
 		mux.HandleFunc("GET /admin/api/finance/overview", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/overview" })))
 		mux.HandleFunc("GET /admin/api/finance/transactions", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/transactions" })))
@@ -461,6 +463,139 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 	out["services"] = statuses
 	out["generated_at"] = time.Now().UTC().Format(time.RFC3339)
 	kit.JSON(w, 200, out)
+}
+
+// listUnifiedUsers — module Utilisateurs (back-office) : un même compte
+// n'est pas représenté par une seule table (contrairement au wp_users
+// WordPress historique) — customers (client, +vendor_id si boutique),
+// admins et representatives (loyalty-svc, table séparée par email) sont
+// trois sources distinctes. On les fusionne ici par email pour que
+// l'admin voie tous les rôles cumulés d'un compte sur UNE ligne (ex. un
+// représentant qui est aussi client) plutôt que 3 lignes disjointes.
+// customers sans email (compte téléphone seul) ne peuvent pas être
+// croisés avec admins/representatives (les deux sont identifiés par
+// email) — restent seuls sur leur ligne, rôle "customer" uniquement.
+func (s *server) listUnifiedUsers(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	auth := r.Header.Get("Authorization")
+
+	type row struct {
+		Roles      []string
+		Email      string
+		Phone      string
+		Name       string
+		CreatedAt  string
+		VendorID   any
+		IsSuperRep bool
+		Country    string
+	}
+	byEmail := map[string]*row{}
+	noEmail := []map[string]any{}
+
+	if body, err := getJSONAuth(ctx, s.authURL+"/customers?page_size=1000", auth); err == nil {
+		if items, ok := body["items"].([]any); ok {
+			for _, it := range items {
+				c, _ := it.(map[string]any)
+				email, _ := c["email"].(string)
+				if email == "" {
+					c["roles"] = []string{"customer"}
+					noEmail = append(noEmail, c)
+					continue
+				}
+				r := &row{Roles: []string{"customer"}, Email: email}
+				r.Phone, _ = c["phone"].(string)
+				r.Name, _ = c["full_name"].(string)
+				r.CreatedAt, _ = c["created_at"].(string)
+				if vid, ok := c["vendor_id"]; ok {
+					r.VendorID = vid
+					r.Roles = append(r.Roles, "vendor")
+				}
+				byEmail[strings.ToLower(email)] = r
+			}
+		}
+	}
+	if body, err := getJSONAuth(ctx, s.authURL+"/admins", auth); err == nil {
+		if items, ok := body["items"].([]any); ok {
+			for _, it := range items {
+				a, _ := it.(map[string]any)
+				email, _ := a["email"].(string)
+				if email == "" {
+					continue
+				}
+				key := strings.ToLower(email)
+				existing, found := byEmail[key]
+				if !found {
+					existing = &row{Email: email}
+					byEmail[key] = existing
+					existing.CreatedAt, _ = a["created_at"].(string)
+				}
+				existing.Roles = append(existing.Roles, "admin")
+			}
+		}
+	}
+	if body, err := getJSONAuth(ctx, s.loyaltyURL+"/representatives", auth); err == nil {
+		if items, ok := body["items"].([]any); ok {
+			for _, it := range items {
+				rep, _ := it.(map[string]any)
+				email, _ := rep["email"].(string)
+				if email == "" {
+					continue
+				}
+				key := strings.ToLower(email)
+				existing, found := byEmail[key]
+				if !found {
+					existing = &row{Email: email}
+					byEmail[key] = existing
+					existing.Name, _ = rep["name"].(string)
+					existing.CreatedAt, _ = rep["created_at"].(string)
+				}
+				isSuper, _ := rep["is_super_rep"].(bool)
+				if isSuper {
+					existing.Roles = append(existing.Roles, "super_representative")
+					existing.IsSuperRep = true
+				} else {
+					existing.Roles = append(existing.Roles, "representative")
+				}
+				existing.Country, _ = rep["country"].(string)
+			}
+		}
+	}
+
+	items := make([]map[string]any, 0, len(byEmail)+len(noEmail))
+	for _, r := range byEmail {
+		items = append(items, map[string]any{
+			"email": r.Email, "phone": r.Phone, "name": r.Name,
+			"roles": r.Roles, "vendor_id": r.VendorID, "country": r.Country,
+			"created_at": r.CreatedAt,
+		})
+	}
+	items = append(items, noEmail...)
+
+	kit.JSON(w, 200, map[string]any{"items": items, "total": len(items)})
+}
+
+// getJSONAuth — comme getJSON, mais transmet le JWT admin de la requête
+// entrante (les endpoints GET /customers, /admins, /representatives sont
+// tous protégés par rôle admin côté service source).
+func getJSONAuth(ctx context.Context, url, authHeader string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", authHeader)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 func (s *server) systemCheck(w http.ResponseWriter, r *http.Request) {
