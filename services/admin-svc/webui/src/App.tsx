@@ -8,7 +8,6 @@ import {
   ListView,
   ORDER_COLUMNS,
   PAYMENT_COLUMNS,
-  VENDOR_COLUMNS,
 } from './pages/ListView'
 import { Shipping } from './pages/Shipping'
 import { Marketing } from './pages/Marketing'
@@ -21,7 +20,12 @@ import { Brands } from './pages/catalog/Brands'
 import { CategoriesAttributes } from './pages/catalog/CategoriesAttributes'
 import { Reviews } from './pages/catalog/Reviews'
 import { MediaLibrary } from './pages/media/MediaLibrary'
-import { IconCustomers, IconFinance, IconOrders, IconStore } from './components/Icons'
+import { AllVendors } from './pages/vendors/AllVendors'
+import { VendorDetail } from './pages/vendors/VendorDetail'
+import { VendorKYC } from './pages/vendors/VendorKYC'
+import { NewVendor } from './pages/vendors/NewVendor'
+import { Payouts } from './pages/vendors/Payouts'
+import { IconCustomers, IconFinance, IconOrders } from './components/Icons'
 
 const emptyIconProps = { width: 40, height: 40, strokeWidth: 1.4 } as const
 
@@ -71,20 +75,11 @@ function AppRoutes() {
         <Route path="catalog/categories" element={<CategoriesAttributes />} />
         <Route path="catalog/reviews" element={<Reviews />} />
         <Route path="media" element={<MediaLibrary />} />
-        <Route
-          path="vendors"
-          element={
-            <ListView
-              path="/admin/api/vendors"
-              columns={VENDOR_COLUMNS}
-              title="Vendeurs"
-              subtitle="Boutiques de la marketplace"
-              emptyIcon={<IconStore {...emptyIconProps} />}
-              emptyTitle="Aucune boutique enregistrée"
-              emptyDescription="Les nouvelles boutiques apparaîtront ici après inscription."
-            />
-          }
-        />
+        <Route path="vendors" element={<AllVendors />} />
+        <Route path="vendors/new" element={<NewVendor />} />
+        <Route path="vendors/kyc" element={<VendorKYC />} />
+        <Route path="vendors/payouts" element={<Payouts />} />
+        <Route path="vendors/:id" element={<VendorDetail />} />
         <Route
           path="customers"
           element={

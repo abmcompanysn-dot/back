@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -38,6 +39,18 @@ CREATE TABLE IF NOT EXISTS vendors (
   product_count INT NOT NULL DEFAULT 0, -- dénormalisé sur événement catalog
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Back-office admin (module Vendeurs) : KYC, commission personnalisée,
+-- modération produit, badges, suspension temporaire — rien de tout ça
+-- n'existait, verified était le seul état possible.
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS kyc_status TEXT NOT NULL DEFAULT 'pending'; -- pending/approved/rejected
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS kyc_documents JSONB NOT NULL DEFAULT '[]'; -- [{type, url}]
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS kyc_rejection_reason TEXT DEFAULT '';
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS commission_rate DOUBLE PRECISION; -- NULL = taux global plateforme
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS require_moderation BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS badges JSONB NOT NULL DEFAULT '[]'; -- ["verified","top_vendor","official"]
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS suspended_until TIMESTAMPTZ;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS suspension_message TEXT DEFAULT '';
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS address TEXT DEFAULT '';
 `
 
 type server struct {
@@ -80,6 +93,12 @@ func main() {
 		mux.HandleFunc("PUT /vendor/profile", s.updateProfile)
 		mux.HandleFunc("GET /vendor/{id}/orders", s.vendorOrders)
 		mux.HandleFunc("GET /vendor/{id}/dashboard", s.vendorDashboard)
+		mux.HandleFunc("GET /vendors", s.listVendorsAdmin)
+		mux.HandleFunc("GET /vendors/{id}", s.getVendor)
+		mux.HandleFunc("POST /vendors", s.createVendor)
+		mux.HandleFunc("PATCH /vendors/{id}", s.updateVendorAdmin)
+		mux.HandleFunc("POST /vendors/{id}/kyc/approve", s.approveKYC)
+		mux.HandleFunc("POST /vendors/{id}/kyc/reject", s.rejectKYC)
 	})
 }
 
@@ -151,6 +170,299 @@ func vendorToDokanShape(id int64, name, slug, logo, banner, country, city string
 		"products_count": productCount,
 		"product_count":  productCount,
 	}
+}
+
+// listVendorsAdmin — liste TOUS les vendeurs (contrairement à listStores
+// qui ne montre que verified=TRUE au storefront public), avec les champs
+// admin (kyc_status, commission, solde à agréger côté payment-svc plus
+// tard). Utilisé par admin-svc pour "Tous les Vendeurs".
+func (s *server) listVendorsAdmin(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(kit.EnvOr(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(q.Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	where := "WHERE 1=1"
+	args := []any{}
+	if v := q.Get("kyc_status"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND kyc_status = $%d", len(args))
+	}
+	if v := q.Get("q"); v != "" {
+		args = append(args, "%"+v+"%")
+		where += fmt.Sprintf(" AND (name ILIKE $%d OR email ILIKE $%d)", len(args), len(args))
+	}
+
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM vendors "+where, args...).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT id, name, slug, logo_url, banner_url, country, city, phone, email,
+		       verified, rating_avg, product_count, kyc_status, commission_rate,
+		       badges, suspended_until
+		FROM vendors %s ORDER BY id DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var name, slug, logo, banner, country, city, phone, email, kycStatus string
+		var verified bool
+		var rating float64
+		var count int
+		var commissionRate *float64
+		var badgesJSON []byte
+		var suspendedUntil *time.Time
+		if err := rows.Scan(&id, &name, &slug, &logo, &banner, &country, &city, &phone, &email,
+			&verified, &rating, &count, &kycStatus, &commissionRate, &badgesJSON, &suspendedUntil); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		item := vendorToDokanShape(id, name, slug, logo, banner, country, city, rating, count, verified)
+		item["phone"] = phone
+		item["email"] = email
+		item["kyc_status"] = kycStatus
+		item["commission_rate"] = commissionRate
+		item["badges"] = json.RawMessage(badgesJSON)
+		item["suspended"] = suspendedUntil != nil && suspendedUntil.After(time.Now())
+		items = append(items, item)
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
+// getVendor — fiche complète, un seul vendeur, tous les champs admin.
+func (s *server) getVendor(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	row := s.db.QueryRow(r.Context(), `
+		SELECT id, name, slug, logo_url, banner_url, country, city, phone, email,
+		       verified, rating_avg, product_count, kyc_status, kyc_documents,
+		       kyc_rejection_reason, commission_rate, require_moderation, badges,
+		       suspended_until, suspension_message, address, created_at
+		FROM vendors WHERE id = $1`, id)
+
+	var vID int64
+	var name, slug, logo, banner, country, city, phone, email, kycStatus, kycRejection, address, suspensionMsg string
+	var verified, requireModeration bool
+	var rating float64
+	var count int
+	var commissionRate *float64
+	var kycDocsJSON, badgesJSON []byte
+	var suspendedUntil *time.Time
+	var createdAt time.Time
+	if err := row.Scan(&vID, &name, &slug, &logo, &banner, &country, &city, &phone, &email,
+		&verified, &rating, &count, &kycStatus, &kycDocsJSON, &kycRejection, &commissionRate,
+		&requireModeration, &badgesJSON, &suspendedUntil, &suspensionMsg, &address, &createdAt,
+	); err != nil {
+		kit.Fail(w, 404, "vendor_not_found", fmt.Sprintf("boutique %s introuvable", id))
+		return
+	}
+
+	out := vendorToDokanShape(vID, name, slug, logo, banner, country, city, rating, count, verified)
+	out["phone"] = phone
+	out["email"] = email
+	out["kyc_status"] = kycStatus
+	out["kyc_documents"] = json.RawMessage(kycDocsJSON)
+	out["kyc_rejection_reason"] = kycRejection
+	out["commission_rate"] = commissionRate
+	out["require_moderation"] = requireModeration
+	out["badges"] = json.RawMessage(badgesJSON)
+	out["suspended_until"] = suspendedUntil
+	out["suspension_message"] = suspensionMsg
+	out["address"] = address
+	out["created_at"] = createdAt.UTC().Format(time.RFC3339)
+	kit.JSON(w, 200, out)
+}
+
+// createVendor — création manuelle par l'admin (pas d'auto-inscription
+// vendeur, désactivée côté frontend — voir CLAUDE.md). Statut activé
+// immédiatement (verified=TRUE), l'admin garde la main sur le KYC après
+// coup s'il le souhaite plutôt que de bloquer la création elle-même.
+func (s *server) createVendor(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name    string `json:"name"`
+		Email   string `json:"email"`
+		Phone   string `json:"phone"`
+		Country string `json:"country"`
+		City    string `json:"city"`
+		LogoURL string `json:"logo_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Name == "" {
+		kit.Fail(w, 400, "missing_name", "name requis")
+		return
+	}
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO vendors (name, slug, email, phone, country, city, logo_url, verified, kyc_status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,'approved') RETURNING id`,
+		body.Name, slugify(body.Name), body.Email, body.Phone, body.Country, body.City, body.LogoURL,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.Publish(s.kafka, "vendor.registered", fmt.Sprint(id), map[string]any{
+		"vendor_id": id, "at": time.Now().UTC().Format(time.RFC3339),
+	})
+	kit.JSON(w, 201, map[string]any{"id": id})
+}
+
+// updateVendorAdmin — édition admin complète (contrairement à
+// updateProfile qui est le self-service vendeur limité à 5 champs).
+func (s *server) updateVendorAdmin(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Name              *string  `json:"name"`
+		Email             *string  `json:"email"`
+		Phone             *string  `json:"phone"`
+		Country           *string  `json:"country"`
+		City              *string  `json:"city"`
+		Address           *string  `json:"address"`
+		LogoURL           *string  `json:"logo_url"`
+		BannerURL         *string  `json:"banner_url"`
+		Verified          *bool    `json:"verified"`
+		CommissionRate    *float64 `json:"commission_rate"`
+		ClearCommission   bool     `json:"clear_commission"`
+		RequireModeration *bool    `json:"require_moderation"`
+		Badges            *[]string `json:"badges"`
+		SuspendedUntil    *string  `json:"suspended_until"` // RFC3339, "" = lever la suspension
+		SuspensionMessage *string  `json:"suspension_message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	set := []string{}
+	args := []any{}
+	add := func(col string, v any) {
+		args = append(args, v)
+		set = append(set, fmt.Sprintf("%s = $%d", col, len(args)))
+	}
+	if body.Name != nil {
+		add("name", *body.Name)
+	}
+	if body.Email != nil {
+		add("email", *body.Email)
+	}
+	if body.Phone != nil {
+		add("phone", *body.Phone)
+	}
+	if body.Country != nil {
+		add("country", *body.Country)
+	}
+	if body.City != nil {
+		add("city", *body.City)
+	}
+	if body.Address != nil {
+		add("address", *body.Address)
+	}
+	if body.LogoURL != nil {
+		add("logo_url", *body.LogoURL)
+	}
+	if body.BannerURL != nil {
+		add("banner_url", *body.BannerURL)
+	}
+	if body.Verified != nil {
+		add("verified", *body.Verified)
+	}
+	if body.ClearCommission {
+		add("commission_rate", nil)
+	} else if body.CommissionRate != nil {
+		add("commission_rate", *body.CommissionRate)
+	}
+	if body.RequireModeration != nil {
+		add("require_moderation", *body.RequireModeration)
+	}
+	if body.Badges != nil {
+		badgesJSON, _ := json.Marshal(*body.Badges)
+		add("badges", badgesJSON)
+	}
+	if body.SuspendedUntil != nil {
+		if *body.SuspendedUntil == "" {
+			add("suspended_until", nil)
+		} else {
+			t, err := time.Parse(time.RFC3339, *body.SuspendedUntil)
+			if err != nil {
+				kit.Fail(w, 400, "invalid_date", "suspended_until doit être RFC3339")
+				return
+			}
+			add("suspended_until", t)
+		}
+	}
+	if body.SuspensionMessage != nil {
+		add("suspension_message", *body.SuspensionMessage)
+	}
+	if len(set) == 0 {
+		kit.Fail(w, 400, "empty_update", "aucun champ à modifier fourni")
+		return
+	}
+	args = append(args, id)
+	tag, err := s.db.Exec(r.Context(),
+		fmt.Sprintf("UPDATE vendors SET %s WHERE id = $%d", strings.Join(set, ", "), len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "vendor_not_found", fmt.Sprintf("boutique %d introuvable", id))
+		return
+	}
+	kit.Publish(s.kafka, "vendor.updated", fmt.Sprint(id), map[string]any{
+		"vendor_id": id, "at": time.Now().UTC().Format(time.RFC3339),
+	})
+	kit.JSON(w, 200, map[string]any{"id": id, "updated": true})
+}
+
+func (s *server) approveKYC(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	tag, err := s.db.Exec(r.Context(),
+		"UPDATE vendors SET kyc_status = 'approved', kyc_rejection_reason = '', verified = TRUE WHERE id = $1", id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "vendor_not_found", fmt.Sprintf("boutique %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "kyc_status": "approved"})
+}
+
+func (s *server) rejectKYC(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	tag, err := s.db.Exec(r.Context(),
+		"UPDATE vendors SET kyc_status = 'rejected', kyc_rejection_reason = $2 WHERE id = $1", id, body.Reason)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "vendor_not_found", fmt.Sprintf("boutique %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "kyc_status": "rejected"})
 }
 
 // vendorProducts — délégation à catalog-svc : vendor-svc ne possède pas
@@ -329,4 +641,28 @@ func ping(ctx context.Context, url string) error {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func atoi(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
+}
+
+func slugify(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash {
+				b.WriteRune('-')
+				lastDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }

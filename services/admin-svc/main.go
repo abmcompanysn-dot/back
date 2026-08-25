@@ -204,7 +204,38 @@ func main() {
 		mux.HandleFunc("DELETE /admin/api/attribute-values/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodDelete, s.catalogURL+"/attribute-values/"+r.PathValue("id"))
 		}))
-		mux.HandleFunc("GET /admin/api/vendors", s.requireAdmin(s.proxy(func() string { return s.vendorURL + "/stores" })))
+		mux.HandleFunc("GET /admin/api/vendors", s.requireAdmin(s.proxy(func() string { return s.vendorURL + "/vendors" })))
+		mux.HandleFunc("GET /admin/api/vendors/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.vendorURL + "/vendors/" + id
+		})))
+		mux.HandleFunc("POST /admin/api/vendors", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.vendorURL+"/vendors")
+		}))
+		mux.HandleFunc("PATCH /admin/api/vendors/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.vendorURL+"/vendors/"+r.PathValue("id"))
+		}))
+		mux.HandleFunc("POST /admin/api/vendors/{id}/kyc/approve", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.vendorURL+"/vendors/"+r.PathValue("id")+"/kyc/approve")
+		}))
+		mux.HandleFunc("POST /admin/api/vendors/{id}/kyc/reject", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.vendorURL+"/vendors/"+r.PathValue("id")+"/kyc/reject")
+		}))
+		mux.HandleFunc("POST /admin/api/vendors/{id}/impersonate", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.authURL+"/auth/impersonate-vendor/"+r.PathValue("id"))
+		}))
+		mux.HandleFunc("GET /admin/api/vendors/{id}/wallet", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.paymentURL + "/wallet/" + id
+		})))
+		mux.HandleFunc("GET /admin/api/vendors/{id}/wallet/transactions", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.paymentURL + "/wallet/" + id + "/transactions"
+		})))
+		mux.HandleFunc("GET /admin/api/payout-requests", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payout-requests" })))
+		mux.HandleFunc("POST /admin/api/payout-requests/{id}/approve", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.paymentURL+"/payout-requests/"+r.PathValue("id")+"/approve")
+		}))
+		mux.HandleFunc("POST /admin/api/payout-requests/{id}/reject", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.paymentURL+"/payout-requests/"+r.PathValue("id")+"/reject")
+		}))
 		mux.HandleFunc("GET /admin/api/customers", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/customers" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))
 		mux.HandleFunc("GET /admin/api/shipping-quote", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping-rates/quote" })))

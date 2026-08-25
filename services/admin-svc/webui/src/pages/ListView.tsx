@@ -68,15 +68,6 @@ export const ORDER_COLUMNS: Column[] = [
   { key: 'created_at', label: 'created_at' },
 ]
 
-export const VENDOR_COLUMNS: Column[] = [
-  { key: 'id', label: 'id' },
-  { key: 'name', label: 'name' },
-  { key: 'country', label: 'country' },
-  { key: 'city', label: 'city' },
-  { key: 'rating_avg', label: 'rating_avg' },
-  { key: 'product_count', label: 'product_count' },
-]
-
 export const CUSTOMER_COLUMNS: Column[] = [
   { key: 'id', label: 'id' },
   { key: 'email', label: 'email' },

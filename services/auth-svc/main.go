@@ -126,6 +126,7 @@ func main() {
 		mux.HandleFunc("POST /auth/admin/2fa/disable", s.disable2FA)
 		mux.HandleFunc("GET /customers", s.listCustomers) // role admin exigé
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)
+		mux.HandleFunc("POST /auth/impersonate-vendor/{vendor_id}", s.impersonateVendor) // role admin exigé
 	})
 }
 
@@ -769,6 +770,39 @@ func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
 		"id": cid, "email": email, "phone": phone, "full_name": name,
 		"addresses": json.RawMessage(addresses), "preferred_lang": lang,
 		"created_at": at.UTC().Format(time.RFC3339),
+	})
+}
+
+// impersonateVendor — "se connecter en tant que" (module Vendeurs) :
+// émet un JWT customer normal pour le compte lié à cette boutique, comme
+// un login classique, sauf déclenché par un admin plutôt qu'un mot de
+// passe. Choisit le PREMIER customer trouvé avec ce vendor_id (un vendeur
+// = un compte customer lié, jamais plusieurs dans le modèle actuel).
+func (s *server) impersonateVendor(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	vendorID, _ := strconv.ParseInt(r.PathValue("vendor_id"), 10, 64)
+	if vendorID == 0 {
+		kit.Fail(w, 400, "invalid_vendor_id", "vendor_id invalide")
+		return
+	}
+	var customerID int64
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT id FROM customers WHERE vendor_id = $1 LIMIT 1", vendorID,
+	).Scan(&customerID); err != nil {
+		kit.Fail(w, 404, "no_linked_account", fmt.Sprintf("aucun compte client lié au vendeur %d", vendorID))
+		return
+	}
+	jwt, expires := s.signJWT(map[string]any{
+		"sub": customerID, "iss": "miad-auth", "role": "customer",
+		"vendor_id": float64(vendorID), "impersonated_by_admin": true,
+		"exp": time.Now().Add(s.jwtTTL).Unix(),
+	})
+	kit.JSON(w, 200, map[string]any{
+		"session": map[string]any{"jwt": jwt, "expires_at": expires},
+		"vendor_id": vendorID, "customer_id": customerID,
 	})
 }
 

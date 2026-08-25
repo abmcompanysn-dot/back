@@ -53,13 +53,56 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 CREATE INDEX IF NOT EXISTS idx_payments_order ON payments (order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_ref ON payments (provider_ref);
+
+-- Wallet vendeur (module Finances/Vendeurs) : solde dû, ledger des
+-- mouvements, demandes de retrait. Posé ici plutôt que vendor-svc car
+-- payment-svc gère déjà toutes les transactions/passerelles.
+CREATE TABLE IF NOT EXISTS vendor_wallets (
+  vendor_id  BIGINT PRIMARY KEY,
+  balance_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id         BIGSERIAL PRIMARY KEY,
+  vendor_id  BIGINT NOT NULL,
+  type       TEXT NOT NULL, -- sale | commission | payout | adjustment
+  amount_usd DOUBLE PRECISION NOT NULL, -- + crédit / - débit
+  order_id   BIGINT,
+  note       TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_tx_vendor ON wallet_transactions (vendor_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS payout_requests (
+  id         BIGSERIAL PRIMARY KEY,
+  vendor_id  BIGINT NOT NULL,
+  amount_usd DOUBLE PRECISION NOT NULL,
+  method     TEXT DEFAULT '',
+  status     TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected | paid
+  admin_note TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_payout_status ON payout_requests (status, created_at DESC);
 `
+
+// defaultCommissionRate — taux plateforme appliqué à défaut de commission
+// vendeur/catégorie spécifique (résolution simplifiée en premier jet : pas
+// d'appel catalog-svc par ligne de commande, seulement vendor-svc pour un
+// éventuel override). Peut être ajusté sans redéploiement via env.
+func defaultCommissionRate() float64 {
+	rate, err := strconv.ParseFloat(kit.Env("PLATFORM_COMMISSION_RATE", "10"), 64)
+	if err != nil {
+		return 10
+	}
+	return rate
+}
 
 type server struct {
 	db          *pgxpool.Pool
 	producer    sarama.SyncProducer
 	orderURL    string
 	shippingURL string // source des exchange-rates pour la conversion PayDunya (USD -> XOF)
+	vendorURL   string // résolution du commission_rate override vendeur (module Finances)
 }
 
 func main() {
@@ -81,6 +124,7 @@ func main() {
 		producer:    kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
 		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
+		vendorURL:   kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 	}
 
 	go s.consumeOrders(log)
@@ -107,6 +151,12 @@ func main() {
 		mux.HandleFunc("GET /payment-methods", s.listPaymentMethods)
 		mux.HandleFunc("POST /payments/webhook/stripe", s.stripeWebhook)
 		mux.HandleFunc("POST /payments/webhook/paydunya", s.paydunyaCallback)
+		mux.HandleFunc("GET /wallet/{vendor_id}", s.getWallet)
+		mux.HandleFunc("GET /wallet/{vendor_id}/transactions", s.listWalletTransactions)
+		mux.HandleFunc("POST /payout-requests", s.createPayoutRequest)
+		mux.HandleFunc("GET /payout-requests", s.listPayoutRequests)
+		mux.HandleFunc("POST /payout-requests/{id}/approve", s.approvePayout)
+		mux.HandleFunc("POST /payout-requests/{id}/reject", s.rejectPayout)
 	})
 }
 
@@ -127,6 +177,250 @@ func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	kit.JSON(w, 200, map[string]any{"gateways": gateways})
+}
+
+/* ---------- Wallet vendeur & payouts (modules Vendeurs/Finances) ---------- */
+
+func (s *server) getWallet(w http.ResponseWriter, r *http.Request) {
+	vendorID := r.PathValue("vendor_id")
+	var balance float64
+	var updatedAt time.Time
+	err := s.db.QueryRow(r.Context(),
+		"SELECT balance_usd, updated_at FROM vendor_wallets WHERE vendor_id = $1", vendorID,
+	).Scan(&balance, &updatedAt)
+	if err != nil {
+		// Pas d'erreur si le vendeur n'a encore aucun mouvement — solde 0,
+		// jamais un 404 (un vendeur sans vente n'a juste rien à afficher).
+		kit.JSON(w, 200, map[string]any{"vendor_id": vendorID, "balance_usd": 0, "updated_at": nil})
+		return
+	}
+	kit.JSON(w, 200, map[string]any{
+		"vendor_id": vendorID, "balance_usd": balance, "updated_at": updatedAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *server) listWalletTransactions(w http.ResponseWriter, r *http.Request) {
+	vendorID := r.PathValue("vendor_id")
+	page, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	var total int64
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT count(*) FROM wallet_transactions WHERE vendor_id = $1", vendorID,
+	).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, type, amount_usd, order_id, note, created_at
+		FROM wallet_transactions WHERE vendor_id = $1
+		ORDER BY created_at DESC LIMIT $2 OFFSET $3`, vendorID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var txType, note string
+		var amount float64
+		var orderID *int64
+		var createdAt time.Time
+		if err := rows.Scan(&id, &txType, &amount, &orderID, &note, &createdAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "type": txType, "amount_usd": amount, "order_id": orderID,
+			"note": note, "created_at": createdAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
+// createPayoutRequest — self-service vendeur (appelé par vendor-svc côté
+// dashboard vendeur, pas directement admin) mais nécessaire pour que la
+// liste admin des demandes ait des données. Vérifie le solde disponible
+// avant d'accepter la demande — jamais de demande supérieure au solde.
+func (s *server) createPayoutRequest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		VendorID  int64   `json:"vendor_id"`
+		AmountUSD float64 `json:"amount_usd"`
+		Method    string  `json:"method"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.VendorID == 0 || body.AmountUSD <= 0 {
+		kit.Fail(w, 400, "missing_fields", "vendor_id et amount_usd (>0) requis")
+		return
+	}
+	var balance float64
+	_ = s.db.QueryRow(r.Context(), "SELECT balance_usd FROM vendor_wallets WHERE vendor_id = $1", body.VendorID).Scan(&balance)
+	if body.AmountUSD > balance {
+		kit.Fail(w, 400, "insufficient_balance", fmt.Sprintf("solde disponible %.2f USD, demande %.2f USD", balance, body.AmountUSD))
+		return
+	}
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO payout_requests (vendor_id, amount_usd, method) VALUES ($1,$2,$3) RETURNING id`,
+		body.VendorID, body.AmountUSD, body.Method,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": id})
+}
+
+func (s *server) listPayoutRequests(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(kit.EnvOr(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(q.Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	where := "WHERE 1=1"
+	args := []any{}
+	if v := q.Get("status"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	if v := q.Get("vendor_id"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND vendor_id = $%d", len(args))
+	}
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM payout_requests "+where, args...).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT id, vendor_id, amount_usd, method, status, admin_note, created_at, processed_at
+		FROM payout_requests %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, vendorID int64
+		var amount float64
+		var method, status, adminNote string
+		var createdAt time.Time
+		var processedAt *time.Time
+		if err := rows.Scan(&id, &vendorID, &amount, &method, &status, &adminNote, &createdAt, &processedAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		var processedStr any
+		if processedAt != nil {
+			processedStr = processedAt.UTC().Format(time.RFC3339)
+		}
+		items = append(items, map[string]any{
+			"id": id, "vendor_id": vendorID, "amount_usd": amount, "method": method,
+			"status": status, "admin_note": adminNote,
+			"created_at": createdAt.UTC().Format(time.RFC3339), "processed_at": processedStr,
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
+// approvePayout — marque la demande payée et DÉBITE le wallet dans la
+// même transaction. "Payé" ici signifie que l'admin a traité le virement
+// manuellement (Wave/Orange Money/RIB) — pas d'intégration bancaire
+// automatique, cohérent avec l'absence de passerelle de virement sortant
+// dans le dépôt.
+func (s *server) approvePayout(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		AdminNote string `json:"admin_note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	var vendorID int64
+	var amount float64
+	var status string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT vendor_id, amount_usd, status FROM payout_requests WHERE id = $1", id,
+	).Scan(&vendorID, &amount, &status); err != nil {
+		kit.Fail(w, 404, "payout_not_found", fmt.Sprintf("demande %d introuvable", id))
+		return
+	}
+	if status != "pending" {
+		kit.Fail(w, 409, "already_processed", fmt.Sprintf("demande déjà au statut %q", status))
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		"UPDATE vendor_wallets SET balance_usd = balance_usd - $2, updated_at = now() WHERE vendor_id = $1",
+		vendorID, amount); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if _, err := tx.Exec(ctx,
+		"INSERT INTO wallet_transactions (vendor_id, type, amount_usd, note) VALUES ($1,'payout',$2,$3)",
+		vendorID, -amount, fmt.Sprintf("payout #%d", id)); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if _, err := tx.Exec(ctx,
+		"UPDATE payout_requests SET status = 'paid', admin_note = $2, processed_at = now() WHERE id = $1",
+		id, body.AdminNote); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "status": "paid"})
+}
+
+func (s *server) rejectPayout(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		AdminNote string `json:"admin_note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	tag, err := s.db.Exec(r.Context(),
+		"UPDATE payout_requests SET status = 'rejected', admin_note = $2, processed_at = now() WHERE id = $1 AND status = 'pending'",
+		id, body.AdminNote)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 409, "not_pending", fmt.Sprintf("demande %d introuvable ou déjà traitée", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "status": "rejected"})
 }
 
 /* ---------- Consommation order.created ---------- */
@@ -488,7 +782,111 @@ func (s *server) confirmPayment(w http.ResponseWriter, r *http.Request, orderID 
 	} else {
 		slog.Error("order-svc injoignable — payment.confirmed reste sur Kafka", "err", err)
 	}
+	s.creditVendorWallet(r.Context(), orderID)
 	kit.JSON(w, 200, map[string]string{"received": "true"})
+}
+
+// creditVendorWallet — crédite le wallet du vendeur du montant net (après
+// commission plateforme) une fois le paiement confirmé. order_id ici est
+// déjà celui d'UNE sous-commande (1 vendeur par order_id, voir le modèle
+// parent/sous-commandes d'order-svc) — pas besoin de désagréger davantage.
+// Jamais bloquant pour la confirmation de paiement elle-même : une erreur
+// ici est journalisée, pas remontée au client/webhook (le paiement reste
+// confirmé même si le crédit wallet échoue, à réconcilier manuellement).
+func (s *server) creditVendorWallet(ctx context.Context, orderID int64) {
+	order, err := fetchOrder(ctx, s.orderURL, orderID)
+	if err != nil {
+		slog.Error("crédit wallet: commande injoignable", "order_id", orderID, "err", err)
+		return
+	}
+	if order.VendorID == 0 {
+		return // ligne parent/groupe, pas une sous-commande vendeur
+	}
+
+	rate := defaultCommissionRate()
+	if override, err := fetchVendorCommissionRate(ctx, s.vendorURL, order.VendorID); err == nil && override != nil {
+		rate = *override
+	}
+	commission := order.TotalUSD * rate / 100
+	net := order.TotalUSD - commission
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		slog.Error("crédit wallet: transaction impossible", "err", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO vendor_wallets (vendor_id, balance_usd, updated_at) VALUES ($1,$2,now())
+		ON CONFLICT (vendor_id) DO UPDATE SET balance_usd = vendor_wallets.balance_usd + $2, updated_at = now()`,
+		order.VendorID, net); err != nil {
+		slog.Error("crédit wallet: upsert solde échoué", "err", err)
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO wallet_transactions (vendor_id, type, amount_usd, order_id, note)
+		VALUES ($1,'sale',$2,$3,'')`, order.VendorID, net, orderID); err != nil {
+		slog.Error("crédit wallet: insert ledger vente échoué", "err", err)
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO wallet_transactions (vendor_id, type, amount_usd, order_id, note)
+		VALUES ($1,'commission',$2,$3,$4)`, order.VendorID, -commission, orderID,
+		fmt.Sprintf("commission %.1f%%", rate)); err != nil {
+		slog.Error("crédit wallet: insert ledger commission échoué", "err", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("crédit wallet: commit échoué", "err", err)
+	}
+}
+
+type orderSummary struct {
+	VendorID int64   `json:"vendor_id"`
+	TotalUSD float64 `json:"total_usd"`
+}
+
+func fetchOrder(ctx context.Context, orderURL string, orderID int64) (*orderSummary, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/orders/%d", orderURL, orderID), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("order-svc a répondu %d", resp.StatusCode)
+	}
+	var out orderSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func fetchVendorCommissionRate(ctx context.Context, vendorURL string, vendorID int64) (*float64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendors/%d", vendorURL, vendorID), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vendor-svc a répondu %d", resp.StatusCode)
+	}
+	var out struct {
+		CommissionRate *float64 `json:"commission_rate"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.CommissionRate, nil
 }
 
 func (s *server) markFailed(w http.ResponseWriter, r *http.Request, orderID int64, provider string) {
@@ -631,4 +1029,9 @@ func (f consumerFunc) ConsumeClaim(sess sarama.ConsumerGroupSession, claim saram
 		sess.MarkMessage(msg, "")
 	}
 	return nil
+}
+
+func atoi(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
 }
