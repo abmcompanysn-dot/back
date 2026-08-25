@@ -338,6 +338,20 @@ func main() {
 			forwardWithBody(w, r, http.MethodDelete, s.fulfillmentURL+"/dhl/logs")
 		}))
 
+		// Statut national (livraison Sénégal, 8 états — shipping-svc) et
+		// international (DHL, 5 états — fulfillment-svc) : reprend les 2
+		// anciennes routes WordPress /wp-json/miad/v1/shipping-domestic/order-stage
+		// et /wp-json/miad-products/v1/order/set-stage, jamais migrées alors
+		// que les identifiants MIAD_PRODUCTS_* avaient déjà été retirés de
+		// Cloudflare Pages (routes cassées en production depuis).
+		mux.HandleFunc("POST /admin/api/shipping-domestic/order-stage", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.shippingURL+"/shipping-domestic/order-stage")
+		}))
+		mux.HandleFunc("GET /admin/api/shipping-domestic/order-stage/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.shippingURL + "/shipping-domestic/order-stage/" + id
+		})))
+		mux.HandleFunc("POST /admin/api/orders/set-stage", s.requireAdmin(s.dhlSetOrderStage))
+
 		// SPA React : sert les assets embarqués, retombe sur index.html
 		// pour toute route côté client (/admin/orders, /admin/security, …)
 		// que React Router résout lui-même — dernier handler, jamais
@@ -458,6 +472,43 @@ func (s *server) proxyPath(target func(id string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		forward(w, r, target(r.PathValue("id")))
 	}
+}
+
+// dhlSetOrderStage — POST /admin/api/orders/set-stage {order_id, stage} :
+// équivalent de l'ancienne route WordPress /wp-json/miad-products/v1/order/set-stage
+// (miad_delivery_stages() dans miad-representative.php).
+//
+// Corrigé le 2026-08-25 : la version précédente envoyait les 5 valeurs
+// MIAD (vendor_confirmed/rep_received/local_pickup/intl_handoff/delivered)
+// dans le champ `status` DHL de fulfillment-svc (POST
+// /tracking/{shipment_id}/event), qui n'accepte QUE le vocabulaire
+// transporteur DHL (pending_label/label_created/in_transit/customs/
+// delivered) — 4 des 5 valeurs MIAD étaient donc rejetées en 400. Utilise
+// maintenant shipments.delivery_stage, un champ dédié distinct du statut
+// DHL (voir POST /shipments/order/{order_id}/delivery-stage).
+func (s *server) dhlSetOrderStage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OrderID int64  `json:"order_id"`
+		Stage   string `json:"stage"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrderID == 0 || body.Stage == "" {
+		kit.Fail(w, 400, "invalid_body", "order_id et stage obligatoires")
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]string{"stage": body.Stage})
+	upRes, err := http.Post(
+		s.fulfillmentURL+"/shipments/order/"+strconv.FormatInt(body.OrderID, 10)+"/delivery-stage",
+		"application/json", strings.NewReader(string(payload)))
+	if err != nil {
+		kit.Fail(w, 502, "upstream_unreachable", "fulfillment-svc injoignable")
+		return
+	}
+	defer upRes.Body.Close()
+	respBody, _ := io.ReadAll(upRes.Body)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(upRes.StatusCode)
+	_, _ = w.Write(respBody)
 }
 
 // logAction — enregistre une action admin (remplace l'ancien

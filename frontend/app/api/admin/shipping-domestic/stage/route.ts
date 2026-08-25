@@ -15,9 +15,9 @@ export async function POST(request: Request) {
   const result = await callHeadlessAdmin(request, {
     role: 'admin',
     action: 'shipping_domestic.order_stage.set',
-    path: '/wp-json/miad/v1/shipping-domestic/order-stage',
+    path: '/admin/api/shipping-domestic/order-stage',
     method: 'POST',
-    body,
+    body: { order_id: body.orderId, stage: body.stage },
   })
   if (!result.ok) return NextResponse.json({ error: result.error, wpBody: (result as any).wpBody }, { status: result.status })
   return NextResponse.json(result.data)

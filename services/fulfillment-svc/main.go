@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS shipments (
   dhl_shipment_id TEXT,
   label_url       TEXT DEFAULT '',
   status          TEXT NOT NULL DEFAULT 'pending_label',
+  -- delivery_stage : progression métier MIAD (5 états : vendor_confirmed ->
+  -- rep_received -> local_pickup -> intl_handoff -> delivered), DISTINCTE
+  -- de la colonne status ci-dessus qui est l'état transporteur DHL (5 états
+  -- eux aussi mais un vocabulaire différent : pending_label/label_created/
+  -- in_transit/customs/delivered) — les deux ont existé séparément côté
+  -- WordPress (miad-representative.php vs integration-dhl.php) et ne
+  -- doivent pas être fusionnés silencieusement (bug trouvé le 2026-08-25 :
+  -- POST /admin/api/orders/set-stage envoyait les valeurs MIAD dans le
+  -- champ status DHL, rejetées en 400 pour 4 des 5 valeurs).
+  delivery_stage  TEXT DEFAULT '',
   origin_country  TEXT DEFAULT '',
   origin_city     TEXT DEFAULT '',
   dest_country    TEXT DEFAULT '',
@@ -54,6 +64,7 @@ CREATE TABLE IF NOT EXISTS shipments (
 );
 CREATE INDEX IF NOT EXISTS idx_shipments_order ON shipments (order_id);
 CREATE INDEX IF NOT EXISTS idx_shipments_tracking ON shipments (tracking_number);
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS delivery_stage TEXT DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS tracking_events (
   id          BIGSERIAL PRIMARY KEY,
@@ -298,6 +309,7 @@ func main() {
 		mux.HandleFunc("GET /shipments", s.listShipments)
 		mux.HandleFunc("POST /shipments", s.createManualShipment)
 		mux.HandleFunc("GET /shipments/order/{order_id}", s.getShipmentByOrder)
+		mux.HandleFunc("POST /shipments/order/{order_id}/delivery-stage", s.setDeliveryStage)
 		mux.HandleFunc("POST /tracking/{shipment_id}/event", s.addManualEvent)
 		mux.HandleFunc("GET /tracking/search/{number}", s.trackByNumber)
 
@@ -512,6 +524,61 @@ func (s *server) getShipmentByOrder(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) trackByNumber(w http.ResponseWriter, r *http.Request) {
 	s.writeShipmentWithEvents(w, r, "tracking_number", r.PathValue("number"))
+}
+
+// miadDeliveryStages — progression métier MIAD (vendeur -> représentant ->
+// transport local -> remise transport international -> livré), distincte
+// de shipmentStages (statut transporteur DHL). Voir le commentaire sur
+// shipments.delivery_stage plus haut pour l'historique du bug que ça corrige.
+var miadDeliveryStages = map[string]bool{
+	"vendor_confirmed": true,
+	"rep_received":     true,
+	"local_pickup":     true,
+	"intl_handoff":     true,
+	"delivered":        true,
+}
+
+// setDeliveryStage — POST /shipments/order/{order_id}/delivery-stage
+// {stage} : équivalent Go de miad_delivery_stages() / /order/set-stage
+// (miad-representative.php, plugin WordPress). Nécessite qu'une expédition
+// existe déjà pour la commande (créée par ensureShipment dès que la
+// commande passe "paid").
+func (s *server) setDeliveryStage(w http.ResponseWriter, r *http.Request) {
+	orderID, err := strconv.ParseInt(r.PathValue("order_id"), 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_order_id", "order_id invalide")
+		return
+	}
+	var body struct {
+		Stage string `json:"stage"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if !miadDeliveryStages[body.Stage] {
+		kit.Fail(w, 400, "invalid_stage", fmt.Sprintf("stage %q inconnu — valeurs valides : %v", body.Stage, miadDeliveryStageNames()))
+		return
+	}
+	ct, err := s.db.Exec(r.Context(),
+		"UPDATE shipments SET delivery_stage = $2, updated_at = now() WHERE order_id = $1", orderID, body.Stage)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		kit.Fail(w, 404, "shipment_not_found", fmt.Sprintf("aucune expédition pour la commande %d — impossible de fixer l'étape avant création", orderID))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"order_id": orderID, "stage": body.Stage})
+}
+
+func miadDeliveryStageNames() []string {
+	names := make([]string, 0, len(miadDeliveryStages))
+	for k := range miadDeliveryStages {
+		names = append(names, k)
+	}
+	return names
 }
 
 func (s *server) writeShipmentWithEvents(w http.ResponseWriter, r *http.Request, col string, val any) {
@@ -910,11 +977,11 @@ func (s *server) dhlOrderDetail(w http.ResponseWriter, r *http.Request) {
 		totalWeight = 1
 	}
 
-	var trackingNumber, labelURL string
+	var trackingNumber, labelURL, deliveryStage string
 	var shipmentID int64
 	_ = s.db.QueryRow(r.Context(),
-		"SELECT id, tracking_number, label_url FROM shipments WHERE order_id = $1", orderID,
-	).Scan(&shipmentID, &trackingNumber, &labelURL)
+		"SELECT id, tracking_number, label_url, delivery_stage FROM shipments WHERE order_id = $1", orderID,
+	).Scan(&shipmentID, &trackingNumber, &labelURL, &deliveryStage)
 
 	var dhlStatus string
 	dhlEvents := []map[string]any{}
@@ -974,7 +1041,7 @@ func (s *server) dhlOrderDetail(w http.ResponseWriter, r *http.Request) {
 		"items": items, "total_weight": totalWeight, "hs_code": hsCode,
 		"tracking_number": trackingNumber, "label_url": labelURL,
 		"dhl_status": dhlStatus, "dhl_events": dhlEvents,
-		"estimated_rate": estimatedRate,
+		"estimated_rate": estimatedRate, "delivery_stage": deliveryStage,
 	})
 }
 

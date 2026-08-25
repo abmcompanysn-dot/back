@@ -127,23 +127,23 @@ export function getNextBadge(balance: number) {
   return BADGES.find(b => balance < b.min) || null
 }
 
-// ── Real API sync (WordPress REST API) ──────────────────────────────
-// Si le token JWT est présent → synchronise avec le vrai backend WooCommerce
-// Sinon → reste en localStorage (mode démo)
-
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
+// ── Real API sync (backend Go, loyalty-svc) ──────────────────────────
+// Si le token JWT est présent → synchronise avec loyalty-svc via les
+// routes Next.js /api/coins (qui résolvent le customer_id depuis le JWT
+// vérifié côté serveur, jamais transmis par le client).
+// Sinon → reste en localStorage (mode démo).
 
 function getJwt(): string | null {
   if (typeof window === 'undefined') return null
   return localStorage.getItem('miad_token') || localStorage.getItem('token') || null
 }
 
-/** Synchronise le solde depuis le backend WordPress (si connecté) */
+/** Synchronise le solde depuis loyalty-svc (si connecté) */
 export async function syncCoinsFromAPI(): Promise<number | null> {
   const token = getJwt()
   if (!token) return null
   try {
-    const res = await fetch(`${WOO_URL}/wp-json/miad/v1/coins`, {
+    const res = await fetch('/api/coins', {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return null
@@ -158,12 +158,12 @@ export async function syncCoinsFromAPI(): Promise<number | null> {
   } catch { return null }
 }
 
-/** Réclame le bonus quotidien via l'API (si connecté) ou localStorage */
+/** Réclame le bonus quotidien via loyalty-svc (si connecté) ou localStorage */
 export async function claimDailyAPI(): Promise<number> {
   const token = getJwt()
   if (!token) return claimDaily()
   try {
-    const res = await fetch(`${WOO_URL}/wp-json/miad/v1/coins/daily`, {
+    const res = await fetch('/api/coins/daily', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -178,12 +178,12 @@ export async function claimDailyAPI(): Promise<number> {
   } catch { return claimDaily() }
 }
 
-/** Valide un coupon via le backend WordPress */
+/** Valide un coupon via loyalty-svc */
 async function validateCouponAPI(code: string, subtotal: number): Promise<{
   valid: boolean; discount: number; message: string
 }> {
   try {
-    const res = await fetch(`${WOO_URL}/wp-json/miad/v1/coupons/validate`, {
+    const res = await fetch('/api/coupons/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, subtotal }),
