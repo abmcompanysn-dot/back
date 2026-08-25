@@ -285,6 +285,14 @@ func main() {
 			for _, p := range prods {
 				trid := extractTrid(p)
 				imagesJSON, _ := json.Marshal(imageURLs(p.Images))
+				// catalog-svc filtre sur status='active' (voir listProducts) —
+				// les statuts WooCommerce (publish/draft/pending/private) ne
+				// matchent jamais ça telsquels, ce qui rendait TOUT le
+				// catalogue importé invisible malgré un import "réussi".
+				status := "inactive"
+				if p.Status == "publish" {
+					status = "active"
+				}
 
 				var vendorID int64
 				if p.Store.ID != 0 {
@@ -307,7 +315,7 @@ func main() {
 						name=excluded.name, slug=excluded.slug, description=excluded.description,
 						price_usd=excluded.price_usd, images=excluded.images, status=excluded.status`,
 					p.ID, trid, lang, vendorID, categoryID, p.Name, p.Slug, p.Description,
-					parsePrice(p.Price), imagesJSON, p.Status)
+					parsePrice(p.Price), imagesJSON, status)
 				if err != nil {
 					log.Error("insert produit", "id", p.ID, "err", err)
 				}
