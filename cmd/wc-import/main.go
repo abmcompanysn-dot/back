@@ -118,7 +118,6 @@ type dokanStore struct {
 	ShopURL  string `json:"shop_url"`
 	Gravatar string `json:"gravatar"`
 	Banner   string `json:"banner"`
-	Enabled  bool   `json:"enabled"`
 	Address  dokanAddress `json:"address"`
 	Phone    string       `json:"phone"`
 	Email    string       `json:"email"`
@@ -230,8 +229,13 @@ func main() {
 				banner_url=excluded.banner_url, country=excluded.country, city=excluded.city,
 				phone=excluded.phone, email=excluded.email, verified=excluded.verified
 			RETURNING id`,
+			// s.Enabled toujours false : dokan/v1/stores ne renvoie pas de
+			// champ "enabled" (confirmé par un dump réel de l'API — seuls
+			// trusted/featured/toc_enabled existent). Ces boutiques sont de
+			// vrais vendeurs déjà actifs sur l'ancien site, donc considérées
+			// vérifiées par défaut plutôt que de reproduire ce faux "false".
 			s.ID, s.Name, slugFromShopURL(s.ShopURL, s.ID), s.Gravatar, s.Banner,
-			s.Address.Country, s.Address.City, s.Phone, s.Email, s.Enabled,
+			s.Address.Country, s.Address.City, s.Phone, s.Email, true,
 		).Scan(&vendorID)
 		if err != nil {
 			log.Error("insert vendeur", "wc_store_id", s.ID, "err", err)
