@@ -618,7 +618,7 @@ func importOrders(
 					                    lines, subtotal_usd, shipping_usd, total_usd,
 					                    shipping_address, billing_address, payment_method, created_at, updated_at)
 					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
-					ON CONFLICT (wc_order_id, vendor_id) DO UPDATE SET
+					ON CONFLICT (wc_order_id, vendor_id) WHERE wc_order_id IS NOT NULL DO UPDATE SET
 						status=excluded.status, payment_status=excluded.payment_status,
 						fulfillment_stage=excluded.fulfillment_stage, lines=excluded.lines,
 						updated_at=now()
@@ -646,7 +646,7 @@ func importOrders(
 					if err := orderDB.QueryRow(ctx, `
 						INSERT INTO orders (reference, customer_id, vendor_id, wc_order_id, status, created_at, updated_at)
 						VALUES ($1,$2,0,$3,'group',$4,$4)
-						ON CONFLICT (wc_order_id, vendor_id) DO UPDATE SET updated_at=now()
+						ON CONFLICT (wc_order_id, vendor_id) WHERE wc_order_id IS NOT NULL DO UPDATE SET updated_at=now()
 						RETURNING id`,
 						fmt.Sprintf("WC-%d", o.ID), o.CustomerID, o.ID, createdAt,
 					).Scan(&parentID); err != nil {
