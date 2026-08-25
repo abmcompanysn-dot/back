@@ -194,6 +194,17 @@ func (m *Media) Upload(ctx context.Context, prefix, filename string, r io.Reader
 	return m.baseURL + "/" + key, nil
 }
 
+// Delete retire un objet MinIO à partir de son URL publique HTTPS (celle
+// renvoyée par Upload) — reconstruit la clé S3 en retirant le préfixe
+// baseURL, symétrique de la construction faite dans Upload.
+func (m *Media) Delete(ctx context.Context, publicURL string) error {
+	key := strings.TrimPrefix(publicURL, m.baseURL+"/")
+	if key == publicURL {
+		return fmt.Errorf("URL %q ne correspond pas au baseURL configuré (%q)", publicURL, m.baseURL)
+	}
+	return m.client.RemoveObject(ctx, m.bucket, key, minio.RemoveObjectOptions{})
+}
+
 // ---------- Health-check natif (le point qui manquait sous WP) ----------
 
 type Health struct {

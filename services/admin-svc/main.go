@@ -44,6 +44,22 @@ CREATE TABLE IF NOT EXISTS admin_action_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_admin_log_created ON admin_action_log (created_at DESC);
+
+-- Médiathèque : MinIO n'est qu'un stockage brut sans registre — cette
+-- table est la seule source de métadonnées (nom, dossier, taille, type),
+-- alimentée par uploadMedia à chaque upload.
+CREATE TABLE IF NOT EXISTS media_files (
+  id BIGSERIAL PRIMARY KEY,
+  filename TEXT NOT NULL,
+  url TEXT NOT NULL,
+  folder TEXT NOT NULL DEFAULT 'products',
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  content_type TEXT DEFAULT '',
+  uploaded_by TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_media_folder ON media_files (folder);
+CREATE INDEX IF NOT EXISTS idx_media_created ON media_files (created_at DESC);
 `
 
 //go:embed webui/dist
@@ -214,6 +230,9 @@ func main() {
 		// seulement un admin) pour uploader une image produit — même
 		// handler, même MinIO, contrôle d'accès différent.
 		mux.HandleFunc("POST /media/upload", s.requireAdminOrVendor(s.uploadMedia))
+		mux.HandleFunc("GET /admin/api/media", s.requireAdmin(s.listMedia))
+		mux.HandleFunc("DELETE /admin/api/media/{id}", s.requireAdmin(s.deleteMedia))
+		mux.HandleFunc("GET /admin/api/media/orphans", s.requireAdmin(s.findMediaOrphans))
 		mux.HandleFunc("GET /admin/api/email-templates", s.requireAdmin(s.proxy(func() string { return s.emailURL + "/email-templates" })))
 		mux.HandleFunc("GET /admin/api/email-templates/{name}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forward(w, r, s.emailURL+"/email-templates/"+r.PathValue("name"))
@@ -490,7 +509,229 @@ func (s *server) uploadMedia(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 502, "upload_failed", err.Error())
 		return
 	}
+
+	uploadedBy := ""
+	if claims, err := s.verifyJWT(r); err == nil {
+		if email, ok := claims["email"].(string); ok {
+			uploadedBy = email
+		}
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO media_files (filename, url, folder, size_bytes, content_type, uploaded_by)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		header.Filename, url, prefix, header.Size, contentType, uploadedBy,
+	); err != nil {
+		// La médiathèque perd juste cette entrée du registre — l'upload
+		// MinIO a déjà réussi et l'URL est valide, ne jamais faire échouer
+		// la réponse pour un problème de métadonnées secondaires.
+		kit.Logger("admin-svc").Warn("media_files insert échoué", "err", err.Error())
+	}
 	kit.JSON(w, 200, map[string]string{"url": url})
+}
+
+// listMedia — médiathèque paginée, filtrable par dossier/type/nom.
+func (s *server) listMedia(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(kit.EnvOr(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(q.Get("page_size"), "40"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 40
+	}
+	where := "WHERE 1=1"
+	args := []any{}
+	if v := q.Get("folder"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND folder = $%d", len(args))
+	}
+	if v := q.Get("type"); v != "" {
+		args = append(args, v+"%")
+		where += fmt.Sprintf(" AND content_type LIKE $%d", len(args))
+	}
+	if v := q.Get("q"); v != "" {
+		args = append(args, "%"+v+"%")
+		where += fmt.Sprintf(" AND filename ILIKE $%d", len(args))
+	}
+
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM media_files "+where, args...).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT id, filename, url, folder, size_bytes, content_type, uploaded_by, created_at
+		FROM media_files %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, size int64
+		var filename, url, folder, contentType, uploadedBy string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &filename, &url, &folder, &size, &contentType, &uploadedBy, &createdAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "filename": filename, "url": url, "folder": folder,
+			"size_bytes": size, "content_type": contentType, "uploaded_by": uploadedBy,
+			"created_at": createdAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
+// deleteMedia — supprime l'objet MinIO ET la ligne de métadonnées.
+// N'échoue pas la requête si l'objet MinIO est déjà absent (idempotent) :
+// seule une vraie erreur réseau/permission bloque, pas un 404 upstream.
+func (s *server) deleteMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var url string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT url FROM media_files WHERE id = $1", id,
+	).Scan(&url); err != nil {
+		kit.Fail(w, 404, "media_not_found", fmt.Sprintf("fichier %s introuvable", id))
+		return
+	}
+	if s.media != nil {
+		if err := s.media.Delete(r.Context(), url); err != nil {
+			kit.Logger("admin-svc").Warn("suppression MinIO échouée", "url", url, "err", err.Error())
+		}
+	}
+	if _, err := s.db.Exec(r.Context(), "DELETE FROM media_files WHERE id = $1", id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "deleted": true})
+}
+
+// findMediaOrphans — fichiers dont l'URL n'apparaît dans aucune des
+// tables qui référencent des images (produits/vendeurs/catégories/marques),
+// croisées par appel HTTP vers catalog-svc/vendor-svc plutôt qu'un accès
+// direct à leurs bases (admin-svc n'a pas de connexion à ces DB, cohérent
+// avec le reste du fichier : proxy-and-aggregate, jamais un accès direct).
+func (s *server) findMediaOrphans(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	used := map[string]bool{}
+
+	collectURLs := func(url string) {
+		p, err := fetchAllPages(ctx, url)
+		if err != nil {
+			return
+		}
+		markUsedURLs(p, used)
+	}
+	collectURLs(s.catalogURL + "/products?admin=true&page_size=100")
+	collectURLs(s.vendorURL + "/stores?page_size=100")
+	if body, err := getJSON(ctx, s.catalogURL+"/categories"); err == nil {
+		markUsedURLs([]map[string]any{body}, used)
+	}
+	if body, err := getJSON(ctx, s.catalogURL+"/brands"); err == nil {
+		markUsedURLs([]map[string]any{body}, used)
+	}
+
+	rows, err := s.db.Query(ctx, "SELECT id, filename, url, folder, size_bytes, created_at FROM media_files ORDER BY created_at DESC")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	orphans := []map[string]any{}
+	for rows.Next() {
+		var id, size int64
+		var filename, url, folder string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &filename, &url, &folder, &size, &createdAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		if !used[url] {
+			orphans = append(orphans, map[string]any{
+				"id": id, "filename": filename, "url": url, "folder": folder,
+				"size_bytes": size, "created_at": createdAt.UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"items": orphans, "total": len(orphans)})
+}
+
+// fetchAllPages — pagine un endpoint items/has_more jusqu'à épuisement,
+// plafonné à 20 pages (2000 lignes à page_size=100) pour ne jamais boucler
+// indéfiniment sur une réponse malformée.
+func fetchAllPages(ctx context.Context, baseURL string) ([]map[string]any, error) {
+	var all []map[string]any
+	for page := 1; page <= 20; page++ {
+		sep := "&"
+		if !strings.Contains(baseURL, "?") {
+			sep = "?"
+		}
+		body, err := getJSON(ctx, fmt.Sprintf("%s%spage=%d", baseURL, sep, page))
+		if err != nil {
+			return all, err
+		}
+		items, _ := body["items"].([]any)
+		for _, it := range items {
+			if m, ok := it.(map[string]any); ok {
+				all = append(all, m)
+			}
+		}
+		hasMore, _ := body["has_more"].(bool)
+		if !hasMore || len(items) == 0 {
+			break
+		}
+	}
+	return all, nil
+}
+
+// markUsedURLs — extrait toutes les URLs d'image référencées par une
+// liste d'objets (produits/vendeurs/catégories/marques), quelle que soit
+// la forme exacte du champ (image/images/logo_url/banner_url/image_url).
+func markUsedURLs(items []map[string]any, used map[string]bool) {
+	mark := func(v any) {
+		if s, ok := v.(string); ok && s != "" {
+			used[s] = true
+		}
+	}
+	for _, it := range items {
+		mark(it["image"])
+		mark(it["logo_url"])
+		mark(it["banner_url"])
+		mark(it["image_url"])
+		mark(it["gravatar"])
+		mark(it["banner"])
+		if imgs, ok := it["images"].([]any); ok {
+			for _, im := range imgs {
+				if m, ok := im.(map[string]any); ok {
+					mark(m["src"])
+				}
+			}
+		}
+		// listCategories/listBrands renvoient {"categories":[...]}/{"items":[...]}
+		// plutôt que la liste directement — creuse un niveau si présent.
+		for _, key := range []string{"categories", "roots", "items"} {
+			if nested, ok := it[key].([]any); ok {
+				sub := make([]map[string]any, 0, len(nested))
+				for _, n := range nested {
+					if m, ok := n.(map[string]any); ok {
+						sub = append(sub, m)
+					}
+				}
+				markUsedURLs(sub, used)
+			}
+		}
+	}
 }
 
 // sanitizeFilename retire les caractères qui n'ont rien à faire dans une

@@ -8,6 +8,7 @@ import {
   IconCustomers,
   IconDashboard,
   IconFinance,
+  IconImage,
   IconLogout,
   IconMail,
   IconMarketing,
@@ -21,6 +22,7 @@ import {
 const TABS = [
   { path: '/admin/', label: "Tableau de bord", icon: IconDashboard, end: true },
   { path: '/admin/catalog/products', label: 'Catalogue', icon: IconCatalog },
+  { path: '/admin/media', label: 'Médiathèque', icon: IconImage },
   { path: '/admin/vendors', label: 'Vendeurs', icon: IconStore },
   { path: '/admin/orders', label: 'Commandes', icon: IconOrders },
   { path: '/admin/customers', label: 'Clients', icon: IconCustomers },
@@ -39,6 +41,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/catalog/brands': 'Catalogue',
   '/admin/catalog/categories': 'Catalogue',
   '/admin/catalog/reviews': 'Catalogue',
+  '/admin/media': 'Médiathèque',
   '/admin/vendors': 'Vendeurs',
   '/admin/orders': 'Commandes',
   '/admin/customers': 'Clients',
