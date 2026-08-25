@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
-import { Search, ShoppingCart, User, Menu, X, ChevronDown, Globe, ShieldCheck, HelpCircle, MessageCircle, LayoutDashboard, Package, Star, QrCode, BarChart2, Settings, Heart, MapPin, Tag, LogIn } from 'lucide-react'
+import { Search, ShoppingCart, User, Menu, X, ChevronDown, Globe, HelpCircle, MessageCircle, LayoutDashboard, Package, Star, QrCode, BarChart2, Settings, Heart, MapPin, Tag, LogIn } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { countries, type WooCategory, translations } from '@/lib/woocommerce'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -23,7 +23,6 @@ interface HeaderProps {
   cartCount: number
   selectedCountry?: string
   isLoggedIn?: boolean
-  isAdmin?: boolean
   userType?: 'buyer' | 'vendor'
   categories: WooCategory[]
   isLoadingCategories?: boolean
@@ -35,7 +34,6 @@ interface HeaderProps {
   onCountryClick?: (code: string, view?: any) => void
   onSearch: (query: string) => void
   onLoginClick: () => void
-  onAdminClick: () => void
   onDashboardClick: () => void
   onDashboardSectionClick?: (section: string) => void
   onHelpClick: (topic?: string) => void
@@ -67,7 +65,6 @@ const CLIENT_SECTIONS = [
 export function Header({
   cartCount,
   isLoggedIn = false,
-  isAdmin = false,
   userType = 'buyer',
   categories,
   isLoadingCategories,
@@ -78,7 +75,6 @@ export function Header({
   onCategoryClick,
   onSearch,
   onLoginClick,
-  onAdminClick,
   onDashboardClick,
   onDashboardSectionClick,
   isProductView = false,
@@ -374,18 +370,6 @@ export function Header({
                         <span>Tableau de bord</span>
                       </button>
                     </div>
-                    {isAdmin && (
-                      <div className="border-t border-border">
-                        <button
-                          type="button"
-                          onClick={() => { setAccountMenuOpen(false); onAdminClick() }}
-                          className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-accent/10 hover:text-accent transition-colors text-left text-sm text-foreground font-bold"
-                        >
-                          <ShieldCheck size={14} className="shrink-0 text-accent" />
-                          <span>Administration</span>
-                        </button>
-                      </div>
-                    )}
                   </div>
                 )}
               </div>

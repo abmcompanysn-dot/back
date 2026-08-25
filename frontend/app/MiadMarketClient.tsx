@@ -29,7 +29,6 @@ import { CategoriesListPage } from '@/components/miad/CategoriesListPage'
 import { StoresListPage } from '@/components/miad/StoresListPage'
 import { ProductCard } from '@/components/miad/ProductCard'
 import { Button } from '@/components/ui/button'
-import { AdminDashboard } from '@/components/miad/AdminDashboard'
 import { HelpCenter } from '@/components/miad/HelpCenter'
 import { OrderHistory } from '@/components/miad/OrderHistory'
 import { ProductSkeleton } from '@/components/miad/ProductSkeleton'
@@ -64,7 +63,6 @@ type View =
   | 'categoriesList'
   | 'orderHistory'
   | 'storesList'
-  | 'admin'
   | 'help'
   | 'contact'
 
@@ -301,7 +299,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [userName, setUserName] = useState('')
   const [userType, setUserType] = useState<'buyer' | 'vendor'>('buyer')
-  const [isAdmin, setIsAdmin] = useState(false)
   // isRep/prevView : lus uniquement dans des handlers, jamais affichés à
   // l'écran — un useRef évite un re-render inutile à chaque mise à jour.
   const isRep = useRef(false)
@@ -708,7 +705,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     localStorage.removeItem('miad_role')
     localStorage.removeItem('miad_cart')
     setIsLoggedIn(false)
-    setIsAdmin(false)
     isRep.current = false
     setUserType('buyer')
     setUserName('')
@@ -1040,10 +1036,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         if (user) {
           setIsLoggedIn(true);
           setUserName(user.display_name || user.first_name || user.name || 'Utilisateur');
-          // Accès Admin basé sur le rôle enregistré
-          if (savedRole === 'admin') {
-            setIsAdmin(true);
-          }
           if (savedRole === 'representant') {
             isRep.current = true;
           }
@@ -1212,7 +1204,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   const handleLoginSuccess = (type: 'buyer' | 'vendor', user?: any) => {
     setIsLoggedIn(true)
     setUserType(type)
-    setIsAdmin(user?.role === 'admin')
     if (user) {
       setUserName(user.user_display_name || user.display_name || user.first_name || user.name || 'Utilisateur');
     }
@@ -1229,7 +1220,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     const returnView = (sessionStorage.getItem('miad_login_return') as View | null) || prevView.current
     sessionStorage.removeItem('miad_login_return')
 
-    const noReturnViews: View[] = ['login', 'vendorDashboard', 'clientDashboard', 'admin']
+    const noReturnViews: View[] = ['login', 'vendorDashboard', 'clientDashboard']
     const destination: View = (returnView && !noReturnViews.includes(returnView))
       ? returnView
       : (type === 'vendor' ? 'vendorDashboard' : 'clientDashboard')
@@ -1264,7 +1255,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     cartCount,
     selectedCountry: undefined,
     isLoggedIn,
-    isAdmin,
     userType,
     categories: rootCategories,
     isLoadingCategories: categoriesLoading,
@@ -1276,7 +1266,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     onCountryClick: undefined,
     onSearch: handleSearch,
     onLoginClick: () => { prevView.current = currentView; navigateTo('login'); },
-    onAdminClick: () => { navigateTo('admin'); },
     onHelpClick: (topic?: string) => {
       setActiveHelpTopic(topic);
       navigateTo('help');
@@ -1511,9 +1500,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       case 'help':
         return <HelpCenter activeTopic={activeHelpTopic} onBack={navigateBack} onTopicClick={setActiveHelpTopic} onOpenChat={() => {}} />;
 
-
-      case 'admin':
-        return isAdmin ? <AdminDashboard onBack={navigateBack} hideEmptyCategories={hideEmptyCategories} onToggleHideEmpty={setHideEmptyCategories} /> : null;
 
       case 'search': {
         const rawSearchResults = searchResultsData?.products || [];
