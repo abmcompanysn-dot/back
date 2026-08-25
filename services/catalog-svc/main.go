@@ -1198,14 +1198,21 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+	// Variations dupliquées pour idFR ET idEN : chaque langue est un produit
+	// à part entière côté schéma (trid les relie) — ne les insérer que pour
+	// idFR laissait la version EN sans variations du tout (bug trouvé le
+	// 2026-08-25, jamais remarqué faute d'UI admin pour créer un produit
+	// variable avant ce jour).
 	for _, v := range body.Variations {
 		attrs, _ := json.Marshal(v["attributes"])
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO product_variations (product_id, sku, attributes, price_usd, stock, image_url)
-			VALUES ($1,$2,$3,$4,$5,$6)`,
-			idFR, v["sku"], attrs, toFloat(v["price_usd"]), toInt(v["stock"]), v["image_url"]); err != nil {
-			kit.Fail(w, 500, "db_error", err.Error())
-			return
+		for _, pid := range []int64{idFR, idEN} {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO product_variations (product_id, sku, attributes, price_usd, stock, image_url)
+				VALUES ($1,$2,$3,$4,$5,$6)`,
+				pid, v["sku"], attrs, toFloat(v["price_usd"]), toInt(v["stock"]), v["image_url"]); err != nil {
+				kit.Fail(w, 500, "db_error", err.Error())
+				return
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

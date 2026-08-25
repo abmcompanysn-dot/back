@@ -16,6 +16,18 @@ interface Brand {
   name: string
 }
 
+// VariationRow — même forme que product_variations côté catalog-svc
+// (attributes: objet clé/valeur libre, ex: {"Taille": "M"} — PAS un array
+// {name,option} comme le dashboard vendeur Next.js le suppose à tort).
+interface VariationRow {
+  id?: number
+  sku: string
+  attributes: Record<string, string>
+  price_usd: string
+  stock: string
+  image_url: string
+}
+
 interface Draft {
   vendor_id: string
   category_id: string
@@ -40,6 +52,8 @@ interface Draft {
   shipping_class: string
   meta_title: string
   meta_description: string
+  product_type: 'simple' | 'variable'
+  variations: VariationRow[]
 }
 
 const EMPTY: Draft = {
@@ -66,12 +80,17 @@ const EMPTY: Draft = {
   shipping_class: '',
   meta_title: '',
   meta_description: '',
+  product_type: 'simple',
+  variations: [],
 }
+
+const EMPTY_VARIATION: VariationRow = { sku: '', attributes: {}, price_usd: '', stock: '', image_url: '' }
 
 const TABS = [
   { key: 'general', label: 'Informations générales' },
   { key: 'category', label: 'Catégorisation' },
   { key: 'pricing', label: 'Prix & Inventaire' },
+  { key: 'variations', label: 'Variations' },
   { key: 'media', label: 'Médias' },
   { key: 'shipping', label: 'Livraison' },
   { key: 'seo', label: 'SEO' },
@@ -127,6 +146,15 @@ export function ProductForm() {
           shipping_class: '',
           meta_title: '',
           meta_description: '',
+          product_type: p.is_variable ? 'variable' : 'simple',
+          variations: (p.variations || []).map((v: any) => ({
+            id: v.id,
+            sku: v.sku ?? '',
+            attributes: v.attributes ?? {},
+            price_usd: String(v.price_usd ?? ''),
+            stock: String(v.stock ?? 0),
+            image_url: v.image_url ?? '',
+          })),
         })
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'échec du chargement du produit'))
@@ -164,6 +192,41 @@ export function ProductForm() {
     set('images', draft.images.filter((u) => u !== url))
   }
 
+  function addVariation() {
+    set('variations', [...draft.variations, { ...EMPTY_VARIATION }])
+  }
+
+  function updateVariation(idx: number, patch: Partial<VariationRow>) {
+    set('variations', draft.variations.map((v, i) => (i === idx ? { ...v, ...patch } : v)))
+  }
+
+  function removeVariationRow(idx: number) {
+    const v = draft.variations[idx]
+    set('variations', draft.variations.filter((_, i) => i !== idx))
+    // Suppression immédiate côté serveur si la variation existait déjà —
+    // sinon elle n'a jamais été persistée, rien à supprimer côté API.
+    if (isEdit && v?.id) {
+      api.delete(`/admin/api/products/${id}/variations/${v.id}`).catch(() => {})
+    }
+  }
+
+  async function saveVariations(productId: string | number) {
+    for (const v of draft.variations) {
+      const payload = {
+        sku: v.sku,
+        attributes: v.attributes,
+        price_usd: Number(v.price_usd || 0),
+        stock: Number(v.stock || 0),
+        image_url: v.image_url,
+      }
+      if (v.id) {
+        await api.put(`/admin/api/products/${productId}/variations/${v.id}`, payload)
+      } else {
+        await api.post(`/admin/api/products/${productId}/variations`, payload)
+      }
+    }
+  }
+
   async function save() {
     if (!draft.name_fr.trim()) {
       setError('le nom du produit (FR) est obligatoire')
@@ -173,6 +236,11 @@ export function ProductForm() {
     if (!isEdit && !draft.vendor_id) {
       setError('le vendeur est obligatoire')
       setTab('category')
+      return
+    }
+    if (draft.product_type === 'variable' && draft.variations.length === 0) {
+      setError('un produit variable doit avoir au moins une variation')
+      setTab('variations')
       return
     }
     setSaving(true)
@@ -201,6 +269,9 @@ export function ProductForm() {
           meta_title: draft.meta_title,
           meta_description: draft.meta_description,
         })
+        if (draft.product_type === 'variable') {
+          await saveVariations(id!)
+        }
       } else {
         await api.post('/admin/api/products', {
           vendor_id: Number(draft.vendor_id),
@@ -213,7 +284,16 @@ export function ProductForm() {
           barcode: draft.barcode,
           stock: Number(draft.stock || 0),
           images: draft.images,
-          is_variable: false,
+          is_variable: draft.product_type === 'variable',
+          variations: draft.product_type === 'variable'
+            ? draft.variations.map((v) => ({
+                sku: v.sku,
+                attributes: v.attributes,
+                price_usd: Number(v.price_usd || 0),
+                stock: Number(v.stock || 0),
+                image_url: v.image_url,
+              }))
+            : undefined,
         })
       }
       navigate('/admin/catalog/products')
@@ -307,9 +387,19 @@ export function ProductForm() {
 
         {tab === 'pricing' && (
           <div className="form-grid">
+            <div className="form-field full">
+              <label>Type de produit</label>
+              <select value={draft.product_type} onChange={(e) => set('product_type', e.target.value as 'simple' | 'variable')}>
+                <option value="simple">Simple — un seul prix</option>
+                <option value="variable">Variable — plusieurs variations (taille, couleur, quantité…)</option>
+              </select>
+              {draft.product_type === 'variable' && (
+                <span className="hint">Le prix/stock ci-dessous ne sert plus — gérez-les dans l'onglet "Variations".</span>
+              )}
+            </div>
             <div className="form-field">
               <label>Prix régulier (USD)</label>
-              <input type="number" step="0.01" value={draft.price_usd} onChange={(e) => set('price_usd', e.target.value)} />
+              <input type="number" step="0.01" value={draft.price_usd} onChange={(e) => set('price_usd', e.target.value)} disabled={draft.product_type === 'variable'} />
             </div>
             <div className="form-field">
               <label>Prix promo (USD)</label>
@@ -342,6 +432,72 @@ export function ProductForm() {
                 Autoriser les commandes en rupture
               </label>
             </div>
+          </div>
+        )}
+
+        {tab === 'variations' && (
+          <div>
+            {draft.product_type === 'simple' ? (
+              <p className="hint">
+                Ce produit est de type "Simple" — passez-le en "Variable" dans l'onglet Prix &amp; Inventaire pour ajouter des variations (ex : "1 pièce" à 15$, "3 pièces" à 40$).
+              </p>
+            ) : (
+              <>
+                <div className="table-card">
+                  <table style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Libellé (ex: "1 pièce")</th>
+                        <th>SKU</th>
+                        <th>Prix (USD)</th>
+                        <th>Stock</th>
+                        <th>Image</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {draft.variations.map((v, idx) => {
+                        const label = v.attributes['Variante'] ?? ''
+                        return (
+                          <tr key={v.id ?? `new-${idx}`}>
+                            <td>
+                              <input
+                                value={label}
+                                placeholder="1 pièce"
+                                onChange={(e) => updateVariation(idx, { attributes: { ...v.attributes, Variante: e.target.value } })}
+                              />
+                            </td>
+                            <td>
+                              <input value={v.sku} onChange={(e) => updateVariation(idx, { sku: e.target.value })} />
+                            </td>
+                            <td>
+                              <input type="number" step="0.01" value={v.price_usd} onChange={(e) => updateVariation(idx, { price_usd: e.target.value })} style={{ width: 90 }} />
+                            </td>
+                            <td>
+                              <input type="number" value={v.stock} onChange={(e) => updateVariation(idx, { stock: e.target.value })} style={{ width: 70 }} />
+                            </td>
+                            <td>
+                              <input value={v.image_url} placeholder="URL image (optionnel)" onChange={(e) => updateVariation(idx, { image_url: e.target.value })} />
+                            </td>
+                            <td>
+                              <button className="btn-ghost" type="button" onClick={() => removeVariationRow(idx)}>
+                                Supprimer
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <button className="btn-ghost" type="button" onClick={addVariation} style={{ marginTop: 12 }}>
+                  + Ajouter une variation
+                </button>
+                <p className="hint" style={{ marginTop: 8 }}>
+                  Le libellé (ex : "1 pièce", "3 pièces", "Taille M") est stocké comme attribut "Variante" — cohérent avec le format déjà utilisé par le dashboard vendeur.
+                </p>
+              </>
+            )}
           </div>
         )}
 

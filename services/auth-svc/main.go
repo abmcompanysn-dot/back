@@ -132,6 +132,7 @@ func main() {
 		mux.HandleFunc("POST /auth/admin/2fa/disable", s.disable2FA)
 		mux.HandleFunc("GET /customers", s.listCustomers)                                // role admin exigé
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)                              // role admin exigé
+		mux.HandleFunc("PATCH /customer/{id}/address", s.updateCustomerAddress)          // secret interne exigé
 		mux.HandleFunc("GET /admins", s.listAdmins)                                      // role admin exigé
 		mux.HandleFunc("POST /auth/impersonate-vendor/{vendor_id}", s.impersonateVendor) // role admin exigé
 	})
@@ -636,9 +637,10 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 // présents pour admins — même primitive crypto, pas de duplication.
 func (s *server) registerCustomer(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		FullName string `json:"full_name"`
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		FullName     string `json:"full_name"`
+		ReferralCode string `json:"referral_code"` // ?ref= au moment de l'inscription (module Parrainage représentant)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
@@ -670,7 +672,8 @@ func (s *server) registerCustomer(w http.ResponseWriter, r *http.Request) {
 	}
 	kit.Publish(s.kafka, "customer.registered", fmt.Sprint(id), map[string]any{
 		"customer_id": id, "email": body.Email, "provider": "password",
-		"at": time.Now().UTC().Format(time.RFC3339),
+		"referral_code": body.ReferralCode, // consommé par loyalty-svc (module Parrainage), vide si absent
+		"at":            time.Now().UTC().Format(time.RFC3339),
 	})
 
 	jwt, expires := s.signJWT(map[string]any{
@@ -840,14 +843,23 @@ func (s *server) listCustomers(w http.ResponseWriter, r *http.Request) {
 // trouvé mais avec un champ NULL" (ancien bug : un Scan vers string sur
 // une valeur NULL échouait et renvoyait 404 à tort — un client inscrit
 // par téléphone seul, sans email, devenait invisible ici).
-// Réservé aux admins : cette route n'exigeait aucune authentification
-// avant (faille — n'importe quel appelant interne au cluster pouvait
-// énumérer email/téléphone/adresses par id), corrigé au même moment que
-// le bug de scan ci-dessus.
+// Réservé aux admins OU au serveur Next.js lui-même (secret interne,
+// même pattern que resetPassword/updateCustomerAddress) : cette route
+// n'exigeait aucune authentification avant (faille — n'importe quel
+// appelant interne au cluster pouvait énumérer email/téléphone/adresses
+// par id), corrigé au même moment que le bug de scan ci-dessus. Le
+// bypass secret interne a été ajouté ensuite : app/api/customer/route.ts
+// (dashboard client) appelle cette route pour SON PROPRE compte après
+// avoir déjà vérifié le JWT côté edge — sans lui, tout client non-admin
+// consultant son propre profil recevait un 403.
 func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
-	if err := s.requireRole(r, "admin"); err != nil {
-		kit.Fail(w, 403, "admin_required", err.Error())
-		return
+	secret := kit.Env("INTERNAL_API_SECRET", "")
+	isInternal := secret != "" && r.Header.Get("X-Internal-Secret") == secret
+	if !isInternal {
+		if err := s.requireRole(r, "admin"); err != nil {
+			kit.Fail(w, 403, "admin_required", err.Error())
+			return
+		}
 	}
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	row := s.db.QueryRow(r.Context(), `
@@ -884,6 +896,81 @@ func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
 		out["vendor_id"] = *vendorID
 	}
 	kit.JSON(w, 200, out)
+}
+
+// updateCustomerAddress — PATCH /customer/{id}/address {type, address}
+// (type: "billing" | "shipping"). Comblait un vrai trou : le dashboard
+// client (app/api/customer/route.ts PATCH) renvoyait un 501 explicite
+// depuis la migration, faute d'endpoint d'écriture sur customers.addresses
+// — les clients ne pouvaient plus modifier leur adresse de facturation/
+// livraison. `addresses` est stocké comme un array JSONB libre (pas de
+// billing/shipping distincts comme sous WooCommerce) : on upsert par
+// `type` dans cet array plutôt que d'écraser les autres entrées.
+//
+// Protégé par le secret interne partagé avec le frontend (comme
+// resetPassword) : Next.js a déjà vérifié le JWT du client côté edge avant
+// d'appeler cette route, pas besoin de re-vérifier un rôle ici — mais
+// l'appel doit prouver qu'il vient bien du serveur Next.js et pas d'un
+// tiers qui devinerait un id.
+func (s *server) updateCustomerAddress(w http.ResponseWriter, r *http.Request) {
+	secret := kit.Env("INTERNAL_API_SECRET", "")
+	if secret == "" || r.Header.Get("X-Internal-Secret") != secret {
+		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_id", "id client invalide")
+		return
+	}
+	var body struct {
+		Type    string         `json:"type"` // billing | shipping
+		Address map[string]any `json:"address"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Type != "billing" && body.Type != "shipping" {
+		kit.Fail(w, 400, "invalid_type", `type doit être "billing" ou "shipping"`)
+		return
+	}
+	if body.Address == nil {
+		kit.Fail(w, 400, "missing_address", "address obligatoire")
+		return
+	}
+
+	var raw []byte
+	if err := s.db.QueryRow(r.Context(), "SELECT addresses FROM customers WHERE id = $1", id).Scan(&raw); err != nil {
+		kit.Fail(w, 404, "customer_not_found", fmt.Sprintf("compte %d introuvable", id))
+		return
+	}
+	var addresses []map[string]any
+	_ = json.Unmarshal(raw, &addresses)
+
+	body.Address["type"] = body.Type
+	replaced := false
+	for i, a := range addresses {
+		if a["type"] == body.Type {
+			addresses[i] = body.Address
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		addresses = append(addresses, body.Address)
+	}
+
+	updated, err := json.Marshal(addresses)
+	if err != nil {
+		kit.Fail(w, 500, "encode_error", err.Error())
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), "UPDATE customers SET addresses = $2 WHERE id = $1", id, updated); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "addresses": addresses})
 }
 
 // listAdmins — comptes du back-office (module Utilisateurs), jamais le

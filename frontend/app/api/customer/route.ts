@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { AUTH_SVC_URL, ORDER_SVC_URL, fetchWpUser, isAdmin } from '@/lib/miad-server-auth'
+import { requireEnv } from '@/lib/require-env'
 
 export const runtime = 'edge';
+
+const INTERNAL_SECRET = requireEnv('INTERNAL_API_SECRET')
 
 export async function GET(request: Request) {
   try {
@@ -35,7 +38,10 @@ export async function GET(request: Request) {
 
     // 2. Profil + commandes en parallèle (auth-svc / order-svc)
     const [customerRes, ordersRes] = await Promise.all([
-      fetch(`${AUTH_SVC_URL}/customer/${targetCustomerId}`, { cache: 'no-store' }),
+      fetch(`${AUTH_SVC_URL}/customer/${targetCustomerId}`, {
+        cache: 'no-store',
+        headers: { 'X-Internal-Secret': INTERNAL_SECRET },
+      }),
       fetch(`${ORDER_SVC_URL}/orders?customer_id=${targetCustomerId}&page_size=20`, { cache: 'no-store' }),
     ]);
 
@@ -108,32 +114,44 @@ export async function GET(request: Request) {
 
 // PATCH /api/customer — Update billing or shipping address
 //
-// GAP BACKEND CONNU : auth-svc n'expose aujourd'hui AUCUN endpoint pour
-// écrire une adresse sur un compte client (GET /customer/{id} existe,
-// rien en PUT/PATCH — voir services/auth-svc/main.go, table `customers`
-// avec une colonne `addresses` JSONB mais pas de route pour la modifier).
-// Plutôt que de simuler un succès silencieux (ce qui ferait croire à
-// l'utilisateur que son adresse est enregistrée alors qu'elle ne l'est
-// nulle part), cette route renvoie explicitement une erreur 501 tant que
-// l'endpoint n'existe pas côté auth-svc.
+// Relaie vers auth-svc PATCH /customer/{id}/address (secret interne),
+// comblant le trou qui renvoyait un 501 explicite depuis la migration —
+// voir la route Go pour le détail (addresses = array JSONB, upsert par
+// type plutôt que d'écraser billing quand on modifie shipping).
 export async function PATCH(request: Request) {
   try {
     const auth = request.headers.get('Authorization');
     if (!auth || !auth.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const user = await fetchWpUser(auth.slice(7));
+    if (!user) {
+      return NextResponse.json({ error: 'Session invalide' }, { status: 401 });
+    }
 
     const body = await request.json();
-    const { type, address } = body; // type: 'billing' | 'shipping'
+    const { type, address, id: queryId } = body; // type: 'billing' | 'shipping'
 
-    if (!type || !address) {
+    if (!type || !address || !['billing', 'shipping'].includes(type)) {
       return NextResponse.json({ error: 'Données manquantes' }, { status: 400 });
     }
 
-    return NextResponse.json({
-      error: 'Not implemented',
-      message: "La mise à jour d'adresse client n'est pas encore supportée par le backend Go (auth-svc n'a pas d'endpoint d'écriture pour customers.addresses). Voir le rapport de migration.",
-    }, { status: 501 });
+    // Même règle que GET : seul un admin peut modifier un autre profil que le sien.
+    const targetCustomerId = (isAdmin(user) && queryId) ? queryId : String(user.sub);
+
+    const res = await fetch(`${AUTH_SVC_URL}/customer/${targetCustomerId}/address`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': INTERNAL_SECRET },
+      body: JSON.stringify({ type, address }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return NextResponse.json({ error: err?.error?.message || 'Erreur backend' }, { status: res.status });
+    }
+
+    const data = await res.json();
+    return NextResponse.json({ success: true, addresses: data.addresses });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Erreur serveur' }, { status: 500 });
   }

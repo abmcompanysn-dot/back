@@ -189,6 +189,18 @@ func main() {
 		mux.HandleFunc("POST /admin/api/products", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/vendor/products")
 		}))
+		// Variations produit (module Catalogue) : catalog-svc les gère déjà
+		// intégralement (utilisé par le dashboard vendeur Next.js) — ce trou
+		// n'existait que côté proxy admin, jamais construit.
+		mux.HandleFunc("POST /admin/api/products/{id}/variations", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/products/"+r.PathValue("id")+"/variations")
+		}))
+		mux.HandleFunc("PUT /admin/api/products/{id}/variations/{variation_id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPut, s.catalogURL+"/products/"+r.PathValue("id")+"/variations/"+r.PathValue("variation_id"))
+		}))
+		mux.HandleFunc("DELETE /admin/api/products/{id}/variations/{variation_id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.catalogURL+"/products/"+r.PathValue("id")+"/variations/"+r.PathValue("variation_id"))
+		}))
 		mux.HandleFunc("GET /admin/api/reviews", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/reviews" })))
 		mux.HandleFunc("PATCH /admin/api/reviews/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPatch, s.catalogURL+"/reviews/"+r.PathValue("id"))

@@ -418,22 +418,25 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     setIsSavingSettings(true)
     try {
       const token = localStorage.getItem('miad_token')
-      const res = await fetch(`${process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com'}/wp-json/dokan/v1/settings`, {
-        method: 'POST',
+      const res = await fetch('/api/vendor/settings', {
+        method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          store_name: settingsForm.storeName,
-          address: { address_1: settingsForm.address },
+          storeName: settingsForm.storeName,
           phone: settingsForm.phone,
+          address: settingsForm.address,
+          email: settingsForm.email,
+          description: settingsForm.description,
         }),
       })
       if (res.ok) {
         toast.success('Paramètres enregistrés !')
       } else {
-        toast.info('Modifications enregistrées localement.')
+        const err = await res.json().catch(() => ({}))
+        toast.error(err.error || "Échec de l'enregistrement — réessayez")
       }
     } catch {
-      toast.info('Modifications enregistrées localement.')
+      toast.error('Impossible de joindre le serveur — réessayez')
     } finally {
       setIsSavingSettings(false)
     }
