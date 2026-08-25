@@ -140,12 +140,42 @@ type wcCustomer struct {
 	} `json:"shipping"`
 }
 
+// flexString — WooCommerce sérialise ses montants décimaux en string dans
+// la doc officielle et la plupart des réponses observées, mais certaines
+// installations (plugins de calcul de taxes/devises tiers, versions REST
+// différentes) renvoient un vrai nombre JSON pour le même champ — constaté
+// en dry-run réel le 2026-08-25 sur wc/v3/orders.total (panne "réponse
+// non-JSON" trompeuse : la vraie cause était un json.Unmarshal strict sur
+// string alors que la valeur était un number). Accepte les deux formats.
+type flexString string
+
+func (f *flexString) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*f = ""
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		*f = flexString(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*f = flexString(n.String())
+	return nil
+}
+
 type wcOrderLineItem struct {
-	ProductID   int64  `json:"product_id"`
-	VariationID int64  `json:"variation_id"`
-	Name        string `json:"name"`
-	Quantity    int    `json:"quantity"`
-	Total       string `json:"total"` // sous-total HT de la ligne, décimal en string (format WooCommerce)
+	ProductID   int64      `json:"product_id"`
+	VariationID int64      `json:"variation_id"`
+	Name        string     `json:"name"`
+	Quantity    int        `json:"quantity"`
+	Total       flexString `json:"total"` // sous-total HT de la ligne — voir flexString (string ou number selon l'installation)
 	MetaData    []struct {
 		Key   string `json:"key"`
 		Value any    `json:"value"`
@@ -178,8 +208,8 @@ type wcOrder struct {
 	DatePaid      string            `json:"date_paid"`
 	DateCompleted string            `json:"date_completed"`
 	PaymentMethod string            `json:"payment_method"`
-	Total         string            `json:"total"`
-	ShippingTotal string            `json:"shipping_total"`
+	Total         flexString        `json:"total"`
+	ShippingTotal flexString        `json:"shipping_total"`
 	LineItems     []wcOrderLineItem `json:"line_items"`
 	Billing       struct {
 		FirstName string `json:"first_name"`
@@ -238,8 +268,8 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-func parseFloat(s string) float64 {
-	f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+func parseFloat(s flexString) float64 {
+	f, _ := strconv.ParseFloat(strings.TrimSpace(string(s)), 64)
 	return f
 }
 
