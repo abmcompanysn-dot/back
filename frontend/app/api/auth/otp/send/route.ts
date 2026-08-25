@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server'
 import { rateLimit, getIp, tooManyRequests } from '@/lib/rate-limit'
+import { AUTH_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
-
+// ATTENTION (voir CLAUDE.md / suivi migration) : POST /auth/otp/send côté
+// auth-svc ne fait qu'enregistrer le code dans Redis et le logger en
+// mode dev — aucun canal d'envoi réel (email/SMS) n'est câblé, alors
+// qu'un template email otp_email existe déjà côté email-svc (jamais
+// appelé). Le champ dev_mode dans la réponse reflète cet état : tant que
+// SMS_PROVIDER_URL n'est pas configuré côté auth-svc ET qu'un pont vers
+// email-svc n'est pas ajouté, aucun OTP n'atteint réellement l'utilisateur
+// en production. Trou fonctionnel backend, pas quelque chose que cette
+// route frontend peut corriger seule.
 export async function POST(request: Request) {
   const ip = getIp(request)
   const rl = rateLimit(`otp-send:${ip}`, 3, 10 * 60 * 1000) // 3 / 10 min
@@ -14,14 +22,14 @@ export async function POST(request: Request) {
     const { email } = await request.json()
     if (!email) return NextResponse.json({ error: 'Email requis' }, { status: 400 })
 
-    // WordPress generates the 6-digit code, stores it in WP transients, and sends the branded email
-    const res = await fetch(`${WOO_URL}/wp-json/miad/v1/otp/send`, {
+    const res = await fetch(`${AUTH_SVC_URL}/auth/otp/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ identifier: email, channel: 'email' }),
     })
     const data = await res.json().catch(() => ({}))
-    return NextResponse.json(data, { status: res.ok ? 200 : (res.status || 500) })
+    if (!res.ok) return NextResponse.json({ error: data?.error?.message || 'Erreur serveur' }, { status: res.status })
+    return NextResponse.json({ success: true, otp_ref: data.otp_ref })
   } catch {
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
   }

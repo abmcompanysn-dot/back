@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -58,6 +59,33 @@ CREATE TABLE IF NOT EXISTS coupons (
   max_uses    INT NOT NULL DEFAULT 0,
   used_count  INT NOT NULL DEFAULT 0
 );
+
+-- Back-office admin (module Commandes) : historique horodaté des
+-- changements d'état (timeline 360°) et retours/litiges — aucun des deux
+-- n'existait, seuls created_at/updated_at sur la ligne elle-même.
+CREATE TABLE IF NOT EXISTS order_events (
+  id          BIGSERIAL PRIMARY KEY,
+  order_id    BIGINT NOT NULL,
+  event       TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  actor       TEXT DEFAULT 'system',
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events (order_id, occurred_at);
+
+CREATE TABLE IF NOT EXISTS returns (
+  id          BIGSERIAL PRIMARY KEY,
+  order_id    BIGINT NOT NULL,
+  product_id  BIGINT,
+  reason      TEXT NOT NULL,
+  photos      JSONB NOT NULL DEFAULT '[]',
+  status      TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | rejected
+  admin_note  TEXT DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_returns_status ON returns (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_returns_order ON returns (order_id);
 `
 
 type server struct {
@@ -65,6 +93,7 @@ type server struct {
 	kafka       sarama.SyncProducer
 	timeout     time.Duration
 	shippingURL string
+	catalogURL  string // restock au moment de l'annulation (module Commandes)
 }
 
 type line struct {
@@ -96,6 +125,7 @@ func main() {
 		kafka:       kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
 		timeout:     time.Duration(mins) * time.Minute,
 		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
+		catalogURL:  kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
 	}
 
 	// Reaper : le cas d'échec partiel est géré, pas tu.
@@ -112,6 +142,11 @@ func main() {
 		mux.HandleFunc("POST /orders/{id}/confirm", s.confirmPayment)
 		mux.HandleFunc("PUT /orders/{id}/status", s.updateOrderStatus)
 		mux.HandleFunc("PUT /orders/parent/{parent_id}/shipping-address", s.updateShippingAddress)
+		mux.HandleFunc("GET /orders/{id}/events", s.listOrderEvents)
+		mux.HandleFunc("POST /orders/{id}/cancel", s.cancelOrder)
+		mux.HandleFunc("POST /returns", s.createReturn)
+		mux.HandleFunc("GET /returns", s.listReturns)
+		mux.HandleFunc("PATCH /returns/{id}", s.moderateReturn)
 	})
 }
 
@@ -498,6 +533,255 @@ func (s *server) updateOrderStatus(w http.ResponseWriter, r *http.Request) {
 	kit.Publish(s.kafka, "order.status_changed", fmt.Sprint(id), map[string]any{
 		"order_id": id, "status": body.Status, "at": time.Now().UTC().Format(time.RFC3339),
 	})
+	s.logOrderEvent(r.Context(), id, "status_changed", fmt.Sprintf("statut changé vers %q", body.Status), "admin")
+	kit.JSON(w, 200, map[string]any{"id": id, "status": body.Status})
+}
+
+// logOrderEvent — alimente la timeline 360° (module Commandes). Jamais
+// bloquant : une erreur d'écriture ici ne doit jamais faire échouer
+// l'action métier réelle (changement de statut/annulation), juste être
+// journalisée côté serveur.
+func (s *server) logOrderEvent(ctx context.Context, orderID int64, event, description, actor string) {
+	if _, err := s.db.Exec(ctx,
+		"INSERT INTO order_events (order_id, event, description, actor) VALUES ($1,$2,$3,$4)",
+		orderID, event, description, actor); err != nil {
+		fmt.Printf("order_events insert échoué order_id=%d err=%v\n", orderID, err)
+	}
+}
+
+func (s *server) listOrderEvents(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, event, description, actor, occurred_at FROM order_events WHERE order_id = $1 ORDER BY occurred_at", id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var eid int64
+		var event, description, actor string
+		var occurredAt time.Time
+		if err := rows.Scan(&eid, &event, &description, &actor, &occurredAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": eid, "event": event, "description": description, "actor": actor,
+			"occurred_at": occurredAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items})
+}
+
+// cancelOrder — annule ET réintègre le stock de chaque ligne dans
+// catalog-svc (le champ stock posé par le module Catalogue rend ça
+// possible). Le restock n'est JAMAIS bloquant pour l'annulation
+// elle-même : la commande passe annulée même si un appel catalog-svc
+// échoue pour une ligne — l'écart de stock se réconcilie manuellement,
+// mais le client ne doit jamais rester bloqué sur une commande "non
+// annulable" à cause d'un service tiers en panne.
+func (s *server) cancelOrder(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var status string
+	var linesJSON []byte
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT status, lines FROM orders WHERE id = $1", id,
+	).Scan(&status, &linesJSON); err != nil {
+		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande %d introuvable", id))
+		return
+	}
+	if status == "cancelled" || status == "delivered" {
+		kit.Fail(w, 409, "not_cancellable", fmt.Sprintf("commande déjà %q, non annulable", status))
+		return
+	}
+
+	if _, err := s.db.Exec(r.Context(),
+		"UPDATE orders SET status = 'cancelled', updated_at = now() WHERE id = $1", id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.Publish(s.kafka, "order.status_changed", fmt.Sprint(id), map[string]any{
+		"order_id": id, "status": "cancelled", "at": time.Now().UTC().Format(time.RFC3339),
+	})
+
+	var lines []line
+	_ = json.Unmarshal(linesJSON, &lines)
+	restocked := 0
+	for _, l := range lines {
+		if l.ProductID == 0 || l.Quantity <= 0 {
+			continue
+		}
+		if err := s.restockProduct(r.Context(), l.ProductID, l.Quantity); err != nil {
+			s.logOrderEvent(r.Context(), id, "restock_failed",
+				fmt.Sprintf("réintégration stock produit %d échouée: %v", l.ProductID, err), "system")
+			continue
+		}
+		restocked++
+	}
+	s.logOrderEvent(r.Context(), id, "cancelled",
+		fmt.Sprintf("commande annulée, %d/%d ligne(s) réintégrée(s) en stock", restocked, len(lines)), "admin")
+
+	kit.JSON(w, 200, map[string]any{"id": id, "status": "cancelled", "lines_restocked": restocked, "lines_total": len(lines)})
+}
+
+// restockProduct — incrémente le stock via l'endpoint admin PATCH déjà
+// exposé par catalog-svc, pas un accès DB direct (order-svc ne possède
+// pas cette donnée). Lit le stock actuel d'abord : pas d'opération
+// atomique "increment" côté catalog-svc, donc read-then-write ici — un
+// risque de course accepté pour cette première itération (annulations
+// concurrentes du même produit sont rares).
+func (s *server) restockProduct(ctx context.Context, productID int64, qty int) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/products/%d", s.catalogURL, productID), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("catalog-svc a répondu %d", resp.StatusCode)
+	}
+	var product struct {
+		Stock int `json:"stock"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&product); err != nil {
+		return err
+	}
+
+	payload, _ := json.Marshal(map[string]any{"stock": product.Stock + qty})
+	patchReq, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		fmt.Sprintf("%s/products/%d", s.catalogURL, productID), bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp, err := http.DefaultClient.Do(patchReq)
+	if err != nil {
+		return err
+	}
+	defer patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("catalog-svc PATCH a répondu %d", patchResp.StatusCode)
+	}
+	return nil
+}
+
+/* ---------- Retours & litiges (module Commandes) ---------- */
+
+func (s *server) createReturn(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OrderID   int64    `json:"order_id"`
+		ProductID int64    `json:"product_id"`
+		Reason    string   `json:"reason"`
+		Photos    []string `json:"photos"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.OrderID == 0 || body.Reason == "" {
+		kit.Fail(w, 400, "missing_fields", "order_id et reason requis")
+		return
+	}
+	photosJSON, _ := json.Marshal(body.Photos)
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO returns (order_id, product_id, reason, photos) VALUES ($1,$2,$3,$4) RETURNING id`,
+		body.OrderID, nullIfZero(body.ProductID), body.Reason, photosJSON,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	s.logOrderEvent(r.Context(), body.OrderID, "return_requested", body.Reason, "customer")
+	kit.JSON(w, 201, map[string]any{"id": id})
+}
+
+func (s *server) listReturns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(kit.EnvOr(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(q.Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	where := "WHERE 1=1"
+	args := []any{}
+	if v := q.Get("status"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM returns "+where, args...).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT id, order_id, product_id, reason, photos, status, admin_note, created_at, processed_at
+		FROM returns %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, orderID int64
+		var productID *int64
+		var reason, status, adminNote string
+		var photosJSON []byte
+		var createdAt time.Time
+		var processedAt *time.Time
+		if err := rows.Scan(&id, &orderID, &productID, &reason, &photosJSON, &status, &adminNote, &createdAt, &processedAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		var processedStr any
+		if processedAt != nil {
+			processedStr = processedAt.UTC().Format(time.RFC3339)
+		}
+		items = append(items, map[string]any{
+			"id": id, "order_id": orderID, "product_id": productID, "reason": reason,
+			"photos": json.RawMessage(photosJSON), "status": status, "admin_note": adminNote,
+			"created_at": createdAt.UTC().Format(time.RFC3339), "processed_at": processedStr,
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
+func (s *server) moderateReturn(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Status    string `json:"status"`
+		AdminNote string `json:"admin_note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Status != "accepted" && body.Status != "rejected" {
+		kit.Fail(w, 400, "invalid_status", "status doit être accepted ou rejected")
+		return
+	}
+	var orderID int64
+	if err := s.db.QueryRow(r.Context(), `
+		UPDATE returns SET status = $2, admin_note = $3, processed_at = now()
+		WHERE id = $1 RETURNING order_id`, id, body.Status, body.AdminNote,
+	).Scan(&orderID); err != nil {
+		kit.Fail(w, 404, "return_not_found", fmt.Sprintf("retour %d introuvable", id))
+		return
+	}
+	s.logOrderEvent(r.Context(), orderID, "return_"+body.Status, body.AdminNote, "admin")
 	kit.JSON(w, 200, map[string]any{"id": id, "status": body.Status})
 }
 
@@ -598,4 +882,11 @@ func (s *server) expireUnpaidLoop(log interface{ Info(string, ...any) }) {
 func atoi(s string) int64 {
 	n, _ := strconv.ParseInt(s, 10, 64)
 	return n
+}
+
+func nullIfZero(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
 }

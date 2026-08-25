@@ -1,20 +1,7 @@
 import { NextResponse } from 'next/server';
+import { AUTH_SVC_URL, ORDER_SVC_URL, fetchWpUser, isAdmin } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
-
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com/').replace(/\/$/, '');
-const WOO_KEY = process.env.WOO_CONSUMER_KEY;
-const WOO_SECRET = process.env.WOO_CONSUMER_SECRET;
-import { requireEnv } from '@/lib/require-env'
-const INTERNAL_SECRET = requireEnv('INTERNAL_API_SECRET')
-
-const fetchOptions = {
-  headers: {
-    'User-Agent': 'MIAD-Headless-Client',
-    'X-Headless-Secret': INTERNAL_SECRET,
-    'Accept': 'application/json',
-  }
-};
 
 export async function GET(request: Request) {
   try {
@@ -25,140 +12,92 @@ export async function GET(request: Request) {
     if (!auth || !auth.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const token = auth.slice('Bearer '.length);
 
-    // 1. Identifier l'utilisateur via WordPress (récupère l'ID réel)
-    const meRes = await fetch(`${WOO_URL}/wp-json/wp/v2/users/me?context=edit`, {
-      method: 'GET',
- headers: {
-        'Authorization': auth,
-        'User-Agent': 'MIAD-Headless-Client',
-        'X-Headless-Secret': INTERNAL_SECRET,
-        'Accept': 'application/json',
-      },
-      cache: 'no-store'
-    });
-
-    if (!meRes.ok) {
-      const errorText = await meRes.text().catch(() => "Aucun corps de réponse");
-
-      // Aide au diagnostic du 403
-      if (meRes.status === 403) {
-        let errorJson: any = {};
-        try { errorJson = JSON.parse(errorText); } catch(e) {}
-
-        if (errorJson.code === 'jwt_auth_bad_config') {
-          return NextResponse.json({ error: 'Config Error', message: 'JWT_AUTH_SECRET_KEY manquante dans wp-config.php' }, { status: 403 });
-        }
-        if (errorText.includes('<!DOCTYPE html>')) {
-          return NextResponse.json({ error: 'Firewall Block', message: 'Le WAF de WordPress bloque la requête. Désactivez Anti-Bot AI.' }, { status: 403 });
-        }
-      }
-
-      return NextResponse.json({ 
-        error: 'Session invalide', 
-        message: 'Échec de la validation de session WordPress.' 
-      }, { status: meRes.status });
-    }
-    
-    const meText = await meRes.text();
-    let wpUser: any;
-    try {
-      wpUser = JSON.parse(meText);
-    } catch (e) {
-      return NextResponse.json({ error: "Réponse WordPress invalide", details: "Le serveur a renvoyé du HTML au lieu de JSON" }, { status: 502 });
+    // 1. Identifier l'utilisateur via le JWT auth-svc (vérifié côté edge, pas d'appel réseau)
+    const user = await fetchWpUser(token);
+    if (!user) {
+      return NextResponse.json({
+        error: 'Session invalide',
+        message: 'Échec de la validation de session.',
+      }, { status: 401 });
     }
 
     // Sécurité : Seul un admin peut voir un autre profil que le sien
-    const roles = wpUser.roles || [];
-    const isAdmin = roles.includes('administrator');
-    
-    // Si on demande un ID spécifique mais qu'on n'est pas admin, on force notre propre ID
-    const targetCustomerId = (isAdmin && queryId) ? queryId : wpUser.id;
+    const targetCustomerId = (isAdmin(user) && queryId) ? queryId : String(user.sub);
 
-    // Correction du 404 : Si l'ID est invalide, on ne lance pas la requête
     if (!targetCustomerId || targetCustomerId === '0') {
-       return NextResponse.json({ 
-         error: 'Invalid ID', 
-         message: "L'identifiant utilisateur est introuvable ou invalide." 
-       }, { status: 400 });
+      return NextResponse.json({
+        error: 'Invalid ID',
+        message: "L'identifiant utilisateur est introuvable ou invalide.",
+      }, { status: 400 });
     }
 
-    if (!WOO_KEY || !WOO_SECRET) {
-      return NextResponse.json({ message: "Clés API WooCommerce manquantes dans le fichier .env" }, { status: 500 });
-    }
-
-    // Récupération avec les headers complets (identique aux produits qui marchent)
-    const fetchOptions = {
-      headers: {
-        'User-Agent': 'MIAD-Headless-Client',
-        'X-Headless-Secret': INTERNAL_SECRET,
-        'Accept': 'application/json',
-      }
-    };
-
+    // 2. Profil + commandes en parallèle (auth-svc / order-svc)
     const [customerRes, ordersRes] = await Promise.all([
-      fetch(`${WOO_URL}/wp-json/wc/v3/customers/${targetCustomerId}?consumer_key=${WOO_KEY}&consumer_secret=${WOO_SECRET}`, fetchOptions),
-      fetch(`${WOO_URL}/wp-json/wc/v3/orders?customer=${targetCustomerId}&per_page=20&consumer_key=${WOO_KEY}&consumer_secret=${WOO_SECRET}`, fetchOptions)
+      fetch(`${AUTH_SVC_URL}/customer/${targetCustomerId}`, { cache: 'no-store' }),
+      fetch(`${ORDER_SVC_URL}/orders?customer_id=${targetCustomerId}&page_size=20`, { cache: 'no-store' }),
     ]);
 
     if (!customerRes.ok) {
-      const errText = await customerRes.text().catch(() => "Aucun corps de réponse");
-      return NextResponse.json({ 
-        error: 'WooCommerce Block', 
-        message: "Le serveur MIAD a renvoyé une erreur ou un blocage.",
-        debug_status: customerRes.status 
+      return NextResponse.json({
+        error: 'Customer not found',
+        message: "Le compte client est introuvable.",
+        debug_status: customerRes.status,
       }, { status: customerRes.status });
     }
 
-    // Lecture sécurisée du JSON pour éviter "Unexpected token <"
-    const customerText = await customerRes.text();
-    let c: any;
-    try {
-      c = JSON.parse(customerText);
-    } catch (e) {
-      return NextResponse.json({ error: 'Parse Error', message: "Le serveur a renvoyé du HTML au lieu de JSON" }, { status: 502 });
+    const c = await customerRes.json().catch(() => null);
+    if (!c) {
+      return NextResponse.json({ error: 'Parse Error', message: "Réponse auth-svc invalide" }, { status: 502 });
     }
 
-    const ordersText = await ordersRes.text();
-    let orders: any[] = [];
+    let ordersData: any = null;
     try {
-      orders = JSON.parse(ordersText);
-    } catch (e) {
-      orders = [];
+      ordersData = await ordersRes.json();
+    } catch {
+      ordersData = null;
     }
+    const ordersArray: any[] = Array.isArray(ordersData?.items) ? ordersData.items : [];
 
     // Calcul des statistiques pour les badges du Dashboard (AliExpress Style)
-    const ordersArray = Array.isArray(orders) ? orders : [];
+    // order-svc utilise des statuts différents de l'ancien WooCommerce
+    // (pending_payment/paid/processing/shipped/delivered/cancelled/refunded/
+    // payment_expired au lieu de pending/on-hold/processing/completed) — voir
+    // validOrderStatuses dans services/order-svc/main.go.
     const orderStats = {
-      toPay: ordersArray.filter((o: any) => o.status === 'pending' || o.status === 'on-hold').length,
-      toShip: ordersArray.filter((o: any) => o.status === 'processing').length,
-      shipped: ordersArray.filter((o: any) => o.status === 'completed' && o.date_completed).length, // Ou un statut spécifique à ton transporteur
-      completed: ordersArray.filter((o: any) => o.status === 'completed').length,
-      totalOrders: ordersArray.length
+      toPay: ordersArray.filter((o) => o.status === 'pending_payment' || o.status === 'payment_expired').length,
+      toShip: ordersArray.filter((o) => o.status === 'paid' || o.status === 'processing').length,
+      shipped: ordersArray.filter((o) => o.status === 'shipped').length,
+      completed: ordersArray.filter((o) => o.status === 'delivered').length,
+      totalOrders: ordersArray.length,
     };
 
     const formatCustomer = (c: any) => ({
       id: c.id,
-      // On utilise la structure exacte de ton JSON (Company ABM)
-      firstName: c.first_name,
-      lastName: c.last_name,
-      name: `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.username || "Membre MIAD",
+      firstName: (c.full_name || '').split(' ')[0] || '',
+      lastName: (c.full_name || '').split(' ').slice(1).join(' ') || '',
+      name: c.full_name || c.email || 'Membre MIAD',
       email: c.email,
-      role: c.role,
-      username: c.username,
-      // On récupère les stats de commandes calculées
+      role: isAdmin(user) ? 'administrator' : 'customer',
+      username: c.email,
       ordersCount: orderStats.totalOrders,
-      totalSpent: c.total_spent || "0",
-      isPayingCustomer: c.is_paying_customer,
-      // Utilisation de l'avatar Gravatar renvoyé par WooCommerce
-      avatar: c.avatar_url || `https://www.gravatar.com/avatar/${Buffer.from(c.email.toLowerCase()).toString('hex')}?s=96&d=mm`,
-      dateCreated: c.date_created,
-      billing: c.billing || {},
-      shipping: c.shipping || {},
-      phone: c.billing?.phone || '',
-      orderStats, 
-      recentOrders: ordersArray.slice(0, 5) 
+      totalSpent: '0', // order-svc n'expose pas encore de total dépensé agrégé côté customer
+      isPayingCustomer: orderStats.totalOrders > 0,
+      avatar: `https://www.gravatar.com/avatar/${Buffer.from((c.email || '').toLowerCase()).toString('hex')}?s=96&d=mm`,
+      dateCreated: c.created_at,
+      // auth-svc stocke `addresses` comme une LISTE d'adresses (JSONB array),
+      // pas des objets billing/shipping distincts comme sous WooCommerce —
+      // pas de mapping fiable vers billing/shipping ici (voir PATCH plus bas,
+      // qui n'a de toute façon aucun endpoint backend pour écrire dessus).
+      billing: {},
+      shipping: {},
+      addresses: c.addresses || [],
+      phone: c.phone || '',
+      orderStats,
+      recentOrders: ordersArray.slice(0, 5),
     });
+
     return NextResponse.json({ success: true, data: formatCustomer(c) });
 
   } catch (error: any) {
@@ -168,6 +107,15 @@ export async function GET(request: Request) {
 }
 
 // PATCH /api/customer — Update billing or shipping address
+//
+// GAP BACKEND CONNU : auth-svc n'expose aujourd'hui AUCUN endpoint pour
+// écrire une adresse sur un compte client (GET /customer/{id} existe,
+// rien en PUT/PATCH — voir services/auth-svc/main.go, table `customers`
+// avec une colonne `addresses` JSONB mais pas de route pour la modifier).
+// Plutôt que de simuler un succès silencieux (ce qui ferait croire à
+// l'utilisateur que son adresse est enregistrée alors qu'elle ne l'est
+// nulle part), cette route renvoie explicitement une erreur 501 tant que
+// l'endpoint n'existe pas côté auth-svc.
 export async function PATCH(request: Request) {
   try {
     const auth = request.headers.get('Authorization');
@@ -182,42 +130,10 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: 'Données manquantes' }, { status: 400 });
     }
 
-    // Get user ID from WordPress
-    const meRes = await fetch(`${WOO_URL}/wp-json/wp/v2/users/me?context=edit`, {
-      headers: { Authorization: auth, 'User-Agent': 'MIAD-Headless-Client', 'X-Headless-Secret': INTERNAL_SECRET },
-      cache: 'no-store',
-    });
-
-    if (!meRes.ok) {
-      return NextResponse.json({ error: 'Session invalide' }, { status: meRes.status });
-    }
-
-    const wpUser = await meRes.json();
-    const customerId = wpUser.id;
-
-    if (!WOO_KEY || !WOO_SECRET) {
-      return NextResponse.json({ error: 'Configuration manquante' }, { status: 500 });
-    }
-
-    const updateRes = await fetch(
-      `${WOO_URL}/wp-json/wc/v3/customers/${customerId}?consumer_key=${WOO_KEY}&consumer_secret=${WOO_SECRET}`,
-      {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'MIAD-Headless-Client',
-          'X-Headless-Secret': INTERNAL_SECRET,
-        },
-        body: JSON.stringify({ [type]: address }),
-      }
-    );
-
-    if (!updateRes.ok) {
-      const err = await updateRes.text().catch(() => '');
-      return NextResponse.json({ error: 'Erreur WooCommerce', detail: err }, { status: updateRes.status });
-    }
-
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      error: 'Not implemented',
+      message: "La mise à jour d'adresse client n'est pas encore supportée par le backend Go (auth-svc n'a pas d'endpoint d'écriture pour customers.addresses). Voir le rapport de migration.",
+    }, { status: 501 });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Erreur serveur' }, { status: 500 });
   }

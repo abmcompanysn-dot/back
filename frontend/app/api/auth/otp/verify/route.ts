@@ -1,20 +1,17 @@
 import { NextResponse } from 'next/server'
 import { rateLimit, getIp, tooManyRequests } from '@/lib/rate-limit'
+import { AUTH_SVC_URL, LOYALTY_SVC_URL, verifyJWT } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
-import { requireEnv } from '@/lib/require-env'
-const INTERNAL_SECRET = requireEnv('INTERNAL_API_SECRET')
-
-const REP_ROLES = ['miad_representative', 'miad_representant', 'representant', 'miad_rep', 'miad_agent', 'miad_super_rep']
-
-function normalizeRole(rawRole?: string): string {
-  if (!rawRole) return 'buyer'
-  if (rawRole === 'administrator') return 'admin'
-  if (['seller', 'vendor', 'wcfm_vendor'].includes(rawRole)) return 'vendor'
-  if (REP_ROLES.includes(rawRole)) return 'representant'
-  return 'buyer'
+async function isRepresentative(email: string | undefined): Promise<boolean> {
+  if (!email) return false
+  try {
+    const res = await fetch(`${LOYALTY_SVC_URL}/representative/by-email/${encodeURIComponent(email)}`)
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 export async function POST(request: Request) {
@@ -23,81 +20,68 @@ export async function POST(request: Request) {
   if (!rl.allowed) return tooManyRequests(rl.resetAt)
 
   try {
-    const { email, code, name, phone, account_type } = await request.json()
+    const { email, code, otp_ref, name, account_type } = await request.json()
     const cleaned = (code || '').replace(/\D/g, '')
 
     if (!email || cleaned.length !== 6) {
       return NextResponse.json({ error: 'Email et code à 6 chiffres requis.' }, { status: 400 })
     }
+    if (!otp_ref) {
+      return NextResponse.json({ error: 'Session de vérification expirée, redemandez un code.' }, { status: 400 })
+    }
 
-    // Inscription vendeur désactivée (demandé le 2026-07-13) : bloqué ici
-    // (pas seulement dans RegisterPage.tsx) pour qu'un appel direct à cette
-    // route avec account_type=vendor ne contourne pas le blocage côté UI.
+    // Inscription vendeur désactivée (demandé le 2026-07-13).
     if (account_type === 'vendor') {
       return NextResponse.json({ error: 'L\'inscription en tant que vendeur est temporairement fermée.' }, { status: 403 })
     }
 
-    // 1. Verify OTP code via WordPress (generates code + stores in WP transients)
-    const res = await fetch(`${WOO_URL}/wp-json/miad/v1/otp/verify`, {
+    const res = await fetch(`${AUTH_SVC_URL}/auth/otp/verify`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Headless-Secret': INTERNAL_SECRET,
-        'User-Agent': 'MIAD-Headless-Client',
-      },
-      body: JSON.stringify({ email, code: cleaned, name, phone, account_type }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ otp_ref, code: cleaned, full_name: name || '' }),
     })
 
-    const text = await res.text()
-    if (text.trim().startsWith('<')) {
-      return NextResponse.json({ error: 'Erreur serveur (WAF).' }, { status: 502 })
-    }
+    const data: any = await res.json().catch(() => ({}))
 
-    let data: any
-    try { data = JSON.parse(text) } catch {
-      return NextResponse.json({ error: 'Réponse serveur invalide.' }, { status: 502 })
-    }
-
-    if (!res.ok || !data.token) {
+    if (!res.ok || !data.session?.jwt) {
       return NextResponse.json(
-        { error: data.error || data.message || 'Code incorrect ou expiré.' },
-        { status: res.ok ? 400 : res.status }
+        { error: data?.error?.message || 'Code incorrect ou expiré.' },
+        { status: res.status || 400 }
       )
     }
 
-    // 2. If Firebase service account is configured, also return a Firebase custom token
-    //    so the client can call signInWithCustomToken() and get a proper Firebase session.
+    const claims = await verifyJWT(data.session.jwt)
+    const rep = await isRepresentative(email)
+    const role = rep ? 'representant' : (claims?.vendor_id ? 'vendor' : 'buyer')
+
+    // Si Firebase est configuré, on renvoie aussi un custom token pour que
+    // le client puisse basculer en session Firebase (signInWithCustomToken).
     if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
       try {
         const { createFirebaseCustomToken, uidFromEmail } = await import('@/lib/firebase-custom-token')
-        const uid         = await uidFromEmail(email)
-        const customToken = await createFirebaseCustomToken(uid, { email, wp_token: data.token })
+        const uid = await uidFromEmail(email)
+        const customToken = await createFirebaseCustomToken(uid, { email, miad_token: data.session.jwt })
         return NextResponse.json({
           success: true,
-          customToken,             // client uses signInWithCustomToken → ID token → /api/auth/login
-          token: data.token,       // fallback miad_ token (still valid for checkout)
-          user_display_name: data.user_display_name || name,
-          user_email: data.user_email || email,
-          user_nicename: data.user_nicename,
-          id: data.id,
-          role: normalizeRole(data.role),
-          avatar: data.avatar,
+          customToken,
+          token: data.session.jwt,
+          user_display_name: data.full_name || name,
+          user_email: data.identifier || email,
+          id: data.customer_id,
+          role,
         })
       } catch (e) {
-        console.warn('Custom token creation failed, returning miad_ token only:', e)
+        console.warn('Custom token creation failed, returning token only:', e)
       }
     }
 
-    // 3. Fallback: return miad_ token directly (checkout works via X-Miad-Session path)
     return NextResponse.json({
       success: true,
-      token: data.token,
-      user_display_name: data.user_display_name || name,
-      user_email: data.user_email || email,
-      user_nicename: data.user_nicename,
-      id: data.id,
-      role: normalizeRole(data.role),
-      avatar: data.avatar,
+      token: data.session.jwt,
+      user_display_name: data.full_name || name,
+      user_email: data.identifier || email,
+      id: data.customer_id,
+      role,
     })
 
   } catch (err) {

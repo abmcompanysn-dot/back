@@ -3,39 +3,38 @@ import { headers } from 'next/headers';
 
 export const runtime = 'edge';
 
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://www.miadmarket.com').replace(/\/$/, '');
-const WOO_KEY = process.env.WOO_CONSUMER_KEY;
-const WOO_SECRET = process.env.WOO_CONSUMER_SECRET;
-
+/**
+ * GAP BACKEND CONNU : cette route lisait auparavant une metadata WooCommerce
+ * par produit (`_miad_ship_price_{COUNTRY}` / `_miad_ship_price_`) pour un
+ * prix de livraison spécifique à ce produit. Aucun service Go n'expose
+ * l'équivalent aujourd'hui — catalog-svc n'a pas de champ de prix de
+ * livraison par produit (seulement `shipping_class`, une simple étiquette
+ * texte, voir services/catalog-svc/main.go), et aucun endpoint shipping-svc
+ * n'accepte de resoudre un prix par (product_id, country). shipping-svc
+ * calcule uniquement par zone pays (GET /shipping-rates/quote) ou par
+ * distance vendeur→acheteur pour le Sénégal (POST /shipping-domestic/calculate).
+ *
+ * Note : aucun appelant frontend actif n'a été trouvé pour /api/geo (grep
+ * sur app/ et components/ ne remonte aucun `fetch('/api/geo'`) — la
+ * détection pays reste migrée ci-dessous (c'est un simple lookup d'en-tête,
+ * pas une dépendance WooCommerce), mais shippingPrice renvoie désormais 0
+ * de façon permanente plutôt que de faire un appel WooCommerce mort. Si un
+ * futur besoin de prix de livraison par produit apparaît, il faudra ajouter
+ * ce champ à catalog-svc.
+ */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const productId = searchParams.get('productId');
-  
+
   const headersList = await headers();
   const countryCode = (headersList.get('x-vercel-ip-country') || headersList.get('cf-ipcountry') || 'SN').toUpperCase();
-  
-  let shippingPrice = 0;
 
-  // Si un ID produit est passé, on va chercher son prix de livraison spécifique dans ses métadonnées
-  if (productId && WOO_KEY && WOO_SECRET) {
-    try {
-      const res = await fetch(`${WOO_URL}/wp-json/wc/v3/products/${productId}?consumer_key=${WOO_KEY}&consumer_secret=${WOO_SECRET}`);
-      const product = await res.json();
-      
-      const countryKey = `_miad_ship_price_${countryCode}`;
-      const defaultKey = `_miad_ship_price_`; // Fallback par défaut
-      
-      const meta = product.meta_data?.find((m: any) => m.key === countryKey) || 
-                   product.meta_data?.find((m: any) => m.key === defaultKey);
-      
-      shippingPrice = meta ? parseFloat(meta.value) : 0;
-    } catch (e) {
-      console.error("Erreur récupération prix livraison produit", e);
-    }
+  if (productId) {
+    console.warn('[api/geo] shippingPrice par produit demandé mais aucun endpoint Go ne fournit cette donnée — renvoie 0.');
   }
 
-  return NextResponse.json({ 
+  return NextResponse.json({
     countryCode: countryCode.toLowerCase(),
-    shippingPrice
+    shippingPrice: 0,
   });
 }

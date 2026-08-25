@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
 import { PhotonImage, SamplingFilter, resize } from '@cf-wasm/photon/edge-light';
+import { ADMIN_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
-
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://www.miadmarket.com').replace(/\/$/, '');
-import { requireEnv } from '@/lib/require-env'
-const INTERNAL_SECRET = requireEnv('INTERNAL_API_SECRET')
 
 const MAX_DIMENSION = 1600;
 const JPEG_QUALITY = 80;
@@ -15,6 +12,13 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^\x00-\xFF]/g, '_');
 }
 
+// admin-svc (POST /media/upload, requireAdminOrVendor) attend un multipart
+// form-data avec un champ "file" (+ "prefix" optionnel parmi
+// products/vendors/categories, défaut "products") et renvoie { url }
+// (upload direct vers MinIO — pas d'id de média comme sous WordPress, la
+// médiathèque admin-svc s'appuie sur l'URL). L'authentification est un JWT
+// Bearer vérifié en interne par admin-svc (admin OU vendeur avec vendor_id
+// dans ses claims) — plus besoin du secret interne WordPress ici.
 export async function POST(req: Request) {
   try {
     const authHeader = req.headers.get('Authorization');
@@ -26,7 +30,7 @@ export async function POST(req: Request) {
 
     const originalBytes = new Uint8Array(await file.arrayBuffer());
 
-    // Redimensionne et compresse l'image avant l'envoi à WordPress pour accélérer le chargement des pages
+    // Redimensionne et compresse l'image avant l'envoi pour accélérer le chargement des pages
     let bytes: Uint8Array = originalBytes;
     let contentType = file.type;
     let filename = sanitizeFilename(file.name);
@@ -56,24 +60,23 @@ export async function POST(req: Request) {
       if (resized !== input) input.free();
     }
 
-    // Appel à l'API Media de WordPress
-    const wpRes = await fetch(`${WOO_URL}/wp-json/wp/v2/media`, {
+    const uploadForm = new FormData();
+    uploadForm.append('file', new Blob([bytes], { type: contentType }), filename);
+    const prefix = formData.get('prefix');
+    if (typeof prefix === 'string' && prefix) uploadForm.append('prefix', prefix);
+
+    const svcRes = await fetch(`${ADMIN_SVC_URL}/media/upload`, {
       method: 'POST',
-      headers: {
-        'Authorization': authHeader,
-        'X-Headless-Secret': INTERNAL_SECRET,
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Type': contentType
-      },
-      body: bytes
+      headers: { Authorization: authHeader },
+      body: uploadForm,
     });
 
-    const data = await wpRes.json();
-    if (!wpRes.ok) throw new Error(data.message || "Erreur WordPress Media");
+    const data = await svcRes.json().catch(() => ({}));
+    if (!svcRes.ok) throw new Error(data.message || data.error || "Erreur d'upload");
 
     return NextResponse.json({
-      id: data.id,
-      url: data.source_url,
+      id: data.id ?? 0,
+      url: data.url,
       success: true
     });
 

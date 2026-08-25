@@ -2,29 +2,35 @@ import { NextResponse } from 'next/server'
 
 export const runtime = 'edge';
 
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
-
-// Relais public — données agrégées non sensibles (IDs produits + compteurs).
+/**
+ * GAP BACKEND CONNU : "Achetés ensemble" (composant
+ * FrequentlyBoughtTogether.tsx) reposait sur un endpoint WordPress
+ * (wp-json/miad-analytics/v1/recommendations) qui recalculait quotidiennement
+ * de vraies co-occurrences de commandes. Aucun service Go n'expose cette
+ * donnée aujourd'hui :
+ *   - catalog-svc a bien GET /products/{id}/similar, mais il renvoie
+ *     explicitement 501 not_implemented_yet ("conserver l'appel existant du
+ *     frontend jusqu'au branchement de catalog-svc sur l'index Vectorize" —
+ *     voir services/catalog-svc/main.go) — donc pas encore un substitut
+ *     utilisable même pour de la similarité produit, encore moins pour des
+ *     co-achats réels basés sur order-svc.
+ *   - order-svc n'a aucune route d'agrégation de ce type (listOrders /
+ *     getOrder ne font que lister/lire une commande, pas de calcul de
+ *     co-occurrence entre produits).
+ *
+ * Pour ne pas fabriquer une fausse recommandation, cette route renvoie
+ * toujours une liste vide — le composant appelant reste silencieux dans ce
+ * cas (voir FrequentlyBoughtTogether.tsx : `if (loading || products.length
+ * === 0) return null`), donc aucune régression visuelle, juste la
+ * fonctionnalité elle-même absente tant que ce endpoint n'existe pas côté Go.
+ */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const productId = searchParams.get('product_id')
-  const limit = searchParams.get('limit') || '8'
 
   if (!productId || !/^\d+$/.test(productId)) {
     return NextResponse.json({ recommendations: [] })
   }
 
-  try {
-    const res = await fetch(
-      `${WOO_URL}/wp-json/miad-analytics/v1/recommendations?product_id=${productId}&limit=${encodeURIComponent(limit)}`,
-      { headers: { 'User-Agent': 'MIAD-Headless-Client', Accept: 'application/json' }, next: { revalidate: 3600 } }
-    )
-    if (!res.ok) return NextResponse.json({ recommendations: [] })
-    const data = await res.json()
-    return NextResponse.json({ recommendations: data.recommendations || [] }, {
-      headers: { 'Cache-Control': 'public, s-maxage=3600' },
-    })
-  } catch {
-    return NextResponse.json({ recommendations: [] })
-  }
+  return NextResponse.json({ recommendations: [] })
 }

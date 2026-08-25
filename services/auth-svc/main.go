@@ -117,6 +117,7 @@ func main() {
 		mux.HandleFunc("POST /auth/otp/send", s.sendOTP)
 		mux.HandleFunc("POST /auth/otp/verify", s.verifyOTP)
 		mux.HandleFunc("POST /auth/register", s.registerCustomer)
+		mux.HandleFunc("POST /auth/reset-password", s.resetPassword)
 		mux.HandleFunc("POST /auth/login", s.loginCustomer)
 		mux.HandleFunc("POST /auth/admin/login", s.adminLogin)
 		mux.HandleFunc("POST /auth/admin/firebase", s.firebaseAdminLogin)
@@ -561,8 +562,9 @@ func (s *server) sendOTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		OtpRef string `json:"otp_ref"`
-		Code   string `json:"code"`
+		OtpRef   string `json:"otp_ref"`
+		Code     string `json:"code"`
+		FullName string `json:"full_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
@@ -593,7 +595,7 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	err = s.db.QueryRow(r.Context(), "SELECT id FROM customers WHERE "+col+" = $1", identifier).Scan(&id)
 	if err == pgx.ErrNoRows {
 		if err := s.db.QueryRow(r.Context(),
-			"INSERT INTO customers ("+col+") VALUES ($1) RETURNING id", identifier).Scan(&id); err != nil {
+			"INSERT INTO customers ("+col+", full_name) VALUES ($1,$2) RETURNING id", identifier, body.FullName).Scan(&id); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -616,6 +618,8 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 		"session":         map[string]string{"jwt": jwt, "expires_at": expires},
 		"is_new_customer": isNew,
 		"customer_id":     id,
+		"identifier":      identifier,
+		"full_name":       body.FullName,
 	})
 }
 
@@ -708,6 +712,45 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 		"session":     map[string]string{"jwt": jwt, "expires_at": expires},
 		"customer_id": id,
 	})
+}
+
+// resetPassword — applique un nouveau mot de passe par email, SANS
+// re-vérifier l'identité côté Go : protégé par un secret interne partagé
+// avec le frontend (INTERNAL_API_SECRET), qui n'appelle cette route
+// qu'après avoir déjà validé la preuve de possession de l'email via
+// Firebase (confirmation d'un oobCode envoyé par mail). Jamais exposé
+// directement au navigateur.
+func (s *server) resetPassword(w http.ResponseWriter, r *http.Request) {
+	secret := kit.Env("INTERNAL_API_SECRET", "")
+	if secret == "" || r.Header.Get("X-Internal-Secret") != secret {
+		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
+		return
+	}
+	var body struct {
+		Email       string `json:"email"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Email == "" || len(body.NewPassword) < 8 {
+		kit.Fail(w, 400, "missing_fields", "email et un mot de passe d'au moins 8 caractères sont obligatoires")
+		return
+	}
+	salt := randomToken(12)
+	tag, err := s.db.Exec(r.Context(),
+		"UPDATE customers SET password_hash = $1, salt = $2 WHERE lower(email) = lower($3)",
+		hashPassword(salt, body.NewPassword), salt, body.Email)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "customer_not_found", "aucun compte avec cet email")
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"success": true})
 }
 
 /* ---------- Clients ---------- */

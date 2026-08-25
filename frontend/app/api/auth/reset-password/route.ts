@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
+import { requireEnv } from '@/lib/require-env'
+import { AUTH_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
 const FIREBASE_API_KEY = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '');
-const WOO_CK  = process.env.WOO_CONSUMER_KEY  || '';
-const WOO_CS  = process.env.WOO_CONSUMER_SECRET || '';
+const INTERNAL_SECRET = requireEnv('INTERNAL_API_SECRET')
 
 // Messages Firebase traduits en français
 const FIREBASE_ERROR_TRANSLATIONS: Record<string, string> = {
@@ -14,6 +14,10 @@ const FIREBASE_ERROR_TRANSLATIONS: Record<string, string> = {
   'USER_DISABLED':    'Ce compte est désactivé.',
 };
 
+// Firebase reste la preuve de possession de l'email (oobCode envoyé par
+// mail) ; le nouveau mot de passe est ensuite appliqué côté auth-svc
+// (backend Go, seul propriétaire réel de password_hash) via une route
+// protégée par secret interne, jamais exposée directement au navigateur.
 export async function POST(request: Request) {
   try {
     const { oobCode, newPassword } = await request.json();
@@ -22,7 +26,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Données manquantes' }, { status: 400 });
     }
 
-    // 1. Firebase : confirme le reset et retourne l'email du compte
     const fbRes = await fetch(
       `https://identitytoolkit.googleapis.com/v1/accounts:resetPassword?key=${FIREBASE_API_KEY}`,
       {
@@ -44,32 +47,18 @@ export async function POST(request: Request) {
 
     const userEmail: string = fbData.email || '';
 
-    // 2. WooCommerce : synchronise le nouveau mot de passe
-    if (userEmail && WOO_CK && WOO_CS) {
+    if (userEmail) {
       try {
-        const auth = Buffer.from(`${WOO_CK}:${WOO_CS}`).toString('base64');
-
-        // Trouver le customer WooCommerce par email
-        const searchRes = await fetch(
-          `${WOO_URL}/wp-json/wc/v3/customers?email=${encodeURIComponent(userEmail)}`,
-          { headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' } }
-        );
-        const customers = await searchRes.json();
-
-        if (Array.isArray(customers) && customers.length > 0) {
-          const customerId: number = customers[0].id;
-          await fetch(
-            `${WOO_URL}/wp-json/wc/v3/customers/${customerId}`,
-            {
-              method: 'PUT',
-              headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ password: newPassword }),
-            }
-          );
-        }
+        await fetch(`${AUTH_SVC_URL}/auth/reset-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': INTERNAL_SECRET },
+          body: JSON.stringify({ email: userEmail, new_password: newPassword }),
+        })
       } catch {
-        // La mise à jour WooCommerce a échoué — on continue quand même
-        console.error('[reset-password] WooCommerce sync failed for', userEmail);
+        // Le compte MIAD peut ne pas exister encore (utilisateur Firebase
+        // pur, jamais passé par auth-svc) — on ne bloque pas le reset
+        // Firebase lui-même pour autant.
+        console.error('[reset-password] synchronisation auth-svc échouée pour', userEmail);
       }
     }
 

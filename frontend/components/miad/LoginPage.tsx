@@ -21,6 +21,7 @@ export function LoginPage({ onBack, onLoginSuccess }: LoginPageProps) {
 
   const [email,     setEmail]     = useState('')
   const [otp,       setOtp]       = useState('')
+  const [otpRef,    setOtpRef]    = useState('')
   const [step,      setStep]      = useState<Step>('email')
   const [isLoading, setIsLoading] = useState(false)
   const [error,     setError]     = useState<string | null>(null)
@@ -43,7 +44,7 @@ export function LoginPage({ onBack, onLoginSuccess }: LoginPageProps) {
         body: JSON.stringify({ email }),
       })
       const data = await res.json()
-      if (res.ok) { setStep('otp'); startResendTimer() }
+      if (res.ok) { setOtpRef(data.otp_ref || ''); setStep('otp'); startResendTimer() }
       else setError(data.error || data.message || 'Impossible d\'envoyer le code.')
     } catch { setError('Erreur réseau. Vérifiez votre connexion.') }
     finally { setIsLoading(false) }
@@ -58,7 +59,7 @@ export function LoginPage({ onBack, onLoginSuccess }: LoginPageProps) {
       const res = await fetch('/api/auth/otp/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code: otp }),
+        body: JSON.stringify({ email, code: otp, otp_ref: otpRef }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error || 'Code incorrect.'); setOtp(''); return }

@@ -39,6 +39,7 @@ export function RegisterPage({ onBack, onLoginSuccess }: RegisterPageProps) {
   const [name,        setName]        = useState('')
   const [phone,       setPhone]       = useState('')
   const [otp,         setOtp]         = useState('')
+  const [otpRef,      setOtpRef]      = useState('')
   const [resendIn,    setResendIn]    = useState(0)
 
   const handleBack = () => onBack ? onBack() : router.back()
@@ -62,7 +63,7 @@ export function RegisterPage({ onBack, onLoginSuccess }: RegisterPageProps) {
         body: JSON.stringify({ email }),
       })
       const data = await res.json()
-      if (res.ok) { setStep('otp'); startResendTimer() }
+      if (res.ok) { setOtpRef(data.otp_ref || ''); setStep('otp'); startResendTimer() }
       else setError(data.error || data.message || 'Impossible d\'envoyer le code.')
     } catch { setError('Erreur réseau. Vérifiez votre connexion.') }
     finally { setIsLoading(false) }
@@ -75,7 +76,7 @@ export function RegisterPage({ onBack, onLoginSuccess }: RegisterPageProps) {
       const res  = await fetch('/api/auth/otp/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code: otp, name: name.trim(), phone: phone.trim(), account_type: accountType }),
+        body: JSON.stringify({ email, code: otp, otp_ref: otpRef, name: name.trim(), phone: phone.trim(), account_type: accountType }),
       })
       const data = await res.json()
       if (res.ok && data.token) {

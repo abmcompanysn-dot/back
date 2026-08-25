@@ -148,6 +148,16 @@ func main() {
 		mux.HandleFunc("PUT /admin/api/orders/{id}/status", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPut, s.orderURL+"/orders/"+r.PathValue("id")+"/status")
 		}))
+		mux.HandleFunc("GET /admin/api/orders/{id}/events", s.requireAdminOrRep(s.proxyPath(func(id string) string {
+			return s.orderURL + "/orders/" + id + "/events"
+		})))
+		mux.HandleFunc("POST /admin/api/orders/{id}/cancel", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.orderURL+"/orders/"+r.PathValue("id")+"/cancel")
+		}))
+		mux.HandleFunc("GET /admin/api/returns", s.requireAdmin(s.proxy(func() string { return s.orderURL + "/returns" })))
+		mux.HandleFunc("PATCH /admin/api/returns/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.orderURL+"/returns/"+r.PathValue("id"))
+		}))
 		mux.HandleFunc("GET /admin/api/products", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/products?admin=true" })))
 		mux.HandleFunc("GET /admin/api/products/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
 			return s.catalogURL + "/products/" + id
