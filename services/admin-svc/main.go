@@ -84,7 +84,34 @@ type server struct {
 	fulfillmentURL  string
 	loyaltyURL      string
 	media           *kit.Media
+
+	settings *kit.SettingsStore
+	// jwtSecretStr : voir jwtSec ci-dessus — ATTENTION partagé avec
+	// auth-svc, même remarque de synchronisation manuelle. Les 5 champs
+	// MinIO/média ci-dessous sont éditables mais NÉCESSITENT UN
+	// REDÉMARRAGE : kit.NewMedia() construit un client déjà connecté au
+	// démarrage (comme le client FCM de notification-svc), pas relu à
+	// chaque requête.
+	jwtSecretStr    string
+	minioEndpoint   string
+	minioRootUser   string
+	minioRootPass   string
+	minioBucket     string
+	mediaBaseURLStr string
 }
+
+func (s *server) settingsFields() []kit.SettingsField {
+	return []kit.SettingsField{
+		{Key: "jwt_secret", Ptr: &s.jwtSecretStr, Secret: true, Description: "Clé de signature des JWT — ATTENTION : partagée avec auth-svc (même variable), les deux doivent rester identiques manuellement"},
+		{Key: "minio_endpoint", Ptr: &s.minioEndpoint, Description: "Endpoint du serveur MinIO/S3 (stockage média) — un redémarrage du service est nécessaire après modification"},
+		{Key: "minio_root_user", Ptr: &s.minioRootUser, Secret: true, Description: "Identifiant utilisateur root MinIO — un redémarrage du service est nécessaire après modification"},
+		{Key: "minio_root_password", Ptr: &s.minioRootPass, Secret: true, Description: "Mot de passe root MinIO — un redémarrage du service est nécessaire après modification"},
+		{Key: "minio_bucket", Ptr: &s.minioBucket, Description: "Nom du bucket S3/MinIO utilisé pour stocker les médias — un redémarrage du service est nécessaire après modification"},
+		{Key: "media_base_url", Ptr: &s.mediaBaseURLStr, Description: "URL publique de base servie pour les médias uploadés (CDN devant MinIO) — un redémarrage du service est nécessaire après modification"},
+	}
+}
+
+const settingsTable = "admin_settings"
 
 func main() {
 	ctx := context.Background()
@@ -95,14 +122,13 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration du schéma impossible", "err", err)
 		return
 	}
 
 	s := &server{
 		db:              db,
-		jwtSec:          []byte(kit.Env("JWT_SECRET", "change-me")),
 		catalogURL:      kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
 		vendorURL:       kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 		orderURL:        kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
@@ -113,15 +139,21 @@ func main() {
 		emailURL:        kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
 		fulfillmentURL:  kit.Env("FULFILLMENT_SVC_URL", "http://fulfillment-svc:8090"),
 		loyaltyURL:      kit.Env("LOYALTY_SVC_URL", "http://loyalty-svc:8091"),
-	}
 
-	media, err := kit.NewMedia(
-		kit.Env("MINIO_ENDPOINT", "minio:9000"),
-		kit.Env("MINIO_ROOT_USER", ""),
-		kit.Env("MINIO_ROOT_PASSWORD", ""),
-		kit.Env("MINIO_BUCKET", "miad-media"),
-		kit.Env("MEDIA_BASE_URL", "https://img.miadmarket.ca"),
-	)
+		jwtSecretStr:    kit.Env("JWT_SECRET", "change-me"),
+		minioEndpoint:   kit.Env("MINIO_ENDPOINT", "minio:9000"),
+		minioRootUser:   kit.Env("MINIO_ROOT_USER", ""),
+		minioRootPass:   kit.Env("MINIO_ROOT_PASSWORD", ""),
+		minioBucket:     kit.Env("MINIO_BUCKET", "miad-media"),
+		mediaBaseURLStr: kit.Env("MEDIA_BASE_URL", "https://img.miadmarket.ca"),
+	}
+	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
+	if err := s.settings.Load(ctx); err != nil {
+		log.Error("chargement admin_settings impossible", "err", err)
+	}
+	s.jwtSec = []byte(s.jwtSecretStr)
+
+	media, err := kit.NewMedia(s.minioEndpoint, s.minioRootUser, s.minioRootPass, s.minioBucket, s.mediaBaseURLStr)
 	if err != nil {
 		log.Error("client minio indisponible — upload d'images désactivé", "err", err)
 	}
@@ -135,6 +167,15 @@ func main() {
 	}
 
 	kit.Run("admin-svc", kit.Env("PORT_ADMIN", "8088"), log, health, func(mux *http.ServeMux) {
+		// Configuration Système (page admin) : ses propres réglages, plus
+		// un proxy vers /settings de chaque autre service qui en a
+		// (payment-svc, order-svc, auth-svc, notification-svc, email-svc).
+		// fulfillment-svc a déjà sa propre page dédiée "Configuration DHL"
+		// (voir /admin/api/dhl/settings), pas dupliqué ici.
+		mux.HandleFunc("GET /admin/api/settings", s.requireAdmin(s.getLocalSettings))
+		mux.HandleFunc("PUT /admin/api/settings", s.requireAdmin(s.putLocalSettings))
+		mux.HandleFunc("GET /admin/api/settings/{service}", s.requireAdmin(s.proxySettingsGet))
+		mux.HandleFunc("PUT /admin/api/settings/{service}", s.requireAdmin(s.proxySettingsPut))
 		mux.HandleFunc("GET /admin/api/overview", s.requireAdmin(s.overview))
 		mux.HandleFunc("GET /admin/api/orders", s.requireAdmin(s.proxy(func() string { return s.orderURL + "/orders" })))
 		mux.HandleFunc("GET /admin/api/orders/{id}", s.requireAdminOrRep(s.proxyPath(func(id string) string {
@@ -630,6 +671,72 @@ func (s *server) systemCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------- proxies génériques ----------
+
+// getLocalSettings/putLocalSettings — Configuration Système, réglages
+// propres à admin-svc lui-même (JWT_SECRET, MinIO/média).
+func (s *server) getLocalSettings(w http.ResponseWriter, r *http.Request) {
+	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+func (s *server) putLocalSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	toSave := map[string]string{}
+	for k, v := range body {
+		if !s.settings.IsKnown(k) {
+			continue
+		}
+		if s.settings.IsSecret(k) && v == "" {
+			continue
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.settings.Save(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	s.jwtSec = []byte(s.jwtSecretStr)
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave)})
+}
+
+// settingsServiceURLs — services distants qui exposent GET/PUT /settings
+// (voir leur propre settingsFields()) — la page Configuration Système
+// agrège tout, ce service ne connaît pas leurs clés, seulement où les
+// relayer.
+func (s *server) settingsServiceURLs() map[string]string {
+	return map[string]string{
+		"payment":      s.paymentURL,
+		"order":        s.orderURL,
+		"auth":         s.authURL,
+		"notification": s.notificationURL,
+		"email":        s.emailURL,
+	}
+}
+
+func (s *server) proxySettingsGet(w http.ResponseWriter, r *http.Request) {
+	url, ok := s.settingsServiceURLs()[r.PathValue("service")]
+	if !ok {
+		kit.Fail(w, 404, "unknown_service", fmt.Sprintf("service %q inconnu ou sans réglages exposés", r.PathValue("service")))
+		return
+	}
+	forward(w, r, url+"/settings")
+}
+
+func (s *server) proxySettingsPut(w http.ResponseWriter, r *http.Request) {
+	url, ok := s.settingsServiceURLs()[r.PathValue("service")]
+	if !ok {
+		kit.Fail(w, 404, "unknown_service", fmt.Sprintf("service %q inconnu ou sans réglages exposés", r.PathValue("service")))
+		return
+	}
+	forwardWithBody(w, r, http.MethodPut, url+"/settings")
+}
 
 func (s *server) proxy(target func() string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

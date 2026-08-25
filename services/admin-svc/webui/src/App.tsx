@@ -10,6 +10,7 @@ import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
 import { Security } from './pages/Security'
 import { System } from './pages/System'
+import { Configuration } from './pages/Configuration'
 import { AllProducts } from './pages/catalog/AllProducts'
 import { ProductForm } from './pages/catalog/ProductForm'
 import { Brands } from './pages/catalog/Brands'
@@ -90,6 +91,7 @@ function AppRoutes() {
         <Route path="email-templates" element={<EmailTemplates />} />
         <Route path="security" element={<Security />} />
         <Route path="system" element={<System />} />
+        <Route path="configuration" element={<Configuration />} />
       </Route>
       <Route path="*" element={<Navigate to="/admin/" replace />} />
     </Routes>

@@ -79,6 +79,53 @@ type server struct {
 	jwtSec []byte
 	otpTTL time.Duration
 	jwtTTL time.Duration
+
+	settings *kit.SettingsStore
+	// otpTTLMinutes/jwtTTLHours dupliquent otpTTL/jwtTTL (déjà convertis en
+	// time.Duration) car SettingsStore travaille en string — recalculés
+	// après chaque Load/Save (voir refreshDurations). jwtSecretStr : même
+	// remarque pour jwtSec ([]byte) — JWT_SECRET est éditable ici mais
+	// PARTAGÉ avec admin-svc (même variable), le changer désynchronise les
+	// JWT déjà émis tant qu'admin-svc n'a pas la même valeur (pas de
+	// mécanisme de coordination automatique entre les deux services).
+	otpTTLMinutes        string
+	jwtTTLHours          string
+	jwtSecretStr         string
+	redisPassword        string
+	adminEmail           string
+	firebaseWebClientID  string
+	firebaseAPIKey       string
+	smsProviderURL       string
+	internalAPISecretStr string
+}
+
+func (s *server) settingsFields() []kit.SettingsField {
+	return []kit.SettingsField{
+		{Key: "otp_ttl_minutes", Ptr: &s.otpTTLMinutes, Description: "Durée de validité (minutes) d'un code OTP envoyé par SMS/email"},
+		{Key: "jwt_ttl_hours", Ptr: &s.jwtTTLHours, Description: "Durée de validité (heures) des tokens JWT émis"},
+		{Key: "jwt_secret", Ptr: &s.jwtSecretStr, Secret: true, Description: "Clé de signature des JWT — ATTENTION : partagée avec admin-svc (même variable), les deux doivent rester identiques manuellement"},
+		{Key: "redis_password", Ptr: &s.redisPassword, Secret: true, Description: "Mot de passe de connexion Redis (session store OTP) — nécessite un redémarrage du service pour être pris en compte (connexion établie au démarrage)"},
+		{Key: "admin_email", Ptr: &s.adminEmail, Description: "Email du compte admin bootstrap — INFORMATIF SEUL : n'a d'effet qu'au tout premier démarrage (table admins vide), le modifier après coup ne change rien"},
+		{Key: "firebase_web_client_id", Ptr: &s.firebaseWebClientID, Description: "Project ID Firebase attendu dans les tokens de connexion sociale (vérifié en plus de la signature)"},
+		{Key: "firebase_api_key", Ptr: &s.firebaseAPIKey, Secret: true, Description: "Clé API Web Firebase — nécessaire pour valider les id_token Firebase via Identity Toolkit (accounts:lookup). Même valeur que NEXT_PUBLIC_FIREBASE_API_KEY côté frontend."},
+		{Key: "sms_provider_url", Ptr: &s.smsProviderURL, Description: "URL du fournisseur SMS pour l'envoi d'OTP — vide = mode dev (OTP journalisé, jamais envoyé)"},
+		{Key: "internal_api_secret", Ptr: &s.internalAPISecretStr, Secret: true, Description: "Secret partagé avec le frontend Next.js pour les routes internes sensibles — ATTENTION : doit rester identique côté Cloudflare Pages"},
+	}
+}
+
+const settingsTable = "auth_settings"
+
+// refreshDurations — recalcule otpTTL/jwtTTL/jwtSec depuis leurs
+// équivalents string (settings) : à appeler après Load et après chaque
+// Save qui touche l'un de ces 3 champs.
+func (s *server) refreshDurations() {
+	if mins, err := strconv.Atoi(s.otpTTLMinutes); err == nil {
+		s.otpTTL = time.Duration(mins) * time.Minute
+	}
+	if h, err := strconv.Atoi(s.jwtTTLHours); err == nil {
+		s.jwtTTL = time.Duration(h) * time.Hour
+	}
+	s.jwtSec = []byte(s.jwtSecretStr)
 }
 
 func main() {
@@ -90,22 +137,32 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration impossible", "err", err)
 		return
 	}
 
-	otpMin, _ := strconv.Atoi(kit.Env("OTP_TTL_MINUTES", "5"))
-	jwtH, _ := strconv.Atoi(kit.Env("JWT_TTL_HOURS", "72"))
-
+	redisPassword := kit.Env("REDIS_PASSWORD", "")
 	s := &server{
-		db:     db,
-		redis:  kit.NewRedis(kit.Env("REDIS_ADDR", "redis:6379"), kit.Env("REDIS_PASSWORD", "")),
-		kafka:  kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		jwtSec: []byte(kit.Env("JWT_SECRET", "change-me")),
-		otpTTL: time.Duration(otpMin) * time.Minute,
-		jwtTTL: time.Duration(jwtH) * time.Hour,
+		db:    db,
+		redis: kit.NewRedis(kit.Env("REDIS_ADDR", "redis:6379"), redisPassword),
+		kafka: kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+
+		otpTTLMinutes:        kit.Env("OTP_TTL_MINUTES", "5"),
+		jwtTTLHours:          kit.Env("JWT_TTL_HOURS", "72"),
+		jwtSecretStr:         kit.Env("JWT_SECRET", "change-me"),
+		redisPassword:        redisPassword,
+		adminEmail:           kit.Env("ADMIN_EMAIL", ""),
+		firebaseWebClientID:  kit.Env("FIREBASE_WEB_CLIENT_ID", ""),
+		firebaseAPIKey:       kit.Env("FIREBASE_API_KEY", ""),
+		smsProviderURL:       kit.Env("SMS_PROVIDER_URL", ""),
+		internalAPISecretStr: kit.Env("INTERNAL_API_SECRET", ""),
 	}
+	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
+	if err := s.settings.Load(ctx); err != nil {
+		log.Error("chargement auth_settings impossible", "err", err)
+	}
+	s.refreshDurations()
 	s.seedAdmin(ctx, log)
 
 	health := kit.NewHealth()
@@ -119,6 +176,8 @@ func main() {
 	})
 
 	kit.Run("auth-svc", kit.Env("PORT_AUTH", "8086"), log, health, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /settings", s.getSettings)
+		mux.HandleFunc("PUT /settings", s.putSettings)
 		mux.HandleFunc("POST /auth/otp/send", s.sendOTP)
 		mux.HandleFunc("POST /auth/otp/verify", s.verifyOTP)
 		mux.HandleFunc("POST /auth/register", s.registerCustomer)
@@ -138,13 +197,49 @@ func main() {
 	})
 }
 
+// getSettings/putSettings — Configuration Système (page admin). Après un
+// Save qui touche otp_ttl_minutes/jwt_ttl_hours/jwt_secret, recalcule
+// immédiatement otpTTL/jwtTTL/jwtSec (sinon la valeur en base serait
+// stockée mais jamais réellement utilisée avant un redémarrage).
+func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
+	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	toSave := map[string]string{}
+	for k, v := range body {
+		if !s.settings.IsKnown(k) {
+			continue
+		}
+		if s.settings.IsSecret(k) && v == "" {
+			continue
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.settings.Save(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	s.refreshDurations()
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave)})
+}
+
 /* ---------- Admin : seed + login ---------- */
 
 func (s *server) seedAdmin(ctx context.Context, log interface {
 	Info(string, ...any)
 	Warn(string, ...any)
 }) {
-	email := kit.Env("ADMIN_EMAIL", "")
+	email := s.adminEmail
 	pwd := kit.Env("ADMIN_PASSWORD", "")
 	if email == "" || pwd == "" {
 		log.Warn("ADMIN_EMAIL / ADMIN_PASSWORD absents : aucun admin seedé. " +
@@ -252,7 +347,7 @@ func (s *server) firebaseAdminLogin(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 400, "invalid_body", "id_token Firebase obligatoire")
 		return
 	}
-	info, err := verifyFirebaseToken(r.Context(), body.IDToken, kit.Env("FIREBASE_WEB_CLIENT_ID", ""))
+	info, err := verifyFirebaseToken(r.Context(), body.IDToken, s.firebaseWebClientID)
 	if err != nil {
 		kit.Fail(w, 401, "firebase_rejected", err.Error())
 		return
@@ -295,7 +390,7 @@ func (s *server) firebaseCustomerLogin(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 400, "invalid_body", "id_token Firebase obligatoire")
 		return
 	}
-	info, err := verifyFirebaseToken(r.Context(), body.IDToken, kit.Env("FIREBASE_WEB_CLIENT_ID", ""))
+	info, err := verifyFirebaseToken(r.Context(), body.IDToken, s.firebaseWebClientID)
 	if err != nil {
 		kit.Fail(w, 401, "firebase_rejected", err.Error())
 		return
@@ -557,13 +652,13 @@ func (s *server) sendOTP(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 503, "session_store_down", "Redis indisponible : OTP impossible — erreur explicite")
 		return
 	}
-	if kit.Env("SMS_PROVIDER_URL", "") == "" {
+	if s.smsProviderURL == "" {
 		fmt.Printf("[auth-svc][DEV] OTP %s pour %s (ref %s)\n", code, body.Identifier, ref)
 	}
 	kit.JSON(w, 200, map[string]any{
 		"otp_ref":     ref,
 		"ttl_minutes": int(s.otpTTL.Minutes()),
-		"dev_mode":    kit.Env("SMS_PROVIDER_URL", "") == "",
+		"dev_mode":    s.smsProviderURL == "",
 	})
 }
 
@@ -744,7 +839,7 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 // Firebase (confirmation d'un oobCode envoyé par mail). Jamais exposé
 // directement au navigateur.
 func (s *server) resetPassword(w http.ResponseWriter, r *http.Request) {
-	secret := kit.Env("INTERNAL_API_SECRET", "")
+	secret := s.internalAPISecretStr
 	if secret == "" || r.Header.Get("X-Internal-Secret") != secret {
 		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
 		return
@@ -855,7 +950,7 @@ func (s *server) listCustomers(w http.ResponseWriter, r *http.Request) {
 // avoir déjà vérifié le JWT côté edge — sans lui, tout client non-admin
 // consultant son propre profil recevait un 403.
 func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
-	secret := kit.Env("INTERNAL_API_SECRET", "")
+	secret := s.internalAPISecretStr
 	isInternal := secret != "" && r.Header.Get("X-Internal-Secret") == secret
 	if !isInternal {
 		if err := s.requireRole(r, "admin"); err != nil {
@@ -915,7 +1010,7 @@ func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
 // l'appel doit prouver qu'il vient bien du serveur Next.js et pas d'un
 // tiers qui devinerait un id.
 func (s *server) updateCustomerAddress(w http.ResponseWriter, r *http.Request) {
-	secret := kit.Env("INTERNAL_API_SECRET", "")
+	secret := s.internalAPISecretStr
 	if secret == "" || r.Header.Get("X-Internal-Secret") != secret {
 		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
 		return

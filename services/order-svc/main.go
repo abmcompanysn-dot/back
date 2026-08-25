@@ -145,14 +145,31 @@ CREATE INDEX IF NOT EXISTS idx_returns_order ON returns (order_id);
 `
 
 type server struct {
-	db             *pgxpool.Pool
-	kafka          sarama.SyncProducer
-	timeout        time.Duration
-	shippingURL    string
-	catalogURL     string  // restock au moment de l'annulation (module Commandes)
-	vendorURL      string  // résolution du taux de commission par vendeur (module Commandes §1.2.A)
-	commissionRate float64 // taux plateforme par défaut si le vendeur n'a pas d'override (vendors.commission_rate NULL)
+	db          *pgxpool.Pool
+	kafka       sarama.SyncProducer
+	timeout     time.Duration
+	shippingURL string
+	catalogURL  string // restock au moment de l'annulation (module Commandes)
+	vendorURL   string // résolution du taux de commission par vendeur (module Commandes §1.2.A)
+
+	settings *kit.SettingsStore
+	// platformCommissionRate : taux plateforme par défaut si le vendeur n'a
+	// pas d'override (vendors.commission_rate NULL). Fraction décimale
+	// (0.10 = 10%) — MÊME clé de config que payment-svc.platformCommissionRate,
+	// dupliquée ici plutôt que centralisée (chaque service a sa propre base,
+	// pas d'appel réseau supplémentaire pour un chiffre lu à chaque
+	// commande) : éditer l'un sans l'autre depuis la page Configuration
+	// Système désynchronise les deux, à afficher groupés dans l'UI.
+	platformCommissionRate string
 }
+
+func (s *server) settingsFields() []kit.SettingsField {
+	return []kit.SettingsField{
+		{Key: "platform_commission_rate", Ptr: &s.platformCommissionRate, Description: "Taux de commission plateforme (fraction, ex: 0.10 = 10%) appliqué à défaut d'un override vendeur — dupliqué dans payment-svc, garder les deux synchronisés"},
+	}
+}
+
+const settingsTable = "order_settings"
 
 // line — commission_rate/commission_usd/net_usd sont calculés ET FIGÉS au
 // moment de la création de la commande (pas recalculés à la lecture) :
@@ -179,24 +196,25 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration impossible", "err", err)
 		return
 	}
 
 	mins, _ := strconv.Atoi(kit.Env("PAYMENT_TIMEOUT_MINUTES", "30"))
-	commissionRate, err := strconv.ParseFloat(kit.Env("PLATFORM_COMMISSION_RATE", "0.10"), 64)
-	if err != nil {
-		commissionRate = 0.10
-	}
 	s := &server{
-		db:             db,
-		kafka:          kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		timeout:        time.Duration(mins) * time.Minute,
-		shippingURL:    kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
-		catalogURL:     kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
-		vendorURL:      kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
-		commissionRate: commissionRate,
+		db:          db,
+		kafka:       kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		timeout:     time.Duration(mins) * time.Minute,
+		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
+		catalogURL:  kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
+		vendorURL:   kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+
+		platformCommissionRate: kit.Env("PLATFORM_COMMISSION_RATE", "0.10"),
+	}
+	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
+	if err := s.settings.Load(ctx); err != nil {
+		log.Error("chargement order_settings impossible", "err", err)
 	}
 
 	// Reaper : le cas d'échec partiel est géré, pas tu.
@@ -206,6 +224,8 @@ func main() {
 	health.Add("postgres", db.Ping)
 
 	kit.Run("order-svc", kit.Env("PORT_ORDER", "8083"), log, health, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /settings", s.getSettings)
+		mux.HandleFunc("PUT /settings", s.putSettings)
 		mux.HandleFunc("POST /orders", s.createOrder)
 		mux.HandleFunc("GET /orders", s.listOrders)
 		mux.HandleFunc("GET /orders/{id}", s.getOrder)
@@ -940,25 +960,67 @@ func (s *server) restockProduct(ctx context.Context, productID int64, qty int) e
 // injoignable ou vendeur introuvable ne doit jamais bloquer la création
 // d'une commande — repli silencieux sur le taux global dans ce cas.
 func (s *server) resolveCommissionRate(ctx context.Context, vendorID int64) float64 {
+	fallback := s.defaultCommissionRate()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendor/%d", s.vendorURL, vendorID), nil)
 	if err != nil {
-		return s.commissionRate
+		return fallback
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return s.commissionRate
+		return fallback
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return s.commissionRate
+		return fallback
 	}
 	var vendor struct {
 		CommissionRate *float64 `json:"commission_rate"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&vendor); err != nil || vendor.CommissionRate == nil {
-		return s.commissionRate
+		return fallback
 	}
 	return *vendor.CommissionRate
+}
+
+func (s *server) defaultCommissionRate() float64 {
+	rate, err := strconv.ParseFloat(s.platformCommissionRate, 64)
+	if err != nil {
+		return 0.10
+	}
+	return rate
+}
+
+// getSettings/putSettings — Configuration Système (page admin). Même
+// pattern que payment-svc/fulfillment-svc.
+func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
+	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	toSave := map[string]string{}
+	for k, v := range body {
+		if !s.settings.IsKnown(k) {
+			continue
+		}
+		if s.settings.IsSecret(k) && v == "" {
+			continue
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.settings.Save(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave)})
 }
 
 func round2(v float64) float64 { return math.Round(v*100) / 100 }

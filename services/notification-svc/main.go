@@ -72,7 +72,58 @@ var watchedTopics = []string{
 type server struct {
 	db  *pgxpool.Pool
 	fcm *fcmClient // nil si FIREBASE_SERVICE_ACCOUNT_JSON absent — mode journalisé
+
+	settings *kit.SettingsStore
+	// firebaseServiceAccountJSON : éditable depuis la page Configuration
+	// Système, mais NÉCESSITE UN REDÉMARRAGE pour prendre effet — s.fcm
+	// est un client déjà construit à partir du JSON (parsing PEM de la clé
+	// privée), pas relu à chaque appel comme les autres settings string.
+	// Reconstruire fcm à chaud demanderait un mutex sur chaque accès (8
+	// call sites) pour un gain marginal — préféré ici à garder simple et
+	// explicite plutôt qu'ajouter de la concurrence fragile autour d'un
+	// secret aussi sensible.
+	firebaseServiceAccountJSON string
 }
+
+// getSettings/putSettings — Configuration Système (page admin).
+func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
+	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	toSave := map[string]string{}
+	for k, v := range body {
+		if !s.settings.IsKnown(k) {
+			continue
+		}
+		if s.settings.IsSecret(k) && v == "" {
+			continue
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.settings.Save(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave), "requires_restart": true})
+}
+
+func (s *server) settingsFields() []kit.SettingsField {
+	return []kit.SettingsField{
+		{Key: "firebase_service_account_json", Ptr: &s.firebaseServiceAccountJSON, Secret: true, Description: "JSON du compte de service Firebase Admin SDK (notifications push FCM) — un redémarrage du service est nécessaire après modification"},
+	}
+}
+
+const settingsTable = "notification_settings"
 
 func main() {
 	ctx := context.Background()
@@ -83,17 +134,23 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration impossible", "err", err)
 		return
 	}
 
-	fcm, err := newFCMClient(kit.Env("FIREBASE_SERVICE_ACCOUNT_JSON", ""))
+	s := &server{db: db, firebaseServiceAccountJSON: kit.Env("FIREBASE_SERVICE_ACCOUNT_JSON", "")}
+	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
+	if err := s.settings.Load(ctx); err != nil {
+		log.Error("chargement notification_settings impossible", "err", err)
+	}
+
+	fcm, err := newFCMClient(s.firebaseServiceAccountJSON)
 	if err != nil {
 		log.Warn("Firebase Admin SDK non configuré — push journalisé sans envoi réel", "err", err)
 	}
+	s.fcm = fcm
 
-	s := &server{db: db, fcm: fcm}
 	go s.consume(log)
 
 	health := kit.NewHealth()
@@ -106,6 +163,8 @@ func main() {
 	})
 
 	kit.Run("notification-svc", kit.Env("PORT_NOTIFICATION", "8087"), log, health, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /settings", s.getSettings)
+		mux.HandleFunc("PUT /settings", s.putSettings)
 		mux.HandleFunc("GET /notifications/stats", s.stats)
 		mux.HandleFunc("POST /push/subscribe", s.pushSubscribe)
 		mux.HandleFunc("GET /push/stats", s.pushStats)

@@ -133,6 +133,17 @@ export function IconSystem(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconConfiguration(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h13M20 18h0" />
+      <circle cx="14" cy="6" r="2" />
+      <circle cx="8" cy="12" r="2" />
+      <circle cx="17" cy="18" r="2" />
+    </Base>
+  )
+}
+
 export function IconLogout(props: SVGProps<SVGSVGElement>) {
   return (
     <Base {...props}>

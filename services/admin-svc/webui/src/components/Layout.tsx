@@ -5,6 +5,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCatalog,
+  IconConfiguration,
   IconCustomers,
   IconDashboard,
   IconFinance,
@@ -32,6 +33,7 @@ const TABS = [
   { path: '/admin/finance', label: 'Finances', icon: IconFinance },
   { path: '/admin/security', label: 'Sécurité', icon: IconSecurity },
   { path: '/admin/system', label: 'Système', icon: IconSystem },
+  { path: '/admin/configuration', label: 'Configuration', icon: IconConfiguration },
 ]
 
 const PAGE_TITLES: Record<string, string> = {
@@ -51,6 +53,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/payments': 'Finances',
   '/admin/security': 'Sécurité',
   '/admin/system': 'Système',
+  '/admin/configuration': 'Configuration',
 }
 
 export function Layout() {

@@ -85,14 +85,57 @@ CREATE TABLE IF NOT EXISTS payout_requests (
 CREATE INDEX IF NOT EXISTS idx_payout_status ON payout_requests (status, created_at DESC);
 `
 
+// getSettings/putSettings — Configuration Système (page admin), portage
+// des variables d'env historiques vers une config éditable en base sans
+// redéploiement. Même pattern que fulfillment-svc (dhl_settings).
+func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
+	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	toSave := map[string]string{}
+	for k, v := range body {
+		if !s.settings.IsKnown(k) {
+			continue
+		}
+		if s.settings.IsSecret(k) && v == "" {
+			continue // champ secret vide = "inchangé", jamais écrasé par du vide
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.settings.Save(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave)})
+}
+
 // defaultCommissionRate — taux plateforme appliqué à défaut de commission
 // vendeur/catégorie spécifique (résolution simplifiée en premier jet : pas
 // d'appel catalog-svc par ligne de commande, seulement vendor-svc pour un
 // éventuel override). Peut être ajusté sans redéploiement via env.
-func defaultCommissionRate() float64 {
-	rate, err := strconv.ParseFloat(kit.Env("PLATFORM_COMMISSION_RATE", "10"), 64)
+//
+// Fraction décimale (0.10 = 10%), PAS un pourcentage entier — corrigé le
+// 2026-08-25 : ce fichier lisait "10" comme défaut et divisait par 100 en
+// aval, alors qu'order-svc lit la MÊME variable d'env comme une fraction
+// (défaut "0.10", multipliée directement sans division). Les deux
+// produisaient le même résultat par coïncidence des défauts, mais un vrai
+// PLATFORM_COMMISSION_RATE=10 dans .env aurait fait calculer 1000% de
+// commission côté order-svc. Unifié en fraction partout (cohérent avec
+// vendors.commission_rate, déjà une fraction).
+func (s *server) defaultCommissionRate() float64 {
+	rate, err := strconv.ParseFloat(s.platformCommissionRate, 64)
 	if err != nil {
-		return 10
+		return 0.10
 	}
 	return rate
 }
@@ -103,6 +146,35 @@ type server struct {
 	orderURL    string
 	shippingURL string // source des exchange-rates pour la conversion PayDunya (USD -> XOF)
 	vendorURL   string // résolution du commission_rate override vendeur (module Finances)
+
+	settings *kit.SettingsStore
+	// Champs pointés par settings (voir NewSettingsStore) — jamais lus
+	// directement ailleurs que via settings.Snapshot()/les accès protégés
+	// par son mutex interne ; gardés ici seulement pour être passés en
+	// *string à NewSettingsStore.
+	platformCommissionRate string
+	stripeSecretKey        string
+	stripeWebhookSecret    string
+	paydunyaAPIKeyPrivate  string
+	paydunyaAPIKeyPublic   string
+	paydunyaMasterKey      string
+	paydunyaAPIBase        string
+	storefrontURL          string
+}
+
+const settingsTable = "payment_settings"
+
+func (s *server) settingsFields() []kit.SettingsField {
+	return []kit.SettingsField{
+		{Key: "platform_commission_rate", Ptr: &s.platformCommissionRate, Description: "Taux de commission plateforme (fraction, ex: 0.10 = 10%) appliqué à défaut d'un override vendeur"},
+		{Key: "stripe_secret_key", Ptr: &s.stripeSecretKey, Secret: true, Description: "Clé secrète API Stripe (paiements carte)"},
+		{Key: "stripe_webhook_secret", Ptr: &s.stripeWebhookSecret, Secret: true, Description: "Secret de vérification de signature des webhooks Stripe"},
+		{Key: "paydunya_api_key_private", Ptr: &s.paydunyaAPIKeyPrivate, Secret: true, Description: "Clé API privée PayDunya (Wave, Orange Money)"},
+		{Key: "paydunya_api_key_public", Ptr: &s.paydunyaAPIKeyPublic, Secret: true, Description: "Clé API publique PayDunya (liée au compte marchand)"},
+		{Key: "paydunya_master_key", Ptr: &s.paydunyaMasterKey, Secret: true, Description: "Clé maître PayDunya (signature/validation)"},
+		{Key: "paydunya_api_base", Ptr: &s.paydunyaAPIBase, Description: "URL de base de l'API PayDunya"},
+		{Key: "storefront_url", Ptr: &s.storefrontURL, Description: "URL du site public, utilisée pour les liens de retour après paiement"},
+	}
 }
 
 func main() {
@@ -114,7 +186,7 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration impossible", "err", err)
 		return
 	}
@@ -125,6 +197,21 @@ func main() {
 		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
 		vendorURL:   kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+
+		platformCommissionRate: kit.Env("PLATFORM_COMMISSION_RATE", "0.10"),
+		stripeSecretKey:        kit.Env("STRIPE_SECRET_KEY", ""),
+		stripeWebhookSecret:    kit.Env("STRIPE_WEBHOOK_SECRET", ""),
+		paydunyaAPIKeyPrivate:  kit.Env("PAYDUNYA_API_KEY_PRIVATE", ""),
+		paydunyaAPIKeyPublic:   kit.Env("PAYDUNYA_API_KEY_PUBLIC", ""),
+		paydunyaMasterKey:      kit.Env("PAYDUNYA_MASTER_KEY", ""),
+		paydunyaAPIBase:        kit.Env("PAYDUNYA_API_BASE", "https://app.paydunya.com"),
+		storefrontURL:          kit.Env("STOREFRONT_URL", "http://localhost:3000"),
+	}
+	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
+	// Configuration Système (base) a priorité sur les variables d'env
+	// ci-dessus dès qu'un admin les a éditées au moins une fois depuis l'UI.
+	if err := s.settings.Load(ctx); err != nil {
+		log.Error("chargement payment_settings impossible", "err", err)
 	}
 
 	go s.consumeOrders(log)
@@ -132,19 +219,21 @@ func main() {
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
 	health.Add("stripe_key", func(ctx context.Context) error {
-		if kit.Env("STRIPE_SECRET_KEY", "") == "" {
+		if s.stripeSecretKey == "" {
 			return fmt.Errorf("STRIPE_SECRET_KEY absente — paiements carte inopérants")
 		}
 		return nil
 	})
 	health.Add("paydunya_keys", func(ctx context.Context) error {
-		if kit.Env("PAYDUNYA_API_KEY_PRIVATE", "") == "" {
+		if s.paydunyaAPIKeyPrivate == "" {
 			return fmt.Errorf("clé PayDunya absente — paiements mobiles inopérants")
 		}
 		return nil
 	})
 
 	kit.Run("payment-svc", kit.Env("PORT_PAYMENT", "8084"), log, health, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /settings", s.getSettings)
+		mux.HandleFunc("PUT /settings", s.putSettings)
 		mux.HandleFunc("POST /payments/init", s.initPayment)
 		mux.HandleFunc("GET /payments", s.listPayments)
 		mux.HandleFunc("GET /payments/order/{order_id}", s.getPayment)
@@ -171,11 +260,11 @@ func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
 	gateways := []map[string]any{
 		{
 			"id": "stripe", "title": "Carte bancaire", "method_title": "Stripe",
-			"enabled": kit.Env("STRIPE_SECRET_KEY", "") != "",
+			"enabled": s.stripeSecretKey != "",
 		},
 		{
 			"id": "paydunya", "title": "Mobile Money / PayDunya", "method_title": "PayDunya",
-			"enabled": kit.Env("PAYDUNYA_API_KEY_PRIVATE", "") != "",
+			"enabled": s.paydunyaAPIKeyPrivate != "",
 		},
 	}
 	kit.JSON(w, 200, map[string]any{"gateways": gateways})
@@ -244,8 +333,8 @@ func (s *server) financeOverview(w http.ResponseWriter, r *http.Request) {
 
 	kit.JSON(w, 200, map[string]any{
 		"gmv_usd": gmv, "orders_count": orderCount, "average_basket_usd": avgBasket,
-		"commission_revenue_usd": commissionRevenue,
-		"by_payment_method":      byMethod,
+		"commission_revenue_usd":    commissionRevenue,
+		"by_payment_method":         byMethod,
 		"pending_payouts_total_usd": pendingPayoutsTotal, "pending_payouts_count": pendingPayoutsCount,
 	})
 }
@@ -656,8 +745,8 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 // sans jamais quitter le site. order_id part en métadonnée (pas
 // client_reference_id, propre à Checkout Session) — c'est là que le
 // webhook stripeWebhook le relit pour retrouver la commande.
-func createStripePaymentIntent(orderID int64, reference string, totalUSD float64) (id, clientSecret string, err error) {
-	key := kit.Env("STRIPE_SECRET_KEY", "")
+func (s *server) createStripePaymentIntent(orderID int64, reference string, totalUSD float64) (id, clientSecret string, err error) {
+	key := s.stripeSecretKey
 	if key == "" {
 		return "", "", fmt.Errorf("STRIPE_SECRET_KEY absente")
 	}
@@ -702,9 +791,9 @@ func createStripePaymentIntent(orderID int64, reference string, totalUSD float64
 // cet appel via le taux exposé par shipping-svc (exchange_rates,
 // source UNIQUE — voir shipping-svc/main.go).
 func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent) (ref, redirect string, err error) {
-	priv := kit.Env("PAYDUNYA_API_KEY_PRIVATE", "")
-	pub := kit.Env("PAYDUNYA_API_KEY_PUBLIC", "")
-	master := kit.Env("PAYDUNYA_MASTER_KEY", "")
+	priv := s.paydunyaAPIKeyPrivate
+	pub := s.paydunyaAPIKeyPublic
+	master := s.paydunyaMasterKey
 	if priv == "" {
 		return "", "", fmt.Errorf("PAYDUNYA_API_KEY_PRIVATE absente")
 	}
@@ -714,7 +803,7 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 	}
 	amountXOF := int64(math.Round(ev.TotalUSD * rateXOF))
 
-	front := kit.Env("STOREFRONT_URL", "http://localhost:3000")
+	front := s.storefrontURL
 	payload := map[string]any{
 		"invoice": map[string]any{
 			"total_amount": amountXOF,
@@ -730,7 +819,7 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 		"custom_data": map[string]any{"order_id": ev.OrderID},
 	}
 	body, _ := json.Marshal(payload)
-	base := kit.Env("PAYDUNYA_API_BASE", "https://app.paydunya.com")
+	base := s.paydunyaAPIBase
 	req, _ := http.NewRequest(http.MethodPost, base+"/checkout-api/v1/checkout/invoice", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("PAYDUNYA-MASTER-KEY", master)
@@ -797,7 +886,7 @@ func (s *server) fetchExchangeRate(ctx context.Context, currency string) (float6
 
 // stripeWebhook — vérification HMAC réelle de Stripe-Signature.
 func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
-	secret := kit.Env("STRIPE_WEBHOOK_SECRET", "")
+	secret := s.stripeWebhookSecret
 	if secret == "" {
 		kit.Fail(w, 503, "webhook_not_configured", "STRIPE_WEBHOOK_SECRET absente — webhook refusé")
 		return
@@ -945,11 +1034,15 @@ func (s *server) creditVendorWallet(ctx context.Context, orderID int64) {
 		return // ligne parent/groupe, pas une sous-commande vendeur
 	}
 
-	rate := defaultCommissionRate()
+	rate := s.defaultCommissionRate()
 	if override, err := fetchVendorCommissionRate(ctx, s.vendorURL, order.VendorID); err == nil && override != nil {
 		rate = *override
 	}
-	commission := order.TotalUSD * rate / 100
+	// Fraction décimale, pas un pourcentage — voir defaultCommissionRate.
+	// vendors.commission_rate (override) suit la même convention : c'est
+	// déjà ainsi qu'order-svc.resolveCommissionRate l'utilise (lineTotal *
+	// rate, sans division).
+	commission := order.TotalUSD * rate
 	net := order.TotalUSD - commission
 
 	tx, err := s.db.Begin(ctx)
@@ -1076,7 +1169,7 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		if reference == "" {
 			reference = fmt.Sprintf("MIAD-%d", body.OrderID)
 		}
-		piID, secret, err := createStripePaymentIntent(body.OrderID, reference, amount)
+		piID, secret, err := s.createStripePaymentIntent(body.OrderID, reference, amount)
 		if err != nil {
 			kit.Fail(w, 502, "stripe_error", fmt.Sprintf("création du PaymentIntent impossible: %v", err))
 			return

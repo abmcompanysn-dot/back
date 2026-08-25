@@ -87,7 +87,19 @@ type server struct {
 	orderURL    string
 	authURL     string
 	maxAttempts int
+
+	settings *kit.SettingsStore
 }
+
+func (s *server) settingsFields() []kit.SettingsField {
+	return []kit.SettingsField{
+		{Key: "resend_api_key", Ptr: &s.resendAPI, Secret: true, Description: "Clé API du service d'envoi d'emails Resend — vide = mode simulation (email journalisé, jamais envoyé)"},
+		{Key: "from_email", Ptr: &s.fromEmail, Description: "Adresse email expéditeur pour tous les emails transactionnels"},
+		{Key: "storefront_url", Ptr: &s.frontendURL, Description: "URL du site public, utilisée dans le contenu des emails (liens)"},
+	}
+}
+
+const settingsTable = "email_settings"
 
 type EmailTemplate struct {
 	Name      string `json:"name"`
@@ -110,6 +122,38 @@ var seedTemplates = []EmailTemplate{
 	{Name: "otp_email", Label: "Code de vérification (OTP)", Subject: "Votre code de vérification MIAD Market", BodyHTML: otpEmailHTML},
 	{Name: "password_reset", Label: "Réinitialisation de mot de passe", Subject: "Réinitialisation de mot de passe", BodyHTML: passwordResetHTML},
 	{Name: "rep_message_notification", Label: "Nouveau message représentant", Subject: "💬 Nouveau message de {{.client_name}} — MIAD Market", BodyHTML: repMessageNotificationHTML},
+}
+
+// getSettings/putSettings — Configuration Système (page admin).
+func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
+	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	toSave := map[string]string{}
+	for k, v := range body {
+		if !s.settings.IsKnown(k) {
+			continue
+		}
+		if s.settings.IsSecret(k) && v == "" {
+			continue
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.settings.Save(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave)})
 }
 
 func seedEmailTemplates(ctx context.Context, db *pgxpool.Pool) error {
@@ -135,24 +179,26 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration impossible", "err", err)
 		return
 	}
 
-	resendAPI := kit.Env("RESEND_API_KEY", "")
-	if resendAPI == "" {
-		log.Warn("RESEND_API_KEY non définie — mode simulation activé")
-	}
-
 	s := &server{
 		db:          db,
-		resendAPI:   resendAPI,
+		resendAPI:   kit.Env("RESEND_API_KEY", ""),
 		fromEmail:   kit.Env("FROM_EMAIL", "noreply@miadmarket.ca"),
 		frontendURL: kit.Env("STOREFRONT_URL", "https://miadmarket.ca"),
 		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		authURL:     kit.Env("AUTH_SVC_URL", "http://auth-svc:8086"),
 		maxAttempts: 3,
+	}
+	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
+	if err := s.settings.Load(ctx); err != nil {
+		log.Error("chargement email_settings impossible", "err", err)
+	}
+	if s.resendAPI == "" {
+		log.Warn("RESEND_API_KEY non définie — mode simulation activé")
 	}
 
 	if err := seedEmailTemplates(ctx, db); err != nil {
@@ -175,6 +221,8 @@ func main() {
 	})
 
 	kit.Run("email-svc", kit.Env("PORT_EMAIL", "8089"), log, health, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /settings", s.getSettings)
+		mux.HandleFunc("PUT /settings", s.putSettings)
 		mux.HandleFunc("GET /emails/stats", s.stats)
 		mux.HandleFunc("POST /emails/send", s.sendEmail)
 		mux.HandleFunc("GET /email-templates", s.listTemplates)

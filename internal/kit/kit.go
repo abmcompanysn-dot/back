@@ -100,6 +100,136 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, schema string) error {
 	return err
 }
 
+// ---------- Configuration éditable en base (Configuration Système admin) ----------
+
+// SettingsField — un champ de configuration exposé dans la page
+// "Configuration Système" du dashboard admin. Secret=true : jamais
+// renvoyé en clair par GET (seulement un booléen "configuré"), pour ne
+// pas exposer une clé API/mot de passe à qui a accès en lecture au
+// dashboard — même pattern que dhl_settings (fulfillment-svc), factorisé
+// ici pour éviter de le recopier dans chaque service qui a des variables
+// d'env à rendre éditables sans redéploiement (2026-08-25).
+type SettingsField struct {
+	Key         string
+	Ptr         *string // pointeur vers le champ vivant du server struct — écrasé par Load/Save
+	Secret      bool
+	Description string
+}
+
+// SettingsStoreSchema — table clé/valeur à ajouter au schéma SQL du
+// service. name est le nom de la table (un service peut en avoir
+// plusieurs s'il regroupe des configs de nature différente).
+func SettingsStoreSchema(table string) string {
+	return fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS %s (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
+`, table)
+}
+
+// SettingsStore — charge/sauvegarde un ensemble de SettingsField dans une
+// table clé/valeur, avec les valeurs par défaut (lues depuis les
+// variables d'env au démarrage) écrasées par la base dès qu'un admin les
+// édite au moins une fois depuis l'UI. Thread-safe : les champs sont lus
+// à chaque requête HTTP par le service appelant, jamais copiés une seule
+// fois au démarrage.
+type SettingsStore struct {
+	mu     sync.RWMutex
+	db     *pgxpool.Pool
+	table  string
+	fields map[string]*string
+	secret map[string]bool
+}
+
+func NewSettingsStore(db *pgxpool.Pool, table string, fields []SettingsField) *SettingsStore {
+	s := &SettingsStore{db: db, table: table, fields: map[string]*string{}, secret: map[string]bool{}}
+	for _, f := range fields {
+		s.fields[f.Key] = f.Ptr
+		s.secret[f.Key] = f.Secret
+	}
+	return s
+}
+
+// Load — à appeler au démarrage, après avoir peuplé les champs avec leurs
+// valeurs par défaut (Env(...)) : écrase avec ce qui a été édité en base.
+func (s *SettingsStore) Load(ctx context.Context) error {
+	rows, err := s.db.Query(ctx, "SELECT key, value FROM "+s.table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	values := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err == nil {
+			values[k] = v
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range values {
+		if ptr, ok := s.fields[k]; ok {
+			*ptr = v
+		}
+	}
+	return nil
+}
+
+// Save — upsert les clés fournies en base ET met à jour les champs en
+// mémoire sous verrou, pour que la requête suivante voie immédiatement la
+// nouvelle valeur sans redémarrage. Un champ secret laissé vide dans
+// `values` doit être filtré par l'appelant AVANT Save (jamais écraser un
+// secret déjà configuré par du vide) — Save ne fait pas cette distinction
+// lui-même, elle dépend du contexte HTTP (body reçu) que ce package n'a pas.
+func (s *SettingsStore) Save(ctx context.Context, values map[string]string) error {
+	for k, v := range values {
+		if _, err := s.db.Exec(ctx, fmt.Sprintf(`
+			INSERT INTO %s (key, value) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, s.table), k, v); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range values {
+		if ptr, ok := s.fields[k]; ok {
+			*ptr = v
+		}
+	}
+	return nil
+}
+
+// Snapshot — renvoie l'état actuel pour GET /settings : valeur en clair
+// pour les champs normaux, seulement `<key>_configured: bool` pour les
+// secrets.
+func (s *SettingsStore) Snapshot() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]any{}
+	for k, ptr := range s.fields {
+		if s.secret[k] {
+			out[k+"_configured"] = *ptr != ""
+			continue
+		}
+		out[k] = *ptr
+	}
+	return out
+}
+
+// IsKnown — vrai si k est un champ déclaré (pour filtrer un body PUT
+// avant Save, ignorer les clés inconnues plutôt que les rejeter).
+func (s *SettingsStore) IsKnown(k string) bool {
+	_, ok := s.fields[k]
+	return ok
+}
+
+// IsSecret — vrai si k est un champ secret (pour ignorer une valeur vide
+// envoyée par l'UI, qui signifie "inchangé" et non "vider").
+func (s *SettingsStore) IsSecret(k string) bool {
+	return s.secret[k]
+}
+
 // ---------- Redis (cache + sessions) ----------
 
 func NewRedis(addr, password string) *redis.Client {
@@ -163,9 +293,9 @@ func splitBrokers(s string) []string {
 // Media regroupe le client MinIO et la config nécessaire pour uploader
 // une image et obtenir son URL publique HTTPS (img.miadmarket.ca en prod).
 type Media struct {
-	client    *minio.Client
-	bucket    string
-	baseURL   string // ex: https://img.miadmarket.ca — pas de slash final
+	client  *minio.Client
+	bucket  string
+	baseURL string // ex: https://img.miadmarket.ca — pas de slash final
 }
 
 // NewMedia se connecte à MinIO via son endpoint interne au cluster
