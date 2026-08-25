@@ -294,6 +294,13 @@ func main() {
 		mux.HandleFunc("GET /admin/api/dhl/tracking/{tracking_number}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forward(w, r, s.fulfillmentURL+"/dhl/tracking/"+r.PathValue("tracking_number"))
 		}))
+		mux.HandleFunc("GET /admin/api/dhl/orders", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/dhl/orders" })))
+		mux.HandleFunc("GET /admin/api/dhl/order/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.fulfillmentURL + "/dhl/order/" + id
+		})))
+		mux.HandleFunc("POST /admin/api/dhl/orders/{id}/create-shipment", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.fulfillmentURL+"/dhl/orders/"+r.PathValue("id")+"/create-shipment")
+		}))
 
 		// SPA React : sert les assets embarqués, retombe sur index.html
 		// pour toute route côté client (/admin/orders, /admin/security, …)
