@@ -142,7 +142,7 @@ func main() {
 		mux.HandleFunc("POST /orders/{id}/confirm", s.confirmPayment)
 		mux.HandleFunc("PUT /orders/{id}/status", s.updateOrderStatus)
 		mux.HandleFunc("PUT /orders/parent/{parent_id}/shipping-address", s.updateShippingAddress)
-		mux.HandleFunc("GET /orders/{id}/events", s.listOrderEvents)
+		mux.HandleFunc("GET /order-events/{id}", s.listOrderEvents)
 		mux.HandleFunc("POST /orders/{id}/cancel", s.cancelOrder)
 		mux.HandleFunc("POST /returns", s.createReturn)
 		mux.HandleFunc("GET /returns", s.listReturns)
@@ -277,12 +277,24 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 	args := []any{}
 	where := "WHERE vendor_id > 0"
 	if v := q.Get("vendor_id"); v != "" {
-		where += " AND vendor_id = $1"
+		where += fmt.Sprintf(" AND vendor_id = $%d", len(args)+1)
 		args = append(args, atoi(v))
 	}
 	if v := q.Get("customer_id"); v != "" {
 		where += fmt.Sprintf(" AND customer_id = $%d", len(args)+1)
 		args = append(args, atoi(v))
+	}
+	if v := q.Get("status"); v != "" {
+		where += fmt.Sprintf(" AND status = $%d", len(args)+1)
+		args = append(args, v)
+	}
+	if v := q.Get("payment_method"); v != "" {
+		where += fmt.Sprintf(" AND payment_method = $%d", len(args)+1)
+		args = append(args, v)
+	}
+	if v := q.Get("q"); v != "" {
+		where += fmt.Sprintf(" AND reference ILIKE $%d", len(args)+1)
+		args = append(args, "%"+v+"%")
 	}
 
 	var total int64
@@ -291,7 +303,7 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, reference, customer_id, vendor_id, status, total_usd, created_at
+		SELECT id, reference, customer_id, vendor_id, status, total_usd, payment_method, created_at
 		FROM orders `+where+` ORDER BY id DESC
 		LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize), args...)
 	if err != nil {
@@ -303,12 +315,13 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, cust, vendor int64
 		var total float64
-		var ref, status string
+		var ref, status, paymentMethod string
 		var at time.Time
-		_ = rows.Scan(&id, &ref, &cust, &vendor, &status, &total, &at)
+		_ = rows.Scan(&id, &ref, &cust, &vendor, &status, &total, &paymentMethod, &at)
 		items = append(items, map[string]any{
 			"id": id, "reference": ref, "customer_id": cust, "vendor_id": vendor,
-			"status": status, "total_usd": total, "created_at": at.UTC().Format(time.RFC3339),
+			"status": status, "total_usd": total, "payment_method": paymentMethod,
+			"created_at": at.UTC().Format(time.RFC3339),
 		})
 	}
 	kit.JSON(w, 200, map[string]any{

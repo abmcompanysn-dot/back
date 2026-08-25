@@ -149,7 +149,7 @@ func main() {
 			forwardWithBody(w, r, http.MethodPut, s.orderURL+"/orders/"+r.PathValue("id")+"/status")
 		}))
 		mux.HandleFunc("GET /admin/api/orders/{id}/events", s.requireAdminOrRep(s.proxyPath(func(id string) string {
-			return s.orderURL + "/orders/" + id + "/events"
+			return s.orderURL + "/order-events/" + id
 		})))
 		mux.HandleFunc("POST /admin/api/orders/{id}/cancel", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.orderURL+"/orders/"+r.PathValue("id")+"/cancel")
