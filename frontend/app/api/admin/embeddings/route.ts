@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCloudflareBindings, EMBEDDING_MODEL, type VectorizeVector } from '@/lib/cloudflare-ai'
-import { hasWooCredentials, fetchAllPublishedWooProducts, fetchWooProductsByIds } from '@/lib/woo-catalog'
+import { fetchAllPublishedWooProducts, fetchWooProductsByIds } from '@/lib/woo-catalog'
 import { CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
@@ -23,10 +23,6 @@ export async function POST(req: Request) {
   if (!INTERNAL_SECRET || req.headers.get('X-Internal-Secret') !== INTERNAL_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasWooCredentials()) {
-    return NextResponse.json({ error: 'WOO_CONSUMER_KEY/SECRET manquants côté serveur' }, { status: 500 })
-  }
-
   const bindings = await getCloudflareBindings()
   if (!bindings) {
     return NextResponse.json({ error: 'Bindings AI/VECTORIZE indisponibles — nécessite un déploiement Cloudflare Pages (no-op en local next dev)' }, { status: 503 })
