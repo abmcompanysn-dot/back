@@ -456,8 +456,16 @@ func importCustomers(ctx context.Context, log *slog.Logger, authDB *pgxpool.Pool
 
 /* ---------- Commandes ---------- */
 
+// fetchOrders — status=completed uniquement (décision validée le
+// 2026-08-25) : le dry-run initial (status=any) a révélé qu'environ 40%
+// des commandes (created_via=dokan, essentiellement des sous-commandes
+// pending/processing jamais finalisées) ont line_items=[] dans la
+// réponse wc/v3/orders standard, même avec _fields explicite — le vrai
+// contenu semble stocké côté Dokan hors de portée de l'API REST publique.
+// Les commandes completed testées ont toutes leurs line_items correctement
+// peuplés (avec meta_data._vendor_id par ligne, confirmé en dry-run réel).
 func fetchOrders(page int) ([]wcOrder, error) {
-	url := fmt.Sprintf("%s/wp-json/wc/v3/orders?status=any&per_page=50&page=%d&orderby=id&order=asc&consumer_key=%s&consumer_secret=%s",
+	url := fmt.Sprintf("%s/wp-json/wc/v3/orders?status=completed&per_page=50&page=%d&orderby=id&order=asc&consumer_key=%s&consumer_secret=%s",
 		*wcURL, page, *wcKey, *wcSecret)
 	var out []wcOrder
 	return out, fetchJSONPaginated(url, &out)
