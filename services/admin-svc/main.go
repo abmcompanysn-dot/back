@@ -148,6 +148,10 @@ func main() {
 		mux.HandleFunc("POST /admin/api/products", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/vendor/products")
 		}))
+		mux.HandleFunc("GET /admin/api/reviews", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/reviews" })))
+		mux.HandleFunc("PATCH /admin/api/reviews/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.catalogURL+"/reviews/"+r.PathValue("id"))
+		}))
 		mux.HandleFunc("GET /admin/api/brands", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/brands" })))
 		mux.HandleFunc("POST /admin/api/brands", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/brands")
@@ -159,6 +163,31 @@ func main() {
 			forwardWithBody(w, r, http.MethodDelete, s.catalogURL+"/brands/"+r.PathValue("id"))
 		}))
 		mux.HandleFunc("GET /admin/api/categories", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/categories" })))
+		mux.HandleFunc("POST /admin/api/categories", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/categories")
+		}))
+		mux.HandleFunc("PATCH /admin/api/categories/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.catalogURL+"/categories/"+r.PathValue("id"))
+		}))
+		mux.HandleFunc("DELETE /admin/api/categories/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.catalogURL+"/categories/"+r.PathValue("id"))
+		}))
+		mux.HandleFunc("POST /admin/api/categories/reorder", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/categories/reorder")
+		}))
+		mux.HandleFunc("GET /admin/api/attributes", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/attributes" })))
+		mux.HandleFunc("POST /admin/api/attributes", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/attributes")
+		}))
+		mux.HandleFunc("DELETE /admin/api/attributes/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.catalogURL+"/attributes/"+r.PathValue("id"))
+		}))
+		mux.HandleFunc("POST /admin/api/attributes/{id}/values", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/attributes/"+r.PathValue("id")+"/values")
+		}))
+		mux.HandleFunc("DELETE /admin/api/attribute-values/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.catalogURL+"/attribute-values/"+r.PathValue("id"))
+		}))
 		mux.HandleFunc("GET /admin/api/vendors", s.requireAdmin(s.proxy(func() string { return s.vendorURL + "/stores" })))
 		mux.HandleFunc("GET /admin/api/customers", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/customers" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))

@@ -174,6 +174,8 @@ func main() {
 		mux.HandleFunc("GET /products/variations", s.listVariationsBatch)
 		mux.HandleFunc("GET /products/{id}/reviews", s.listReviews)
 		mux.HandleFunc("POST /products/{id}/reviews", s.createReview)
+		mux.HandleFunc("GET /reviews", s.listReviewsAdmin)
+		mux.HandleFunc("PATCH /reviews/{id}", s.moderateReview)
 		mux.HandleFunc("GET /categories", s.listCategories)
 		mux.HandleFunc("GET /search/suggestions", s.suggestions)
 		mux.HandleFunc("POST /vendor/products", s.createProduct)
@@ -185,6 +187,15 @@ func main() {
 		mux.HandleFunc("POST /brands", s.createBrand)
 		mux.HandleFunc("PATCH /brands/{id}", s.updateBrand)
 		mux.HandleFunc("DELETE /brands/{id}", s.deleteBrand)
+		mux.HandleFunc("POST /categories", s.createCategory)
+		mux.HandleFunc("PATCH /categories/{id}", s.updateCategory)
+		mux.HandleFunc("DELETE /categories/{id}", s.deleteCategory)
+		mux.HandleFunc("POST /categories/reorder", s.reorderCategories)
+		mux.HandleFunc("GET /attributes", s.listAttributes)
+		mux.HandleFunc("POST /attributes", s.createAttribute)
+		mux.HandleFunc("DELETE /attributes/{id}", s.deleteAttribute)
+		mux.HandleFunc("POST /attributes/{id}/values", s.addAttributeValue)
+		mux.HandleFunc("DELETE /attribute-values/{id}", s.deleteAttributeValue)
 	})
 }
 
@@ -497,10 +508,13 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
+	// Le storefront public (aucun avis modéré par défaut, status='pending')
+	// ne doit voir que les avis approuvés — l'admin les voit tous via
+	// listReviewsAdmin, jamais cette route.
 	var total int64
 	var avgRating float64
 	if err := s.db.QueryRow(r.Context(),
-		`SELECT count(*), COALESCE(AVG(rating), 0) FROM reviews WHERE product_id = $1`, productID,
+		`SELECT count(*), COALESCE(AVG(rating), 0) FROM reviews WHERE product_id = $1 AND status = 'approved'`, productID,
 	).Scan(&total, &avgRating); err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -508,7 +522,7 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, customer_id, order_id, rating, comment, verified_purchase, created_at
-		FROM reviews WHERE product_id = $1
+		FROM reviews WHERE product_id = $1 AND status = 'approved'
 		ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
 		productID, pageSize, (page-1)*pageSize)
 	if err != nil {
@@ -541,6 +555,114 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 		"total": total, "has_more": int64(page*pageSize) < total,
 		"average_rating": avgRating, "rating_count": total,
 	})
+}
+
+// listReviewsAdmin — tous les avis, toutes langues/produits confondus,
+// pour la file de modération du back-office (contrairement à listReviews
+// qui est filtré à un seul produit et n'expose que les avis approuvés).
+func (s *server) listReviewsAdmin(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(def(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(def(q.Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	where := "WHERE 1=1"
+	args := []any{}
+	if v := q.Get("status"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND rv.status = $%d", len(args))
+	}
+
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM reviews rv "+where, args...).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT rv.id, rv.product_id, p.name, rv.customer_id, rv.rating, rv.comment,
+		       rv.verified_purchase, rv.status, rv.admin_reply, rv.created_at
+		FROM reviews rv
+		LEFT JOIN products p ON p.id = rv.product_id AND p.lang = 'fr'
+		%s ORDER BY rv.created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, productID, customerID int64
+		var rating int
+		var productName, comment, status, adminReply string
+		var verified bool
+		var createdAt time.Time
+		if err := rows.Scan(&id, &productID, &productName, &customerID, &rating, &comment, &verified, &status, &adminReply, &createdAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "product_id": productID, "product_name": productName,
+			"customer_id": customerID, "rating": rating, "comment": comment,
+			"verified_purchase": verified, "status": status, "admin_reply": adminReply,
+			"created_at": createdAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
+// moderateReview — approuve/rejette un avis, avec réponse admin optionnelle.
+func (s *server) moderateReview(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Status     *string `json:"status"`
+		AdminReply *string `json:"admin_reply"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	set := []string{}
+	args := []any{}
+	add := func(col string, v any) {
+		args = append(args, v)
+		set = append(set, fmt.Sprintf("%s = $%d", col, len(args)))
+	}
+	if body.Status != nil {
+		if *body.Status != "approved" && *body.Status != "rejected" && *body.Status != "pending" {
+			kit.Fail(w, 400, "invalid_status", "status doit être pending, approved ou rejected")
+			return
+		}
+		add("status", *body.Status)
+	}
+	if body.AdminReply != nil {
+		add("admin_reply", *body.AdminReply)
+	}
+	if len(set) == 0 {
+		kit.Fail(w, 400, "empty_update", "aucun champ à modifier fourni")
+		return
+	}
+	args = append(args, id)
+	tag, err := s.db.Exec(r.Context(),
+		fmt.Sprintf("UPDATE reviews SET %s WHERE id = $%d", strings.Join(set, ", "), len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "review_not_found", fmt.Sprintf("avis %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "updated": true})
 }
 
 // createReview — verified_purchase est déterminé au mieux : si order_id
@@ -624,9 +746,9 @@ func (s *server) listCategories(w http.ResponseWriter, r *http.Request) {
 	// catégories par popularité (productCount), le compte doit donc
 	// être exact à la lecture, pas dénormalisé/en retard.
 	rows, err := s.db.Query(r.Context(), `
-		SELECT c.id, c.trid, c.parent_id, c.name, c.slug, c.image_url,
+		SELECT c.id, c.trid, c.parent_id, c.name, c.slug, c.image_url, c.sort_order, c.commission_rate,
 		       (SELECT count(*) FROM products p WHERE p.category_id = c.id AND p.lang = c.lang AND p.status = 'active')
-		FROM categories c WHERE c.lang = $1 ORDER BY c.id`, lang)
+		FROM categories c WHERE c.lang = $1 ORDER BY c.sort_order, c.id`, lang)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -634,20 +756,320 @@ func (s *server) listCategories(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, parent, count int64
+		var id, parent, count, sortOrder int64
 		var trid, name, slug, img string
-		_ = rows.Scan(&id, &trid, &parent, &name, &slug, &img, &count)
+		var commissionRate *float64
+		_ = rows.Scan(&id, &trid, &parent, &name, &slug, &img, &sortOrder, &commissionRate, &count)
 		items = append(items, map[string]any{
 			"id": id, "trid": trid, "parent_id": parent, "parent": parent,
 			"name": name, "slug": slug,
 			"image": map[string]any{"src": img}, "image_url": img,
 			"productCount": count, "count": count,
 			"isRoot": parent == 0,
+			"sort_order": sortOrder, "commission_rate": commissionRate,
 		})
 	}
 	// roots : forme native du service. categories : alias attendu par
 	// app/api/categories/route.ts (frontend actuel).
 	kit.JSON(w, 200, map[string]any{"roots": items, "categories": items, "lang": lang})
+}
+
+func (s *server) createCategory(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		NameFR         string   `json:"name_fr"`
+		NameEN         string   `json:"name_en"`
+		ParentID       int64    `json:"parent_id"`
+		ImageURL       string   `json:"image_url"`
+		CommissionRate *float64 `json:"commission_rate"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.NameFR == "" {
+		kit.Fail(w, 400, "missing_name", "name_fr requis")
+		return
+	}
+	nameEN := body.NameEN
+	if nameEN == "" {
+		nameEN = body.NameFR
+	}
+	trid := fmt.Sprintf("cat-%d", time.Now().UnixNano())
+	ctx := r.Context()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var idFR int64
+	insertLang := func(lang, name string) (int64, error) {
+		var id int64
+		err := tx.QueryRow(ctx, `
+			INSERT INTO categories (trid, lang, parent_id, name, slug, image_url, commission_rate)
+			VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+			trid, lang, nullIfZero(body.ParentID), name, slugify(name), body.ImageURL, body.CommissionRate,
+		).Scan(&id)
+		return id, err
+	}
+	idFR, err = insertLang("fr", body.NameFR)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if _, err := insertLang("en", nameEN); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": idFR, "trid": trid})
+}
+
+func (s *server) updateCategory(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Name           *string  `json:"name"`
+		ParentID       *int64   `json:"parent_id"`
+		ImageURL       *string  `json:"image_url"`
+		SortOrder      *int64   `json:"sort_order"`
+		CommissionRate *float64 `json:"commission_rate"`
+		ClearCommission bool    `json:"clear_commission"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	set := []string{}
+	args := []any{}
+	add := func(col string, v any) {
+		args = append(args, v)
+		set = append(set, fmt.Sprintf("%s = $%d", col, len(args)))
+	}
+	if body.Name != nil {
+		add("name", *body.Name)
+		add("slug", slugify(*body.Name))
+	}
+	if body.ParentID != nil {
+		add("parent_id", nullIfZero(*body.ParentID))
+	}
+	if body.ImageURL != nil {
+		add("image_url", *body.ImageURL)
+	}
+	if body.SortOrder != nil {
+		add("sort_order", *body.SortOrder)
+	}
+	if body.ClearCommission {
+		add("commission_rate", nil)
+	} else if body.CommissionRate != nil {
+		add("commission_rate", *body.CommissionRate)
+	}
+	if len(set) == 0 {
+		kit.Fail(w, 400, "empty_update", "aucun champ à modifier fourni")
+		return
+	}
+	args = append(args, id)
+	tag, err := s.db.Exec(r.Context(),
+		fmt.Sprintf("UPDATE categories SET %s WHERE id = $%d", strings.Join(set, ", "), len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "category_not_found", fmt.Sprintf("catégorie %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "updated": true})
+}
+
+func (s *server) deleteCategory(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var productCount int64
+	_ = s.db.QueryRow(r.Context(), "SELECT count(*) FROM products WHERE category_id = $1", id).Scan(&productCount)
+	if productCount > 0 {
+		kit.Fail(w, 409, "category_in_use", fmt.Sprintf("%d produit(s) utilisent encore cette catégorie — réassignez-les avant suppression", productCount))
+		return
+	}
+	tag, err := s.db.Exec(r.Context(), "DELETE FROM categories WHERE id = $1", id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "category_not_found", fmt.Sprintf("catégorie %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "deleted": true})
+}
+
+// reorderCategories — drag & drop dans l'arbre : reçoit la liste ordonnée
+// des ids (même trid des deux langues suit le même ordre) et réécrit
+// sort_order en une seule requête par ligne, dans une transaction.
+func (s *server) reorderCategories(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	ctx := r.Context()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer tx.Rollback(ctx)
+	for i, id := range body.IDs {
+		if _, err := tx.Exec(ctx, "UPDATE categories SET sort_order = $1 WHERE id = $2", i, id); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"reordered": len(body.IDs)})
+}
+
+// ---------- attributs & valeurs (Couleur, Pointure, ...) ----------
+
+func (s *server) listAttributes(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT a.id, a.name, a.slug, v.id, v.value, v.meta
+		FROM attributes a
+		LEFT JOIN attribute_values v ON v.attribute_id = a.id
+		ORDER BY a.name, v.value`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type attr struct {
+		ID     int64            `json:"id"`
+		Name   string           `json:"name"`
+		Slug   string           `json:"slug"`
+		Values []map[string]any `json:"values"`
+	}
+	order := []int64{}
+	byID := map[int64]*attr{}
+	for rows.Next() {
+		var aID int64
+		var aName, aSlug string
+		var vID *int64
+		var vValue, vMeta *string
+		if err := rows.Scan(&aID, &aName, &aSlug, &vID, &vValue, &vMeta); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		a, ok := byID[aID]
+		if !ok {
+			a = &attr{ID: aID, Name: aName, Slug: aSlug, Values: []map[string]any{}}
+			byID[aID] = a
+			order = append(order, aID)
+		}
+		if vID != nil {
+			a.Values = append(a.Values, map[string]any{"id": *vID, "value": *vValue, "meta": *vMeta})
+		}
+	}
+	items := make([]*attr, 0, len(order))
+	for _, id := range order {
+		items = append(items, byID[id])
+	}
+	kit.JSON(w, 200, map[string]any{"items": items, "total": len(items)})
+}
+
+func (s *server) createAttribute(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name   string   `json:"name"`
+		Values []string `json:"values"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Name == "" {
+		kit.Fail(w, 400, "missing_name", "name requis")
+		return
+	}
+	var id int64
+	err := s.db.QueryRow(r.Context(),
+		"INSERT INTO attributes (name, slug) VALUES ($1,$2) RETURNING id", body.Name, slugify(body.Name),
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	for _, v := range body.Values {
+		if v == "" {
+			continue
+		}
+		if _, err := s.db.Exec(r.Context(),
+			"INSERT INTO attribute_values (attribute_id, value) VALUES ($1,$2)", id, v); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+	}
+	kit.JSON(w, 201, map[string]any{"id": id})
+}
+
+func (s *server) deleteAttribute(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	tag, err := s.db.Exec(r.Context(), "DELETE FROM attributes WHERE id = $1", id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "attribute_not_found", fmt.Sprintf("attribut %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "deleted": true})
+}
+
+func (s *server) addAttributeValue(w http.ResponseWriter, r *http.Request) {
+	attrID := atoi(r.PathValue("id"))
+	var body struct {
+		Value string `json:"value"`
+		Meta  string `json:"meta"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Value == "" {
+		kit.Fail(w, 400, "missing_value", "value requis")
+		return
+	}
+	var id int64
+	err := s.db.QueryRow(r.Context(),
+		"INSERT INTO attribute_values (attribute_id, value, meta) VALUES ($1,$2,$3) RETURNING id",
+		attrID, body.Value, body.Meta,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": id})
+}
+
+func (s *server) deleteAttributeValue(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	tag, err := s.db.Exec(r.Context(), "DELETE FROM attribute_values WHERE id = $1", id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 404, "attribute_value_not_found", fmt.Sprintf("valeur %d introuvable", id))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "deleted": true})
 }
 
 func (s *server) suggestions(w http.ResponseWriter, r *http.Request) {
