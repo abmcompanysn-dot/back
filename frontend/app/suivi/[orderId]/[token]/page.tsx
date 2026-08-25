@@ -1,10 +1,16 @@
 import Link from 'next/link'
+import { headers } from 'next/headers'
 import { PackageX, CheckCircle2, MapPin } from 'lucide-react'
 import { ScanCheckpointButton } from '@/components/miad/ScanCheckpointButton'
 
 export const runtime = 'edge'
 
-const WOO_URL = (process.env.NEXT_PUBLIC_WOO_URL || 'https://api.miadmarket.com').replace(/\/$/, '')
+// GAP BACKEND CONNU (voir app/api/order-tracking/route.ts pour le détail
+// complet) : aucun service Go n'expose encore de suivi de commande par
+// token public — cette page appelait avant l'ancienne URL WordPress
+// directement (morte depuis la migration). Passe maintenant par la route
+// Next.js intermédiaire, qui renvoie explicitement { ok: false } tant que
+// ce mécanisme n'existe pas côté Go, plutôt que d'appeler un backend mort.
 
 interface TrackingData {
   ok?: boolean
@@ -36,8 +42,10 @@ const DELIVERY_STEPS = [
 
 async function fetchTracking(orderId: string, token: string): Promise<TrackingData> {
   try {
+    const h = await headers()
+    const origin = h.get('origin') || `https://${h.get('host')}`
     const res = await fetch(
-      `${WOO_URL}/wp-json/miad-products/v1/order-tracking?order_id=${encodeURIComponent(orderId)}&token=${encodeURIComponent(token)}`,
+      `${origin}/api/order-tracking?order_id=${encodeURIComponent(orderId)}&token=${encodeURIComponent(token)}`,
       { headers: { Accept: 'application/json' }, cache: 'no-store' }
     )
     return await res.json()

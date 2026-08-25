@@ -1,25 +1,21 @@
 import { NextResponse } from 'next/server'
-import { fetchWpUser, isAdmin } from '@/lib/miad-server-auth'
+import { fetchWpUser, isAdmin, CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
-const SITE   = (process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com').replace(/\/$/, '')
-const WOO    = (process.env.NEXT_PUBLIC_WOO_URL  || 'https://api.miadmarket.com').replace(/\/$/, '')
-const WOO_CK = process.env.WOO_CONSUMER_KEY    || ''
-const WOO_CS = process.env.WOO_CONSUMER_SECRET || ''
+const SITE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com').replace(/\/$/, '')
 
-interface WcProduct {
+interface CatalogProduct {
   id: number
   slug: string
   name: string
   description: string
-  short_description: string
   price: string
   regular_price: string
   sale_price: string
-  stock_status: string
+  stock: number
+  vendor_id: number
   images: { src: string }[]
-  store?: { shop_name?: string; store_name?: string; name?: string }
 }
 
 function stripHtml(html: string): string {
@@ -31,33 +27,26 @@ function csvEscape(value: unknown): string {
   return /["\n,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-async function fetchAllProducts(): Promise<WcProduct[]> {
-  const results: WcProduct[] = []
+async function fetchAllProducts(): Promise<CatalogProduct[]> {
+  const results: CatalogProduct[] = []
   let page = 1
   while (true) {
-    const q = new URLSearchParams({
-      per_page: '100', page: String(page), status: 'publish',
-      consumer_key: WOO_CK, consumer_secret: WOO_CS,
-    })
-    const res = await fetch(`${WOO}/wp-json/wc/v3/products?${q}`, {
-      headers: { 'User-Agent': 'MIAD-Headless-Client' },
+    const res = await fetch(`${CATALOG_SVC_URL}/products?page=${page}&page_size=100&lang=fr`, {
       next: { revalidate: 3600 },
     })
     if (!res.ok) break
-    const data: WcProduct[] = await res.json()
-    if (!Array.isArray(data) || data.length === 0) break
-    results.push(...data)
-    if (data.length < 100) break
+    const data: any = await res.json().catch(() => ({}))
+    const batch: CatalogProduct[] = data.items || []
+    if (batch.length === 0) break
+    results.push(...batch)
+    if (!data.has_more || batch.length < 100) break
     page++
   }
   return results
 }
 
 // GET /api/admin/meta-csv — export CSV du catalogue pour import manuel dans
-// Meta Commerce Manager (bouton "Exporter CSV (Meta)" du dashboard admin).
-// Memes champs que /merchant-feed.xml, en CSV plutot qu'en RSS — utile pour
-// forcer un import immediat sans attendre le prochain passage programme du
-// flux automatique (demande le 2026-08-10).
+// Meta Commerce Manager. Mêmes champs que /merchant-feed.xml, en CSV.
 export async function GET(request: Request) {
   const auth = request.headers.get('Authorization')
   if (!auth?.startsWith('Bearer ')) {
@@ -69,6 +58,18 @@ export async function GET(request: Request) {
   }
 
   const products = await fetchAllProducts()
+
+  const vendorIds = Array.from(new Set(products.map((p) => p.vendor_id).filter(Boolean)))
+  const vendorNamesById: Record<string, string> = {}
+  if (vendorIds.length > 0) {
+    const storesRes = await fetch(`${VENDOR_SVC_URL}/stores?page_size=100`, { next: { revalidate: 3600 } })
+    if (storesRes.ok) {
+      const storesData: any = await storesRes.json().catch(() => ({}))
+      for (const s of (storesData.items || storesData.stores || [])) {
+        vendorNamesById[String(s.id)] = s.store_name || s.name || 'Boutique'
+      }
+    }
+  }
 
   const header = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'brand', 'sale_price']
   const lines = [header.join(',')]
@@ -82,13 +83,13 @@ export async function GET(request: Request) {
     const onSale = !!p.sale_price && parseFloat(p.sale_price) > 0 && parseFloat(p.sale_price) < parseFloat(p.regular_price || '0')
     const regularPrice = onSale ? parseFloat(p.regular_price) : price
     const additional = (p.images || []).slice(1, 5).map(img => img.src).join(';')
-    const brand = p.store?.shop_name || p.store?.store_name || p.store?.name || 'MIAD Market'
+    const brand = vendorNamesById[String(p.vendor_id)] || 'MIAD Market'
 
     const row = [
       p.id,
       p.name,
-      stripHtml(p.short_description || p.description || p.name).slice(0, 5000),
-      p.stock_status === 'instock' ? 'in stock' : 'out of stock',
+      stripHtml(p.description || p.name).slice(0, 5000),
+      p.stock > 0 ? 'in stock' : 'out of stock',
       'new',
       `${regularPrice.toFixed(2)} USD`,
       `${SITE}/product/${p.slug}`,

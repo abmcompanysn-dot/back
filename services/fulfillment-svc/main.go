@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -78,12 +79,19 @@ var shipmentStages = map[string]bool{
 }
 
 type server struct {
-	db          *pgxpool.Pool
-	kafka       sarama.SyncProducer
-	orderURL    string
-	dhlBaseURL  string
-	dhlUsername string
-	dhlPassword string
+	db             *pgxpool.Pool
+	kafka          sarama.SyncProducer
+	orderURL       string
+	vendorURL      string
+	catalogURL     string
+	dhlBaseURL     string
+	dhlUsername    string
+	dhlPassword    string
+	dhlAccount     string
+	dhlIncoterm    string
+	shipperZip     string
+	shipperCity    string
+	shipperCountry string
 }
 
 func main() {
@@ -101,12 +109,19 @@ func main() {
 	}
 
 	s := &server{
-		db:          db,
-		kafka:       kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
-		dhlBaseURL:  kit.Env("DHL_API_BASE", "https://express.api.dhl.com/mydhlapi"),
-		dhlUsername: kit.Env("DHL_API_USERNAME", ""),
-		dhlPassword: kit.Env("DHL_API_PASSWORD", ""),
+		db:             db,
+		kafka:          kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		orderURL:       kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		vendorURL:      kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+		catalogURL:     kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
+		dhlBaseURL:     kit.Env("DHL_API_BASE", "https://express.api.dhl.com/mydhlapi"),
+		dhlUsername:    kit.Env("DHL_API_USERNAME", ""),
+		dhlPassword:    kit.Env("DHL_API_PASSWORD", ""),
+		dhlAccount:     kit.Env("DHL_ACCOUNT_NUMBER", ""),
+		dhlIncoterm:    kit.Env("DHL_INCOTERM", "DAP"),
+		shipperZip:     kit.Env("DHL_SHIPPER_ZIP", ""),
+		shipperCity:    kit.Env("DHL_SHIPPER_CITY", "Dakar"),
+		shipperCountry: kit.Env("DHL_SHIPPER_COUNTRY", "SN"),
 	}
 	go s.consumeOrderEvents(log)
 
@@ -129,6 +144,16 @@ func main() {
 		mux.HandleFunc("GET /dhl/rate", s.dhlRate)
 		mux.HandleFunc("POST /dhl/create-shipment", s.dhlCreateShipment)
 		mux.HandleFunc("GET /dhl/tracking/{tracking_number}", s.dhlRefreshTracking)
+
+		// Portage fidèle du dashboard "Logistique DHL" WordPress
+		// (miad-dhl.php / register_rest_route miad-products/v1) : liste des
+		// commandes candidates à l'expédition, détail enrichi (adresse,
+		// articles, tarif estimé), et création "tout-en-un" (construit le
+		// payload MyDHL depuis order-svc/vendor-svc/catalog-svc, contrairement
+		// à POST /dhl/create-shipment qui exige un dhl_payload déjà prêt).
+		mux.HandleFunc("GET /dhl/orders", s.dhlListOrders)
+		mux.HandleFunc("GET /dhl/order/{id}", s.dhlOrderDetail)
+		mux.HandleFunc("POST /dhl/orders/{id}/create-shipment", s.dhlBuildAndCreateShipment)
 	})
 }
 
@@ -398,6 +423,668 @@ func stageNames() []string {
    traiter au cas par cas selon les besoins réels du catalogue DHL
    utilisé, pas en spéculant sur des règles non vérifiables sans accès
    au PHP original. */
+
+/* ---------- Dashboard Logistique DHL : liste, détail, création tout-en-un ---------- */
+
+type dhlOrderLine struct {
+	ProductID   int64   `json:"product_id"`
+	VariationID int64   `json:"variation_id"`
+	VendorID    int64   `json:"vendor_id"`
+	Name        string  `json:"name"`
+	Quantity    int     `json:"quantity"`
+	UnitPrice   float64 `json:"unit_price_usd"`
+}
+
+type dhlOrderView struct {
+	ID              int64          `json:"id"`
+	Reference       string         `json:"reference"`
+	Status          string         `json:"status"`
+	CustomerID      int64          `json:"customer_id"`
+	VendorID        int64          `json:"vendor_id"`
+	TotalUSD        float64        `json:"total_usd"`
+	Lines           []dhlOrderLine `json:"lines"`
+	ShippingAddress map[string]any `json:"shipping_address"`
+	CreatedAt       string         `json:"created_at"`
+}
+
+func (s *server) fetchOrder(ctx context.Context, orderID int64) (*dhlOrderView, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/orders/%d", s.orderURL, orderID), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("order-svc a répondu %d", resp.StatusCode)
+	}
+	var raw struct {
+		ID              int64           `json:"id"`
+		Reference       string          `json:"reference"`
+		Status          string          `json:"status"`
+		CustomerID      int64           `json:"customer_id"`
+		VendorID        int64           `json:"vendor_id"`
+		TotalUSD        float64         `json:"total_usd"`
+		Lines           json.RawMessage `json:"lines"`
+		ShippingAddress json.RawMessage `json:"shipping_address"`
+		CreatedAt       string          `json:"created_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	out := &dhlOrderView{
+		ID: raw.ID, Reference: raw.Reference, Status: raw.Status,
+		CustomerID: raw.CustomerID, VendorID: raw.VendorID, TotalUSD: raw.TotalUSD,
+		CreatedAt: raw.CreatedAt,
+	}
+	_ = json.Unmarshal(raw.Lines, &out.Lines)
+	if len(raw.ShippingAddress) > 0 {
+		_ = json.Unmarshal(raw.ShippingAddress, &out.ShippingAddress)
+	}
+	return out, nil
+}
+
+// listOrdersForDHL — liste paginée directement depuis order-svc, filtrée
+// par statut candidat à l'expédition (équivalent du wc_get_orders(status=
+// processing/on-hold/completed/shipped) du plugin WordPress).
+func (s *server) listOrdersForDHL(ctx context.Context, limit int, statuses []string) ([]dhlOrderView, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/orders?page_size=%d", s.orderURL, limit), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("order-svc a répondu %d", resp.StatusCode)
+	}
+	var body struct {
+		Items []struct {
+			ID              int64           `json:"id"`
+			Reference       string          `json:"reference"`
+			Status          string          `json:"status"`
+			CustomerID      int64           `json:"customer_id"`
+			VendorID        int64           `json:"vendor_id"`
+			TotalUSD        float64         `json:"total_usd"`
+			ShippingAddress json.RawMessage `json:"shipping_address"`
+			CreatedAt       string          `json:"created_at"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	wanted := map[string]bool{}
+	for _, st := range statuses {
+		wanted[st] = true
+	}
+	out := []dhlOrderView{}
+	for _, it := range body.Items {
+		if it.VendorID == 0 { // ligne "group" (parent) — pas une vraie sous-commande à expédier
+			continue
+		}
+		if len(wanted) > 0 && !wanted[it.Status] {
+			continue
+		}
+		v := dhlOrderView{
+			ID: it.ID, Reference: it.Reference, Status: it.Status,
+			CustomerID: it.CustomerID, VendorID: it.VendorID, TotalUSD: it.TotalUSD,
+			CreatedAt: it.CreatedAt,
+		}
+		if len(it.ShippingAddress) > 0 {
+			_ = json.Unmarshal(it.ShippingAddress, &v.ShippingAddress)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+func shipAddrStr(addr map[string]any, key string) string {
+	if addr == nil {
+		return ""
+	}
+	if v, ok := addr[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func fullNameFromAddr(addr map[string]any) string {
+	first := shipAddrStr(addr, "first_name")
+	last := shipAddrStr(addr, "last_name")
+	name := strings.TrimSpace(first + " " + last)
+	if name == "" {
+		return shipAddrStr(addr, "full_name")
+	}
+	return name
+}
+
+// dhlListOrders — GET /dhl/orders?limit=&status=processing,paid
+func (s *server) dhlListOrders(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := 40
+	if v, err := strconv.Atoi(q.Get("limit")); err == nil && v > 0 && v <= 100 {
+		limit = v
+	}
+	statuses := []string{"processing", "paid", "shipped"}
+	if v := q.Get("status"); v != "" {
+		statuses = strings.Split(v, ",")
+	}
+	orders, err := s.listOrdersForDHL(r.Context(), limit, statuses)
+	if err != nil {
+		kit.Fail(w, 502, "order_svc_unreachable", err.Error())
+		return
+	}
+
+	// Numéro de suivi déjà attribué (une seule requête groupée plutôt qu'un
+	// aller-retour par commande).
+	trackingByOrder := map[int64]string{}
+	rows, err := s.db.Query(r.Context(), "SELECT order_id, tracking_number FROM shipments WHERE order_id = ANY($1)",
+		orderIDs(orders))
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var oid int64
+			var tn *string
+			if rows.Scan(&oid, &tn) == nil && tn != nil {
+				trackingByOrder[oid] = *tn
+			}
+		}
+	}
+
+	out := make([]map[string]any, 0, len(orders))
+	for _, o := range orders {
+		tracking := trackingByOrder[o.ID]
+		out = append(out, map[string]any{
+			"id":              o.ID,
+			"order_number":    o.Reference,
+			"date":            o.CreatedAt,
+			"client_name":     fullNameFromAddr(o.ShippingAddress),
+			"country":         shipAddrStr(o.ShippingAddress, "country"),
+			"city":            shipAddrStr(o.ShippingAddress, "city"),
+			"total":           strconv.FormatFloat(o.TotalUSD, 'f', 2, 64),
+			"status":          o.Status,
+			"tracking_number": tracking,
+			"has_shipment":    tracking != "",
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "orders": out})
+}
+
+func orderIDs(orders []dhlOrderView) []int64 {
+	ids := make([]int64, len(orders))
+	for i, o := range orders {
+		ids[i] = o.ID
+	}
+	return ids
+}
+
+// productInfo — poids/HS/pays d'origine résolus depuis catalog-svc pour
+// une ligne de commande (le prix/nom viennent déjà de la ligne elle-même).
+type productInfo struct {
+	WeightKg      float64
+	HSCode        string
+	OriginCountry string
+}
+
+func (s *server) fetchProductInfo(ctx context.Context, productID int64) productInfo {
+	out := productInfo{WeightKg: 0.5, HSCode: "85444290", OriginCountry: "CN"}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/products/%d", s.catalogURL, productID), nil)
+	if err != nil {
+		return out
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return out
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return out
+	}
+	var p struct {
+		WeightKg      *float64 `json:"weight_kg"`
+		HSCode        string   `json:"hs_code"`
+		OriginCountry string   `json:"origin_country"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&p) != nil {
+		return out
+	}
+	if p.WeightKg != nil && *p.WeightKg > 0 {
+		out.WeightKg = *p.WeightKg
+	}
+	if p.HSCode != "" {
+		out.HSCode = p.HSCode
+	}
+	if p.OriginCountry != "" {
+		out.OriginCountry = p.OriginCountry
+	}
+	return out
+}
+
+type vendorInfo struct {
+	Name    string
+	Country string
+	City    string
+	Address string
+	Phone   string
+}
+
+func (s *server) fetchVendor(ctx context.Context, vendorID int64) *vendorInfo {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendor/%d", s.vendorURL, vendorID), nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	var v struct {
+		Name    string `json:"name"`
+		Country string `json:"country"`
+		City    string `json:"city"`
+		Address string `json:"address"`
+		Phone   string `json:"phone"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&v) != nil {
+		return nil
+	}
+	return &vendorInfo{Name: v.Name, Country: v.Country, City: v.City, Address: v.Address, Phone: v.Phone}
+}
+
+// dhlOrderDetail — GET /dhl/order/{id} : adresse, articles, poids total,
+// code HS, expédition existante, tracking live, tarif estimé (best-effort).
+func (s *server) dhlOrderDetail(w http.ResponseWriter, r *http.Request) {
+	orderID := atoi64(r.PathValue("id"))
+	order, err := s.fetchOrder(r.Context(), orderID)
+	if err != nil {
+		kit.Fail(w, 404, "order_not_found", "commande introuvable : "+err.Error())
+		return
+	}
+
+	items := []map[string]any{}
+	totalWeight := 0.0
+	hsCode := ""
+	for _, l := range order.Lines {
+		info := s.fetchProductInfo(r.Context(), l.ProductID)
+		weight := info.WeightKg * float64(l.Quantity)
+		totalWeight += weight
+		if hsCode == "" {
+			hsCode = info.HSCode
+		}
+		items = append(items, map[string]any{
+			"name": l.Name, "quantity": l.Quantity, "weight": weight, "price": l.UnitPrice,
+		})
+	}
+	if hsCode == "" {
+		hsCode = "85444290"
+	}
+	if totalWeight <= 0 {
+		totalWeight = 1
+	}
+
+	var trackingNumber, labelURL string
+	var shipmentID int64
+	_ = s.db.QueryRow(r.Context(),
+		"SELECT id, tracking_number, label_url FROM shipments WHERE order_id = $1", orderID,
+	).Scan(&shipmentID, &trackingNumber, &labelURL)
+
+	var dhlStatus string
+	dhlEvents := []map[string]any{}
+	if trackingNumber != "" {
+		rows, err := s.db.Query(r.Context(),
+			"SELECT status, description, location, occurred_at FROM tracking_events WHERE shipment_id = $1 ORDER BY occurred_at", shipmentID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var st, desc, loc string
+				var at time.Time
+				if rows.Scan(&st, &desc, &loc, &at) == nil {
+					dhlStatus = st
+					dhlEvents = append(dhlEvents, map[string]any{
+						"timestamp": at.UTC().Format(time.RFC3339), "description": desc, "location": loc,
+					})
+				}
+			}
+		}
+	}
+
+	// Tarif estimé best-effort — uniquement si pas encore expédié, jamais
+	// bloquant pour le reste de la réponse (voir dhlRate : peut échouer si
+	// la ville de destination manque, credentials absents, DHL indisponible).
+	var estimatedRate map[string]any
+	if trackingNumber == "" && s.dhlUsername != "" && s.dhlPassword != "" {
+		destCountry := shipAddrStr(order.ShippingAddress, "country")
+		destCity := shipAddrStr(order.ShippingAddress, "city")
+		if destCountry != "" && destCity != "" {
+			if body, err := s.dhlRequestWithRetry(r.Context(), http.MethodGet, "/rates?"+
+				fmt.Sprintf("accountNumber=%s&originCountryCode=%s&originCityName=%s&destinationCountryCode=%s&destinationCityName=%s&weight=%s&length=20&width=20&height=20&plannedShippingDate=%s&isCustomsDeclarable=true&unitOfMeasurement=metric",
+					s.dhlAccount, s.shipperCountry, s.shipperCity, destCountry, destCity,
+					strconv.FormatFloat(totalWeight, 'f', -1, 64), nextShippingDate()), nil); err == nil {
+				var parsed map[string]any
+				if json.Unmarshal(body, &parsed) == nil {
+					price, currency := extractDHLPrice(parsed)
+					if price > 0 {
+						estimatedRate = map[string]any{"cost": price, "currency": currency}
+					}
+				}
+			}
+		}
+	}
+
+	kit.JSON(w, 200, map[string]any{
+		"ok": true, "id": order.ID, "order_number": order.Reference, "status": order.Status,
+		"date":        order.CreatedAt,
+		"client_name": fullNameFromAddr(order.ShippingAddress), "client_email": shipAddrStr(order.ShippingAddress, "email"),
+		"client_phone": shipAddrStr(order.ShippingAddress, "phone"),
+		"address": map[string]any{
+			"address_1": shipAddrStr(order.ShippingAddress, "address_1"),
+			"city":      shipAddrStr(order.ShippingAddress, "city"),
+			"postcode":  shipAddrStr(order.ShippingAddress, "postcode"),
+			"country":   shipAddrStr(order.ShippingAddress, "country"),
+		},
+		"total": strconv.FormatFloat(order.TotalUSD, 'f', 2, 64),
+		"items": items, "total_weight": totalWeight, "hs_code": hsCode,
+		"tracking_number": trackingNumber, "label_url": labelURL,
+		"dhl_status": dhlStatus, "dhl_events": dhlEvents,
+		"estimated_rate": estimatedRate,
+	})
+}
+
+// nextShippingDate — reproduit la règle du plugin WordPress : le lendemain,
+// sauf weekend (décalé au lundi) ou vendredi après 17h (décalé au lundi+2j
+// pour laisser une vraie marge). Fuseau UTC (le VPS tourne en UTC).
+func nextShippingDate() string {
+	now := time.Now().UTC()
+	switch now.Weekday() {
+	case time.Saturday:
+		now = now.AddDate(0, 0, 2)
+	case time.Sunday:
+		now = now.AddDate(0, 0, 1)
+	case time.Friday:
+		if now.Hour() >= 17 {
+			now = now.AddDate(0, 0, 3)
+		} else {
+			now = now.AddDate(0, 0, 1)
+		}
+	default:
+		now = now.AddDate(0, 0, 1)
+	}
+	return now.Format("2006-01-02")
+}
+
+func atoi64(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
+}
+
+// dhlBuildAndCreateShipment — POST /dhl/orders/{id}/create-shipment
+// Construit le payload MyDHL complet (expéditeur = boutique vendeur si
+// connue sinon expéditeur par défaut, destinataire = adresse de livraison
+// de la commande, articles avec code HS/poids/pays d'origine) puis appelle
+// DHL — équivalent Go de miad_dhl_create_shipment_api() (plugin WordPress).
+// body optionnel : { weight, length, width, height, hs_code } pour corriger
+// manuellement avant envoi (même logique "override" que le PHP).
+func (s *server) dhlBuildAndCreateShipment(w http.ResponseWriter, r *http.Request) {
+	if s.dhlUsername == "" || s.dhlPassword == "" {
+		kit.Fail(w, 503, "dhl_not_configured", "DHL_API_USERNAME / DHL_API_PASSWORD absents")
+		return
+	}
+	orderID := atoi64(r.PathValue("id"))
+	var override struct {
+		Weight *float64 `json:"weight"`
+		Length *float64 `json:"length"`
+		Width  *float64 `json:"width"`
+		Height *float64 `json:"height"`
+		HSCode string   `json:"hs_code"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&override) // corps optionnel
+
+	order, err := s.fetchOrder(r.Context(), orderID)
+	if err != nil {
+		kit.Fail(w, 404, "order_not_found", "commande introuvable : "+err.Error())
+		return
+	}
+	if len(order.Lines) == 0 {
+		kit.Fail(w, 400, "empty_order", "commande sans article — impossible de construire l'expédition")
+		return
+	}
+
+	// --- Expéditeur : boutique du vendeur si connue, sinon config par défaut ---
+	shipperCountry, shipperCity, shipperAddr, shipperName, shipperPhone :=
+		s.shipperCountry, s.shipperCity, "Adresse par défaut", "MIAD Market", "123456789"
+	if vendor := s.fetchVendor(r.Context(), order.VendorID); vendor != nil {
+		if vendor.Country != "" {
+			shipperCountry = vendor.Country
+		}
+		if vendor.City != "" {
+			shipperCity = vendor.City
+		}
+		if vendor.Address != "" {
+			shipperAddr = vendor.Address
+		}
+		if vendor.Name != "" {
+			shipperName = vendor.Name
+		}
+		if vendor.Phone != "" {
+			shipperPhone = vendor.Phone
+		}
+	}
+
+	// --- Destinataire : adresse de livraison de la commande ---
+	destCountry := shipAddrStr(order.ShippingAddress, "country")
+	destCity := shipAddrStr(order.ShippingAddress, "city")
+	if destCountry == "" || destCity == "" {
+		kit.Fail(w, 400, "missing_address", "adresse de livraison incomplète (pays/ville) sur cette commande")
+		return
+	}
+
+	// --- Articles : poids/HS/origine résolus depuis catalog-svc ---
+	totalWeight, totalValue := 0.0, 0.0
+	lineItems := []map[string]any{}
+	firstHSCode := ""
+	for i, l := range order.Lines {
+		info := s.fetchProductInfo(r.Context(), l.ProductID)
+		weight := info.WeightKg * float64(l.Quantity)
+		totalWeight += weight
+		totalValue += l.UnitPrice * float64(l.Quantity)
+		hsCode := info.HSCode
+		if override.HSCode != "" {
+			hsCode = override.HSCode
+		}
+		if firstHSCode == "" {
+			firstHSCode = hsCode
+		}
+		desc := l.Name
+		if len(desc) > 35 {
+			desc = desc[:35]
+		}
+		lineItems = append(lineItems, map[string]any{
+			"number": i + 1, "description": desc, "price": round2(l.UnitPrice),
+			"quantity":            map[string]any{"value": l.Quantity, "unitOfMeasurement": "PCS"},
+			"commodityCodes":      []map[string]any{{"typeCode": "outbound", "value": hsCode}},
+			"exportReasonType":    "permanent",
+			"manufacturerCountry": info.OriginCountry,
+			"weight":              map[string]any{"netValue": round3(info.WeightKg), "grossValue": round3(info.WeightKg)},
+		})
+	}
+	if totalWeight <= 0 {
+		totalWeight = 1
+	}
+	pkgLength, pkgWidth, pkgHeight := 20.0, 20.0, 20.0
+	if override.Weight != nil && *override.Weight > 0 {
+		totalWeight = *override.Weight
+	}
+	if override.Length != nil && *override.Length > 0 {
+		pkgLength = *override.Length
+	}
+	if override.Width != nil && *override.Width > 0 {
+		pkgWidth = *override.Width
+	}
+	if override.Height != nil && *override.Height > 0 {
+		pkgHeight = *override.Height
+	}
+
+	accounts := []map[string]any{
+		{"typeCode": "shipper", "number": s.dhlAccount},
+		{"typeCode": "payer", "number": s.dhlAccount},
+	}
+	if s.dhlIncoterm == "DDP" {
+		accounts = append(accounts, map[string]any{"typeCode": "duties-taxes", "number": s.dhlAccount})
+	}
+
+	contentsDesc := []string{}
+	for _, l := range order.Lines {
+		contentsDesc = append(contentsDesc, fmt.Sprintf("%s (x%d)", l.Name, l.Quantity))
+	}
+	description := strings.Join(contentsDesc, ", ")
+	if len(description) > 70 {
+		description = description[:70]
+	}
+
+	payload := map[string]any{
+		"plannedShippingDateAndTime": nextShippingDate() + "T10:00:00 GMT+00:00",
+		"pickup":                     map[string]any{"isRequested": false},
+		"productCode":                "P",
+		"accounts":                   accounts,
+		"customerDetails": map[string]any{
+			"shipperDetails": map[string]any{
+				"postalAddress": map[string]any{
+					"postalCode": s.shipperZip, "cityName": shipperCity,
+					"countryCode": shipperCountry, "addressLine1": shipperAddr,
+				},
+				"contactInformation": map[string]any{
+					"companyName": shipperName, "fullName": shipperName, "phone": onlyDigits(shipperPhone),
+				},
+			},
+			"receiverDetails": map[string]any{
+				"postalAddress": map[string]any{
+					"postalCode": shipAddrStr(order.ShippingAddress, "postcode"), "cityName": destCity,
+					"countryCode": destCountry, "addressLine1": shipAddrStr(order.ShippingAddress, "address_1"),
+				},
+				"contactInformation": map[string]any{
+					"companyName": fullNameFromAddr(order.ShippingAddress), "fullName": fullNameFromAddr(order.ShippingAddress),
+					"phone": onlyDigits(shipAddrStr(order.ShippingAddress, "phone")), "email": shipAddrStr(order.ShippingAddress, "email"),
+				},
+			},
+		},
+		"content": map[string]any{
+			"packages": []map[string]any{
+				{"weight": totalWeight, "dimensions": map[string]any{"length": pkgLength, "width": pkgWidth, "height": pkgHeight}},
+			},
+			"isCustomsDeclarable":   true,
+			"declaredValue":         round2(totalValue),
+			"declaredValueCurrency": "USD",
+			"exportDeclaration":     map[string]any{"lineItems": lineItems},
+			"description":           description,
+			"incoterm":              s.dhlIncoterm,
+			"unitOfMeasurement":     "metric",
+		},
+		"outputImageProperties": map[string]any{
+			"imageOptions": []map[string]any{
+				{"typeCode": "label", "templateName": "ECOM26_84_001"},
+				{"typeCode": "waybillDoc", "isRequested": true},
+				{"typeCode": "invoice", "templateName": "COMMERCIAL_INVOICE_P_10", "invoiceType": "commercial"},
+			},
+		},
+	}
+	payloadJSON, _ := json.Marshal(payload)
+
+	body, err := s.dhlRequestWithRetry(r.Context(), http.MethodPost, "/shipments", payloadJSON)
+	if err != nil {
+		s.recordShipmentFailure(r.Context(), orderID, err.Error())
+		kit.Fail(w, 502, "dhl_unreachable", err.Error())
+		return
+	}
+	var parsed struct {
+		ShipmentTrackingNumber string `json:"shipmentTrackingNumber"`
+		Documents              []struct {
+			Content  string `json:"content"`
+			TypeCode string `json:"typeCode"`
+		} `json:"documents"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil || parsed.ShipmentTrackingNumber == "" {
+		msg := fmt.Sprintf("réponse DHL inattendue : %s", string(body))
+		s.recordShipmentFailure(r.Context(), orderID, msg)
+		kit.Fail(w, 502, "dhl_response_unparseable", msg)
+		return
+	}
+
+	// label/waybill/invoice restent en base64 tel que reçu de DHL — l'upload
+	// vers MinIO (équivalent du wp_upload_dir() PHP) est un chantier séparé,
+	// signalé explicitement plutôt que silencieusement omis.
+	var labelB64, waybillB64, invoiceB64 string
+	for _, doc := range parsed.Documents {
+		switch doc.TypeCode {
+		case "label":
+			labelB64 = doc.Content
+		case "waybillDoc":
+			waybillB64 = doc.Content
+		case "invoice":
+			invoiceB64 = doc.Content
+		}
+	}
+
+	var shipmentID int64
+	err = s.db.QueryRow(r.Context(), `
+		INSERT INTO shipments (order_id, carrier, tracking_number, status, origin_country, origin_city, dest_country, dest_city)
+		VALUES ($1,'dhl',$2,'label_created',$3,$4,$5,$6)
+		ON CONFLICT (tracking_number) DO UPDATE SET status = 'label_created'
+		RETURNING id`,
+		orderID, parsed.ShipmentTrackingNumber, shipperCountry, shipperCity, destCountry, destCity,
+	).Scan(&shipmentID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	s.recordEvent(r.Context(), shipmentID, "label_created",
+		"Expédition DHL créée. Tracking: "+parsed.ShipmentTrackingNumber, "", "dhl_api")
+	kit.Publish(s.kafka, "shipment.status_changed", fmt.Sprint(shipmentID), map[string]any{
+		"shipment_id": shipmentID, "order_id": orderID, "status": "label_created",
+		"tracking_number": parsed.ShipmentTrackingNumber, "at": time.Now().UTC().Format(time.RFC3339),
+	})
+
+	kit.JSON(w, 200, map[string]any{
+		"success": true, "shipment_id": shipmentID,
+		"tracking_number":     parsed.ShipmentTrackingNumber,
+		"message":             "Expédition créée avec succès ! Tracking: " + parsed.ShipmentTrackingNumber,
+		"label_data_base64":   labelB64,
+		"waybill_data_base64": waybillB64,
+		"invoice_data_base64": invoiceB64,
+	})
+}
+
+func (s *server) recordShipmentFailure(ctx context.Context, orderID int64, reason string) {
+	var shipmentID int64
+	err := s.db.QueryRow(ctx, "SELECT id FROM shipments WHERE order_id = $1", orderID).Scan(&shipmentID)
+	if err != nil {
+		return // pas d'expédition en cours pour cette commande — rien à journaliser
+	}
+	s.recordEvent(ctx, shipmentID, "pending_label", "Échec de la création d'expédition DHL : "+reason, "", "manual")
+}
+
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
+func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+func onlyDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "123456789"
+	}
+	return b.String()
+}
 
 func (s *server) dhlAuthHeader(req *http.Request) {
 	token := base64.StdEncoding.EncodeToString([]byte(s.dhlUsername + ":" + s.dhlPassword))

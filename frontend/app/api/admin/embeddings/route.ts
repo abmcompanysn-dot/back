@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCloudflareBindings, EMBEDDING_MODEL, type VectorizeVector } from '@/lib/cloudflare-ai'
 import { hasWooCredentials, fetchAllPublishedWooProducts, fetchWooProductsByIds } from '@/lib/woo-catalog'
+import { CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
@@ -12,9 +13,8 @@ function stripHtml(html: string): string {
 }
 
 function productText(p: any): string {
-  const category = p.categories?.[0]?.name || ''
-  const description = stripHtml(p.short_description || p.description || '')
-  return [p.name, category, description].filter(Boolean).join(' — ').slice(0, 2000)
+  const description = stripHtml(p.description || '')
+  return [p.name, description].filter(Boolean).join(' — ').slice(0, 2000)
 }
 
 // Génère les embeddings du catalogue réel et les upsert dans Vectorize.
@@ -48,6 +48,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ synced: 0, total: 0, message: 'Aucun produit trouvé' })
   }
 
+  // search/semantic filtre les résultats Vectorize par categorySlug/countryCode
+  // dans les métadonnées — catalog-svc ne renvoie que category_id/vendor_id
+  // (champs plats), donc on résout ici categorySlug (catégories fr) et
+  // countryCode (via vendor-svc) une seule fois pour tout le lot plutôt que
+  // par produit.
+  const [catRes, storesRes] = await Promise.all([
+    fetch(`${CATALOG_SVC_URL}/categories?lang=fr`, { cache: 'no-store' }).catch(() => null),
+    fetch(`${VENDOR_SVC_URL}/stores?page_size=100`, { cache: 'no-store' }).catch(() => null),
+  ])
+  const categorySlugById: Record<string, string> = {}
+  if (catRes?.ok) {
+    const catData: any = await catRes.json().catch(() => ({}))
+    for (const c of (catData.items || catData.categories || [])) categorySlugById[String(c.id)] = c.slug || ''
+  }
+  const countryByVendorId: Record<string, string> = {}
+  if (storesRes?.ok) {
+    const storesData: any = await storesRes.json().catch(() => ({}))
+    for (const s of (storesData.items || storesData.stores || [])) countryByVendorId[String(s.id)] = (s.country || '').toLowerCase()
+  }
+
   let synced = 0
   const errors: { id: number; error: string }[] = []
 
@@ -60,11 +80,9 @@ export async function POST(req: Request) {
         id: String(p.id),
         values: embeddingRes.data[idx],
         metadata: {
-          category: p.categories?.[0]?.name || '',
-          categorySlug: p.categories?.[0]?.slug || '',
-          vendorSlug: p.store?.shop_url?.split('/').filter(Boolean).pop() || '',
-          countryCode: (p.store?.address?.country || '').toLowerCase(),
-          price: parseFloat(p.price || '0'),
+          categorySlug: categorySlugById[String(p.category_id)] || '',
+          countryCode: countryByVendorId[String(p.vendor_id)] || '',
+          price: parseFloat(p.price || p.price_usd || '0'),
         },
       }))
       await vectorize.upsert(vectors)

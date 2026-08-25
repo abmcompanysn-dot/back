@@ -148,7 +148,11 @@ func main() {
 		mux.HandleFunc("PUT /admin/api/orders/{id}/status", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPut, s.orderURL+"/orders/"+r.PathValue("id")+"/status")
 		}))
-		mux.HandleFunc("GET /admin/api/orders/{id}/events", s.requireAdminOrRep(s.proxyPath(func(id string) string {
+		// Renommé order-events (au lieu de orders/{id}/events) : net/http
+		// refuse d'enregistrer ce pattern à côté de orders/parent/{id} — ni
+		// l'un ni l'autre n'a de préfixe littéral qui les départage sans
+		// ambiguïté (panic constaté au démarrage avant ce renommage).
+		mux.HandleFunc("GET /admin/api/order-events/{id}", s.requireAdminOrRep(s.proxyPath(func(id string) string {
 			return s.orderURL + "/order-events/" + id
 		})))
 		mux.HandleFunc("POST /admin/api/orders/{id}/cancel", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,7 @@ import AuthPage from './AuthClient'
 // ca, Next.js n'applique le nonce CSP a aucun de ses scripts (chunks
 // webpack, bootstrap RSC...), ce qui bloque toute la page (liens magiques
 // Firebase, reset de mot de passe). Meme correctif que sur
-// app/espace-representant/page.tsx et app/email/batekossi@gmail.com/page.tsx.
+// app/espace-representant/page.tsx.
 export const dynamic = 'force-dynamic'
 export const runtime = 'edge';
 

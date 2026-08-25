@@ -68,6 +68,10 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS short_description TEXT DEFAULT '';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS meta_title TEXT DEFAULT '';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS meta_description TEXT DEFAULT '';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+-- Douane DHL (module Logistique) : code HS et pays de fabrication déclarés
+-- à l'export — 85444290 / défaut historique du plugin WordPress si absent.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS hs_code TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS origin_country TEXT DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products (sku) WHERE sku <> '';
 CREATE INDEX IF NOT EXISTS idx_products_brand ON products (brand_id);
 
@@ -387,16 +391,18 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	lang := defLang(r.URL.Query().Get("lang"))
 	row := s.db.QueryRow(r.Context(), `
 		SELECT p.id, p.trid, p.lang, p.vendor_id, p.category_id, p.name, p.slug,
-		       p.description, p.price_usd, p.sale_price_usd, p.status, p.images, p.is_variable
+		       p.description, p.price_usd, p.sale_price_usd, p.status, p.images, p.is_variable,
+		       p.weight_kg, p.hs_code, p.origin_country
 		FROM products p WHERE p.id = $1 AND p.lang = $2`, id, lang)
 
 	var pID, vendorID, catID int64
 	var price float64
-	var salePrice *float64
-	var trid, l, name, slug, desc, status string
+	var salePrice, weightKg *float64
+	var trid, l, name, slug, desc, status, hsCode, originCountry string
 	var images []byte
 	var isVar bool
-	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &name, &slug, &desc, &price, &salePrice, &status, &images, &isVar); err != nil {
+	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &name, &slug, &desc, &price, &salePrice, &status, &images, &isVar,
+		&weightKg, &hsCode, &originCountry); err != nil {
 		if err == pgx.ErrNoRows {
 			kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable en lang=%s — erreur explicite, pas de page vide silencieuse", id, lang))
 			return
@@ -436,6 +442,9 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := productToWooShape(pID, trid, l, vendorID, catID, name, slug, desc, price, salePrice, status, isVar, images, variations)
+	out["weight_kg"] = weightKg
+	out["hs_code"] = hsCode
+	out["origin_country"] = originCountry
 	out["linked"] = map[string]any{"id": linkedID, "lang": linkedLang}
 	// Compat WPML : le frontend lit p.translations pour le switch FR/EN.
 	if linkedID != 0 {
@@ -796,7 +805,7 @@ func (s *server) listCategories(w http.ResponseWriter, r *http.Request) {
 			"name": name, "slug": slug,
 			"image": map[string]any{"src": img}, "image_url": img,
 			"productCount": count, "count": count,
-			"isRoot": parent == 0,
+			"isRoot":     parent == 0,
 			"sort_order": sortOrder, "commission_rate": commissionRate,
 		})
 	}
@@ -863,12 +872,12 @@ func (s *server) createCategory(w http.ResponseWriter, r *http.Request) {
 func (s *server) updateCategory(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	var body struct {
-		Name           *string  `json:"name"`
-		ParentID       *int64   `json:"parent_id"`
-		ImageURL       *string  `json:"image_url"`
-		SortOrder      *int64   `json:"sort_order"`
-		CommissionRate *float64 `json:"commission_rate"`
-		ClearCommission bool    `json:"clear_commission"`
+		Name            *string  `json:"name"`
+		ParentID        *int64   `json:"parent_id"`
+		ImageURL        *string  `json:"image_url"`
+		SortOrder       *int64   `json:"sort_order"`
+		CommissionRate  *float64 `json:"commission_rate"`
+		ClearCommission bool     `json:"clear_commission"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
@@ -1260,27 +1269,29 @@ func (s *server) updateProductImages(w http.ResponseWriter, r *http.Request) {
 func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	var body struct {
-		Name              *string  `json:"name"`
-		Description       *string  `json:"description"`
-		ShortDescription  *string  `json:"short_description"`
-		CategoryID        *int64   `json:"category_id"`
-		BrandID           *int64   `json:"brand_id"`
-		PriceUSD          *float64 `json:"price_usd"`
-		SalePriceUSD      *float64 `json:"sale_price_usd"`
-		SKU               *string  `json:"sku"`
-		Barcode           *string  `json:"barcode"`
-		Stock             *int     `json:"stock"`
-		LowStockThreshold *int     `json:"low_stock_threshold"`
-		BackordersAllowed *bool    `json:"backorders_allowed"`
-		WeightKg          *float64 `json:"weight_kg"`
-		LengthCm          *float64 `json:"length_cm"`
-		WidthCm           *float64 `json:"width_cm"`
-		HeightCm          *float64 `json:"height_cm"`
-		ShippingClass     *string  `json:"shipping_class"`
-		MetaTitle         *string  `json:"meta_title"`
-		MetaDescription   *string  `json:"meta_description"`
+		Name              *string   `json:"name"`
+		Description       *string   `json:"description"`
+		ShortDescription  *string   `json:"short_description"`
+		CategoryID        *int64    `json:"category_id"`
+		BrandID           *int64    `json:"brand_id"`
+		PriceUSD          *float64  `json:"price_usd"`
+		SalePriceUSD      *float64  `json:"sale_price_usd"`
+		SKU               *string   `json:"sku"`
+		Barcode           *string   `json:"barcode"`
+		Stock             *int      `json:"stock"`
+		LowStockThreshold *int      `json:"low_stock_threshold"`
+		BackordersAllowed *bool     `json:"backorders_allowed"`
+		WeightKg          *float64  `json:"weight_kg"`
+		LengthCm          *float64  `json:"length_cm"`
+		WidthCm           *float64  `json:"width_cm"`
+		HeightCm          *float64  `json:"height_cm"`
+		ShippingClass     *string   `json:"shipping_class"`
+		MetaTitle         *string   `json:"meta_title"`
+		MetaDescription   *string   `json:"meta_description"`
 		Images            *[]string `json:"images"`
-		Status            *string  `json:"status"`
+		Status            *string   `json:"status"`
+		HSCode            *string   `json:"hs_code"`
+		OriginCountry     *string   `json:"origin_country"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
@@ -1331,6 +1342,12 @@ func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.WeightKg != nil {
 		add("weight_kg", *body.WeightKg)
+	}
+	if body.HSCode != nil {
+		add("hs_code", *body.HSCode)
+	}
+	if body.OriginCountry != nil {
+		add("origin_country", *body.OriginCountry)
 	}
 	if body.LengthCm != nil {
 		add("length_cm", *body.LengthCm)
@@ -1576,11 +1593,11 @@ func (s *server) listBrands(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createBrand(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name       string `json:"name"`
-		LogoURL    string `json:"logo_url"`
+		Name        string `json:"name"`
+		LogoURL     string `json:"logo_url"`
 		Description string `json:"description"`
-		WebsiteURL string `json:"website_url"`
-		Status     string `json:"status"`
+		WebsiteURL  string `json:"website_url"`
+		Status      string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())

@@ -59,7 +59,7 @@ export function OrderDetail() {
       const o = await api.get<OrderFull>(`/admin/api/orders/${id}`)
       setOrder(o)
       setNewStatus(o.status)
-      const ev = await api.get<{ items: OrderEvent[] }>(`/admin/api/orders/${id}/events`)
+      const ev = await api.get<{ items: OrderEvent[] }>(`/admin/api/order-events/${id}`)
       setEvents(ev.items || [])
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'échec du chargement')

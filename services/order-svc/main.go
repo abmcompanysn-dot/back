@@ -334,26 +334,33 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	row := s.db.QueryRow(r.Context(), `
 		SELECT id, reference, customer_id, vendor_id, parent_order_id, status, lines,
-		       subtotal_usd, shipping_usd, total_usd, coupon_code, created_at, updated_at
+		       subtotal_usd, shipping_usd, total_usd, coupon_code, shipping_address, billing_address, created_at, updated_at
 		FROM orders WHERE id = $1`, id)
 	var oid, cust, vendor, parent int64
 	var subtotal, shipping, total float64
 	var ref, status, coupon string
-	var lines []byte
+	var lines, shipAddr, billAddr []byte
 	var createdAt, updatedAt time.Time
 	if err := row.Scan(&oid, &ref, &cust, &vendor, &parent, &status, &lines,
-		&subtotal, &shipping, &total, &coupon, &createdAt, &updatedAt); err != nil {
+		&subtotal, &shipping, &total, &coupon, &shipAddr, &billAddr, &createdAt, &updatedAt); err != nil {
 		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande %d introuvable", id))
 		return
 	}
-	kit.JSON(w, 200, map[string]any{
+	out := map[string]any{
 		"id": oid, "reference": ref, "customer_id": cust, "vendor_id": vendor,
 		"parent_order_id": parent, "status": status, "lines": json.RawMessage(lines),
 		"subtotal_usd": subtotal, "shipping_usd": shipping, "total_usd": total,
 		"coupon_code": coupon,
 		"created_at":  createdAt.UTC().Format(time.RFC3339),
 		"updated_at":  updatedAt.UTC().Format(time.RFC3339),
-	})
+	}
+	if len(shipAddr) > 0 {
+		out["shipping_address"] = json.RawMessage(shipAddr)
+	}
+	if len(billAddr) > 0 {
+		out["billing_address"] = json.RawMessage(billAddr)
+	}
+	kit.JSON(w, 200, out)
 }
 
 // getParentOrder — recompose une vue "commande unique" au format
