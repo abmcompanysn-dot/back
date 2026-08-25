@@ -130,8 +130,9 @@ func main() {
 		mux.HandleFunc("POST /auth/admin/2fa/setup", s.setup2FA) // exige un JWT role=admin déjà valide (post-login sans 2FA, ou 2FA déjà active pour la remplacer)
 		mux.HandleFunc("POST /auth/admin/2fa/verify", s.verify2FASetup)
 		mux.HandleFunc("POST /auth/admin/2fa/disable", s.disable2FA)
-		mux.HandleFunc("GET /customers", s.listCustomers) // role admin exigé
-		mux.HandleFunc("GET /customer/{id}", s.getCustomer)
+		mux.HandleFunc("GET /customers", s.listCustomers)                                // role admin exigé
+		mux.HandleFunc("GET /customer/{id}", s.getCustomer)                              // role admin exigé
+		mux.HandleFunc("GET /admins", s.listAdmins)                                      // role admin exigé
 		mux.HandleFunc("POST /auth/impersonate-vendor/{vendor_id}", s.impersonateVendor) // role admin exigé
 	})
 }
@@ -789,7 +790,7 @@ func (s *server) listCustomers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, email, phone, preferred_lang, created_at FROM customers
+		SELECT id, email, phone, preferred_lang, must_reset_password, vendor_id, created_at FROM customers
 		ORDER BY id DESC LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize))
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -799,13 +800,33 @@ func (s *server) listCustomers(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var email, phone, lang string
+		var email, phone *string // email/phone sont nullable (TEXT UNIQUE, pas NOT NULL) — un Scan vers *string
+		var lang string          // évite l'échec silencieux qui laissait created_at à sa zero-value 0001-01-01
+		var mustReset bool
+		var vendorID *int64
 		var at time.Time
-		_ = rows.Scan(&id, &email, &phone, &lang, &at)
-		items = append(items, map[string]any{
-			"id": id, "email": email, "phone": phone, "preferred_lang": lang,
+		if err := rows.Scan(&id, &email, &phone, &lang, &mustReset, &vendorID, &at); err != nil {
+			kit.Fail(w, 500, "db_error", "lecture client échouée : "+err.Error())
+			return
+		}
+		item := map[string]any{
+			"id": id, "preferred_lang": lang, "must_reset_password": mustReset,
 			"created_at": at.UTC().Format(time.RFC3339),
-		})
+		}
+		if email != nil {
+			item["email"] = *email
+		} else {
+			item["email"] = ""
+		}
+		if phone != nil {
+			item["phone"] = *phone
+		} else {
+			item["phone"] = ""
+		}
+		if vendorID != nil {
+			item["vendor_id"] = *vendorID
+		}
+		items = append(items, item)
 	}
 	kit.JSON(w, 200, map[string]any{
 		"items": items, "page": page, "page_size": pageSize,
@@ -813,24 +834,89 @@ func (s *server) listCustomers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getCustomer — fiche complète (module Utilisateurs) : email/phone sont
+// scannés en *string (nullable côté schéma, voir customers.email/phone)
+// pour ne jamais confondre "client introuvable" (vraie 404) avec "client
+// trouvé mais avec un champ NULL" (ancien bug : un Scan vers string sur
+// une valeur NULL échouait et renvoyait 404 à tort — un client inscrit
+// par téléphone seul, sans email, devenait invisible ici).
+// Réservé aux admins : cette route n'exigeait aucune authentification
+// avant (faille — n'importe quel appelant interne au cluster pouvait
+// énumérer email/téléphone/adresses par id), corrigé au même moment que
+// le bug de scan ci-dessus.
 func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	row := s.db.QueryRow(r.Context(), `
-		SELECT id, email, phone, full_name, addresses, preferred_lang, created_at
+		SELECT id, email, phone, full_name, addresses, preferred_lang, must_reset_password, vendor_id, created_at
 		FROM customers WHERE id = $1`, id)
 	var cid int64
-	var email, phone, name, lang string
+	var email, phone *string
+	var name, lang string
 	var addresses []byte
+	var mustReset bool
+	var vendorID *int64
 	var at time.Time
-	if err := row.Scan(&cid, &email, &phone, &name, &addresses, &lang, &at); err != nil {
+	if err := row.Scan(&cid, &email, &phone, &name, &addresses, &lang, &mustReset, &vendorID, &at); err != nil {
 		kit.Fail(w, 404, "customer_not_found", fmt.Sprintf("compte %d introuvable", id))
 		return
 	}
-	kit.JSON(w, 200, map[string]any{
-		"id": cid, "email": email, "phone": phone, "full_name": name,
+	out := map[string]any{
+		"id": cid, "full_name": name,
 		"addresses": json.RawMessage(addresses), "preferred_lang": lang,
-		"created_at": at.UTC().Format(time.RFC3339),
-	})
+		"must_reset_password": mustReset,
+		"created_at":          at.UTC().Format(time.RFC3339),
+	}
+	if email != nil {
+		out["email"] = *email
+	} else {
+		out["email"] = ""
+	}
+	if phone != nil {
+		out["phone"] = *phone
+	} else {
+		out["phone"] = ""
+	}
+	if vendorID != nil {
+		out["vendor_id"] = *vendorID
+	}
+	kit.JSON(w, 200, out)
+}
+
+// listAdmins — comptes du back-office (module Utilisateurs), jamais le
+// hash/sel du mot de passe. totp_enabled exposé pour que l'UI affiche si
+// la 2FA est active sans avoir à la deviner.
+func (s *server) listAdmins(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, email, role, totp_enabled, created_at FROM admins ORDER BY id")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var email, role string
+		var totpEnabled bool
+		var at time.Time
+		if err := rows.Scan(&id, &email, &role, &totpEnabled, &at); err != nil {
+			kit.Fail(w, 500, "db_error", "lecture admin échouée : "+err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "email": email, "role": role, "totp_enabled": totpEnabled,
+			"created_at": at.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items, "total": len(items)})
 }
 
 // impersonateVendor — "se connecter en tant que" (module Vendeurs) :

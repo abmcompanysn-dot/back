@@ -3,7 +3,8 @@ import { AuthProvider, useAuth } from './lib/auth'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Overview } from './pages/Overview'
-import { CUSTOMER_COLUMNS, ListView } from './pages/ListView'
+import { AllUsers } from './pages/users/AllUsers'
+import { CustomerDetail } from './pages/users/CustomerDetail'
 import { Shipping } from './pages/Shipping'
 import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
@@ -26,9 +27,6 @@ import { Returns } from './pages/orders/Returns'
 import { FinanceOverview } from './pages/finance/FinanceOverview'
 import { Transactions } from './pages/finance/Transactions'
 import { Gateways } from './pages/finance/Gateways'
-import { IconCustomers } from './components/Icons'
-
-const emptyIconProps = { width: 40, height: 40, strokeWidth: 1.4 } as const
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -80,19 +78,9 @@ function AppRoutes() {
         <Route path="vendors/kyc" element={<VendorKYC />} />
         <Route path="vendors/payouts" element={<Payouts />} />
         <Route path="vendors/:id" element={<VendorDetail />} />
-        <Route
-          path="customers"
-          element={
-            <ListView
-              path="/admin/api/customers"
-              columns={CUSTOMER_COLUMNS}
-              title="Clients"
-              subtitle="Comptes acheteurs"
-              emptyIcon={<IconCustomers {...emptyIconProps} />}
-              emptyTitle="Aucun client inscrit pour le moment"
-            />
-          }
-        />
+        <Route path="customers" element={<Navigate to="/admin/users" replace />} />
+        <Route path="users" element={<AllUsers />} />
+        <Route path="users/customers/:id" element={<CustomerDetail />} />
         <Route path="payments" element={<Navigate to="/admin/finance" replace />} />
         <Route path="finance" element={<FinanceOverview />} />
         <Route path="finance/transactions" element={<Transactions />} />

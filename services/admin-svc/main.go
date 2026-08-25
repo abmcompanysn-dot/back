@@ -262,6 +262,25 @@ func main() {
 			forwardWithBody(w, r, http.MethodPost, s.paymentURL+"/payout-requests/"+r.PathValue("id")+"/reject")
 		}))
 		mux.HandleFunc("GET /admin/api/customers", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/customers" })))
+		mux.HandleFunc("GET /admin/api/customer/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, s.authURL+"/customer/"+r.PathValue("id"), nil)
+			if err != nil {
+				kit.Fail(w, 500, "upstream_request_error", err.Error())
+				return
+			}
+			req.Header.Set("Authorization", r.Header.Get("Authorization"))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				kit.Fail(w, 502, "upstream_unreachable", err.Error())
+				return
+			}
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+		}))
+		// Module Utilisateurs : vue unifiée boutiques/clients/admins.
+		mux.HandleFunc("GET /admin/api/admins", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/admins" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))
 		mux.HandleFunc("GET /admin/api/finance/overview", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/overview" })))
 		mux.HandleFunc("GET /admin/api/finance/transactions", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/transactions" })))
