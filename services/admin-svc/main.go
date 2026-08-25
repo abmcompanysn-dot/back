@@ -252,6 +252,9 @@ func main() {
 		}))
 		mux.HandleFunc("GET /admin/api/customers", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/customers" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))
+		mux.HandleFunc("GET /admin/api/finance/overview", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/overview" })))
+		mux.HandleFunc("GET /admin/api/finance/transactions", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/transactions" })))
+		mux.HandleFunc("GET /admin/api/finance/gateways", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payment-methods" })))
 		mux.HandleFunc("GET /admin/api/shipping-quote", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping-rates/quote" })))
 		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
@@ -300,6 +303,39 @@ func main() {
 		})))
 		mux.HandleFunc("POST /admin/api/dhl/orders/{id}/create-shipment", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.fulfillmentURL+"/dhl/orders/"+r.PathValue("id")+"/create-shipment")
+		}))
+
+		// Configuration DHL — portage de l'onglet "Réglages" du plugin
+		// WordPress (identifiants API, adresse expéditeur, codes HS,
+		// boîtes personnalisées, tests & logs), voir fulfillment-svc.
+		mux.HandleFunc("GET /admin/api/dhl/settings", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/dhl/settings" })))
+		mux.HandleFunc("PUT /admin/api/dhl/settings", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPut, s.fulfillmentURL+"/dhl/settings")
+		}))
+		mux.HandleFunc("POST /admin/api/dhl/settings/test-connection", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.fulfillmentURL+"/dhl/settings/test-connection")
+		}))
+
+		mux.HandleFunc("GET /admin/api/dhl/hs-codes", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/dhl/hs-codes" })))
+		mux.HandleFunc("POST /admin/api/dhl/hs-codes", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.fulfillmentURL+"/dhl/hs-codes")
+		}))
+		mux.HandleFunc("DELETE /admin/api/dhl/hs-codes/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.fulfillmentURL+"/dhl/hs-codes/"+r.PathValue("id"))
+		}))
+
+		mux.HandleFunc("GET /admin/api/dhl/boxes", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/dhl/boxes" })))
+		mux.HandleFunc("POST /admin/api/dhl/boxes", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.fulfillmentURL+"/dhl/boxes")
+		}))
+		mux.HandleFunc("DELETE /admin/api/dhl/boxes/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.fulfillmentURL+"/dhl/boxes/"+r.PathValue("id"))
+		}))
+
+		mux.HandleFunc("GET /admin/api/dhl/tests", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/dhl/tests" })))
+		mux.HandleFunc("GET /admin/api/dhl/logs", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/dhl/logs" })))
+		mux.HandleFunc("DELETE /admin/api/dhl/logs", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.fulfillmentURL+"/dhl/logs")
 		}))
 
 		// SPA React : sert les assets embarqués, retombe sur index.html

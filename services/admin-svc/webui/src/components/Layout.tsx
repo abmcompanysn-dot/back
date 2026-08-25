@@ -29,7 +29,7 @@ const TABS = [
   { path: '/admin/shipping', label: 'Livraison', icon: IconShipping },
   { path: '/admin/marketing', label: 'Marketing', icon: IconMarketing },
   { path: '/admin/email-templates', label: 'Modèles de messages', icon: IconMail },
-  { path: '/admin/payments', label: 'Finances', icon: IconFinance },
+  { path: '/admin/finance', label: 'Finances', icon: IconFinance },
   { path: '/admin/security', label: 'Sécurité', icon: IconSecurity },
   { path: '/admin/system', label: 'Système', icon: IconSystem },
 ]

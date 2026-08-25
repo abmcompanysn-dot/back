@@ -66,12 +66,3 @@ export const CUSTOMER_COLUMNS: Column[] = [
   { key: 'preferred_lang', label: 'preferred_lang' },
   { key: 'created_at', label: 'created_at' },
 ]
-
-export const PAYMENT_COLUMNS: Column[] = [
-  { key: 'id', label: 'id' },
-  { key: 'order_id', label: 'order_id' },
-  { key: 'provider', label: 'provider' },
-  { key: 'status', label: 'status', badge: true },
-  { key: 'amount_usd', label: 'amount_usd' },
-  { key: 'created_at', label: 'created_at' },
-]

@@ -157,6 +157,8 @@ func main() {
 		mux.HandleFunc("GET /payout-requests", s.listPayoutRequests)
 		mux.HandleFunc("POST /payout-requests/{id}/approve", s.approvePayout)
 		mux.HandleFunc("POST /payout-requests/{id}/reject", s.rejectPayout)
+		mux.HandleFunc("GET /finance/overview", s.financeOverview)
+		mux.HandleFunc("GET /finance/transactions", s.financeTransactions)
 	})
 }
 
@@ -177,6 +179,146 @@ func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	kit.JSON(w, 200, map[string]any{"gateways": gateways})
+}
+
+/* ---------- Finances : agrégation (module Finances) ---------- */
+
+// financeOverview — GMV, revenu commission plateforme et volume par
+// méthode sur une période (?period=today|7d|30d|year, défaut 30d).
+// Ne recalcule rien depuis les commandes : s'appuie sur payments.status='confirmed'
+// (paiements réellement encaissés) et sur wallet_transactions type='commission'
+// (déjà posé au module Vendeurs) pour le revenu plateforme — deux tables déjà
+// à jour en continu, pas de nouvelle agrégation coûteuse à construire.
+func (s *server) financeOverview(w http.ResponseWriter, r *http.Request) {
+	since := periodSince(r.URL.Query().Get("period"))
+
+	var gmv float64
+	var orderCount int64
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT COALESCE(SUM(amount_usd),0), count(*) FROM payments WHERE status = 'confirmed' AND created_at >= $1",
+		since,
+	).Scan(&gmv, &orderCount); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	var commissionRevenue float64
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT COALESCE(-SUM(amount_usd),0) FROM wallet_transactions WHERE type = 'commission' AND created_at >= $1",
+		since,
+	).Scan(&commissionRevenue); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	rows, err := s.db.Query(r.Context(),
+		"SELECT provider, count(*), COALESCE(SUM(amount_usd),0) FROM payments WHERE status = 'confirmed' AND created_at >= $1 GROUP BY provider",
+		since)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	byMethod := []map[string]any{}
+	for rows.Next() {
+		var provider string
+		var count int64
+		var amount float64
+		if err := rows.Scan(&provider, &count, &amount); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		byMethod = append(byMethod, map[string]any{"provider": provider, "count": count, "amount_usd": amount})
+	}
+
+	avgBasket := 0.0
+	if orderCount > 0 {
+		avgBasket = gmv / float64(orderCount)
+	}
+
+	var pendingPayoutsTotal float64
+	var pendingPayoutsCount int64
+	_ = s.db.QueryRow(r.Context(),
+		"SELECT COALESCE(SUM(amount_usd),0), count(*) FROM payout_requests WHERE status = 'pending'",
+	).Scan(&pendingPayoutsTotal, &pendingPayoutsCount)
+
+	kit.JSON(w, 200, map[string]any{
+		"gmv_usd": gmv, "orders_count": orderCount, "average_basket_usd": avgBasket,
+		"commission_revenue_usd": commissionRevenue,
+		"by_payment_method":      byMethod,
+		"pending_payouts_total_usd": pendingPayoutsTotal, "pending_payouts_count": pendingPayoutsCount,
+	})
+}
+
+func periodSince(period string) time.Time {
+	now := time.Now().UTC()
+	switch period {
+	case "today":
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	case "7d":
+		return now.AddDate(0, 0, -7)
+	case "year":
+		return now.AddDate(-1, 0, 0)
+	default: // 30d
+		return now.AddDate(0, 0, -30)
+	}
+}
+
+// financeTransactions — journal global des paiements confirmés, avec la
+// commission plateforme calculée par ligne (même résolution que
+// creditVendorWallet : vendor override > taux global — appel vendor-svc
+// par ligne, acceptable pour ce volume de listing paginé).
+func (s *server) financeTransactions(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM payments WHERE status = 'confirmed'").Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, order_id, provider, provider_ref, amount_usd, method, confirmed_at
+		FROM payments WHERE status = 'confirmed'
+		ORDER BY id DESC LIMIT $1 OFFSET $2`, pageSize, (page-1)*pageSize)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, orderID int64
+		var amount float64
+		var provider, providerRef, method string
+		var confirmedAt *time.Time
+		if err := rows.Scan(&id, &orderID, &provider, &providerRef, &amount, &method, &confirmedAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		var commission float64
+		_ = s.db.QueryRow(r.Context(),
+			"SELECT COALESCE(-SUM(amount_usd),0) FROM wallet_transactions WHERE type = 'commission' AND order_id = $1",
+			orderID).Scan(&commission)
+		var confirmedStr any
+		if confirmedAt != nil {
+			confirmedStr = confirmedAt.UTC().Format(time.RFC3339)
+		}
+		items = append(items, map[string]any{
+			"id": id, "order_id": orderID, "provider": provider, "provider_ref": providerRef,
+			"amount_usd": amount, "commission_usd": commission, "net_usd": amount - commission,
+			"method": method, "confirmed_at": confirmedStr,
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
 }
 
 /* ---------- Wallet vendeur & payouts (modules Vendeurs/Finances) ---------- */

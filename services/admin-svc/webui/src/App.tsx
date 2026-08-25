@@ -3,7 +3,7 @@ import { AuthProvider, useAuth } from './lib/auth'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Overview } from './pages/Overview'
-import { CUSTOMER_COLUMNS, ListView, PAYMENT_COLUMNS } from './pages/ListView'
+import { CUSTOMER_COLUMNS, ListView } from './pages/ListView'
 import { Shipping } from './pages/Shipping'
 import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
@@ -23,7 +23,10 @@ import { Payouts } from './pages/vendors/Payouts'
 import { AllOrders } from './pages/orders/AllOrders'
 import { OrderDetail } from './pages/orders/OrderDetail'
 import { Returns } from './pages/orders/Returns'
-import { IconCustomers, IconFinance } from './components/Icons'
+import { FinanceOverview } from './pages/finance/FinanceOverview'
+import { Transactions } from './pages/finance/Transactions'
+import { Gateways } from './pages/finance/Gateways'
+import { IconCustomers } from './components/Icons'
 
 const emptyIconProps = { width: 40, height: 40, strokeWidth: 1.4 } as const
 
@@ -90,19 +93,10 @@ function AppRoutes() {
             />
           }
         />
-        <Route
-          path="payments"
-          element={
-            <ListView
-              path="/admin/api/payments"
-              columns={PAYMENT_COLUMNS}
-              title="Finances"
-              subtitle="Transactions et paiements"
-              emptyIcon={<IconFinance {...emptyIconProps} />}
-              emptyTitle="Aucune transaction pour le moment"
-            />
-          }
-        />
+        <Route path="payments" element={<Navigate to="/admin/finance" replace />} />
+        <Route path="finance" element={<FinanceOverview />} />
+        <Route path="finance/transactions" element={<Transactions />} />
+        <Route path="finance/gateways" element={<Gateways />} />
         <Route path="shipping" element={<Shipping />} />
         <Route path="marketing" element={<Marketing />} />
         <Route path="email-templates" element={<EmailTemplates />} />

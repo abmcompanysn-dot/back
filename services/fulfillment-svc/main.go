@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -64,6 +65,64 @@ CREATE TABLE IF NOT EXISTS tracking_events (
   source      TEXT NOT NULL DEFAULT 'dhl_api' -- dhl_api | manual | scan
 );
 CREATE INDEX IF NOT EXISTS idx_tracking_events_shipment ON tracking_events (shipment_id);
+
+-- Configuration DHL (module Logistique, page "Configuration") — portage de
+-- toutes les options du plugin WordPress (get_option('miad_dhl_*')),
+-- éditables depuis le dashboard admin sans redéploiement. Clé/valeur plutôt
+-- que des colonnes fixes : les options du plugin PHP sont hétérogènes
+-- (texte, nombre, bool en string, texte long) et évoluent facilement sans
+-- migration de schéma.
+CREATE TABLE IF NOT EXISTS dhl_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
+
+-- Codes douaniers HS par "type" de produit (mapping libre, ex: "Textile" ->
+-- "6109.10"), utilisé en repli quand un produit n'a pas son propre hs_code
+-- (voir catalog-svc products.hs_code, prioritaire quand renseigné).
+CREATE TABLE IF NOT EXISTS dhl_hs_codes (
+  id   BIGSERIAL PRIMARY KEY,
+  type TEXT UNIQUE NOT NULL,
+  code TEXT NOT NULL DEFAULT ''
+);
+
+-- Boîtes personnalisées (dimensions/poids max prédéfinis), assignables à un
+-- produit pour figer ses dimensions d'expédition sans ressaisie manuelle.
+CREATE TABLE IF NOT EXISTS dhl_custom_boxes (
+  id         TEXT PRIMARY KEY, -- identifiant libre choisi côté UI (ex: BOX_<timestamp>)
+  name       TEXT NOT NULL,
+  length_cm  DOUBLE PRECISION NOT NULL DEFAULT 0,
+  width_cm   DOUBLE PRECISION NOT NULL DEFAULT 0,
+  height_cm  DOUBLE PRECISION NOT NULL DEFAULT 0,
+  max_weight_kg DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+
+-- Historique des tests API (onglet "Tests & Validation" du plugin) —
+-- traçabilité des appels de test (connexion, tarif, création) distincts
+-- des vraies expéditions.
+CREATE TABLE IF NOT EXISTS dhl_test_history (
+  id             BIGSERIAL PRIMARY KEY,
+  test_type      TEXT NOT NULL,
+  reference      TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL, -- SUCCESS | FAILURE
+  environment    TEXT NOT NULL DEFAULT 'production',
+  result_summary TEXT NOT NULL DEFAULT '',
+  occurred_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dhl_tests_time ON dhl_test_history (occurred_at DESC);
+
+-- Journal brut des requêtes/réponses DHL (équivalent du fichier
+-- miad_dhl_debug.log du plugin — une table plutôt qu'un fichier, cohérent
+-- avec le reste du backend qui n'écrit jamais sur le disque local du pod
+-- éphémère). Purge manuelle depuis l'UI (DELETE, pas de rétention auto).
+CREATE TABLE IF NOT EXISTS dhl_api_logs (
+  id         BIGSERIAL PRIMARY KEY,
+  direction  TEXT NOT NULL, -- request | response
+  summary    TEXT NOT NULL DEFAULT '',
+  body       TEXT NOT NULL DEFAULT '',
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dhl_logs_time ON dhl_api_logs (occurred_at DESC);
 `
 
 // shipmentStages — 5 états de la livraison internationale, DISTINCTS
@@ -79,12 +138,20 @@ var shipmentStages = map[string]bool{
 }
 
 type server struct {
-	db             *pgxpool.Pool
-	kafka          sarama.SyncProducer
-	orderURL       string
-	vendorURL      string
-	catalogURL     string
-	dhlBaseURL     string
+	db         *pgxpool.Pool
+	kafka      sarama.SyncProducer
+	orderURL   string
+	vendorURL  string
+	catalogURL string
+	dhlBaseURL string
+
+	// settingsMu protège les champs ci-dessous : valeurs par défaut lues
+	// depuis les variables d'env au démarrage (compat premier boot), puis
+	// écrasées par dhl_settings dès qu'un admin les édite depuis l'UI
+	// (voir loadDHLSettings/saveDHLSetting). Lus à chaque requête DHL
+	// (dhlRate/dhlCreateShipment/dhlBuildAndCreateShipment/etc.), donc
+	// jamais copiés une seule fois dans une variable locale au démarrage.
+	settingsMu     sync.RWMutex
 	dhlUsername    string
 	dhlPassword    string
 	dhlAccount     string
@@ -92,6 +159,90 @@ type server struct {
 	shipperZip     string
 	shipperCity    string
 	shipperCountry string
+	shipperName    string
+	shipperAddr    string
+	shipperPhone   string
+	shipperEmail   string
+	notifyEmail    string
+	dhlEnvironment string // production | sandbox — informatif, dhlBaseURL reste piloté par DHL_API_BASE
+}
+
+// dhlSettingsFields — liste des clés éditables via GET/PUT
+// /dhl/settings, avec leur valeur par défaut (reprise des env vars
+// historiques). Une seule source de vérité pour le schema JSON exposé au
+// frontend ET pour le chargement/sauvegarde en base.
+func (s *server) dhlSettingsFields() map[string]*string {
+	return map[string]*string{
+		"dhl_username":    &s.dhlUsername,
+		"dhl_password":    &s.dhlPassword,
+		"dhl_account":     &s.dhlAccount,
+		"dhl_incoterm":    &s.dhlIncoterm,
+		"shipper_zip":     &s.shipperZip,
+		"shipper_city":    &s.shipperCity,
+		"shipper_country": &s.shipperCountry,
+		"shipper_name":    &s.shipperName,
+		"shipper_address": &s.shipperAddr,
+		"shipper_phone":   &s.shipperPhone,
+		"shipper_email":   &s.shipperEmail,
+		"notify_email":    &s.notifyEmail,
+		"dhl_environment": &s.dhlEnvironment,
+	}
+}
+
+// dhlSecretKeys — champs jamais renvoyés en clair par GET /dhl/settings
+// (seulement un booléen "configuré"), pour ne pas exposer le mot de passe
+// API DHL à qui a accès au dashboard admin en lecture.
+var dhlSecretKeys = map[string]bool{"dhl_password": true}
+
+// loadDHLSettings — charge dhl_settings en base et écrase les champs en
+// mémoire. Appelé au démarrage (après les valeurs par défaut des env
+// vars) et après chaque PUT /dhl/settings.
+func (s *server) loadDHLSettings(ctx context.Context, log *slog.Logger) {
+	rows, err := s.db.Query(ctx, "SELECT key, value FROM dhl_settings")
+	if err != nil {
+		log.Error("chargement dhl_settings impossible", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	values := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err == nil {
+			values[k] = v
+		}
+	}
+
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	fields := s.dhlSettingsFields()
+	for k, v := range values {
+		if ptr, ok := fields[k]; ok {
+			*ptr = v
+		}
+	}
+}
+
+// saveDHLSetting — upsert une clé dans dhl_settings ET met à jour le
+// champ en mémoire correspondant (sous verrou), pour que la requête DHL
+// suivante voie immédiatement la nouvelle valeur sans redémarrage.
+func (s *server) saveDHLSettings(ctx context.Context, values map[string]string) error {
+	for k, v := range values {
+		if _, err := s.db.Exec(ctx, `
+			INSERT INTO dhl_settings (key, value) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, k, v); err != nil {
+			return err
+		}
+	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	fields := s.dhlSettingsFields()
+	for k, v := range values {
+		if ptr, ok := fields[k]; ok {
+			*ptr = v
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -122,7 +273,16 @@ func main() {
 		shipperZip:     kit.Env("DHL_SHIPPER_ZIP", ""),
 		shipperCity:    kit.Env("DHL_SHIPPER_CITY", "Dakar"),
 		shipperCountry: kit.Env("DHL_SHIPPER_COUNTRY", "SN"),
+		shipperName:    kit.Env("DHL_SHIPPER_NAME", "MIAD Market"),
+		shipperAddr:    kit.Env("DHL_SHIPPER_ADDRESS", ""),
+		shipperPhone:   kit.Env("DHL_SHIPPER_PHONE", "123456789"),
+		shipperEmail:   kit.Env("DHL_SHIPPER_EMAIL", ""),
+		notifyEmail:    kit.Env("DHL_NOTIFY_EMAIL", ""),
+		dhlEnvironment: kit.Env("DHL_ENVIRONMENT", "production"),
 	}
+	// dhl_settings (base) a priorité sur les variables d'env ci-dessus dès
+	// qu'un admin a édité la configuration au moins une fois depuis l'UI.
+	s.loadDHLSettings(ctx, log)
 	go s.consumeOrderEvents(log)
 
 	health := kit.NewHealth()
@@ -154,6 +314,24 @@ func main() {
 		mux.HandleFunc("GET /dhl/orders", s.dhlListOrders)
 		mux.HandleFunc("GET /dhl/order/{id}", s.dhlOrderDetail)
 		mux.HandleFunc("POST /dhl/orders/{id}/create-shipment", s.dhlBuildAndCreateShipment)
+
+		// Configuration DHL (portage de l'onglet "Réglages" du plugin
+		// WordPress) — voir dhlSettingsFields/loadDHLSettings/saveDHLSettings.
+		mux.HandleFunc("GET /dhl/settings", s.dhlGetSettings)
+		mux.HandleFunc("PUT /dhl/settings", s.dhlPutSettings)
+		mux.HandleFunc("POST /dhl/settings/test-connection", s.dhlTestConnection)
+
+		mux.HandleFunc("GET /dhl/hs-codes", s.dhlListHSCodes)
+		mux.HandleFunc("POST /dhl/hs-codes", s.dhlUpsertHSCode)
+		mux.HandleFunc("DELETE /dhl/hs-codes/{id}", s.dhlDeleteHSCode)
+
+		mux.HandleFunc("GET /dhl/boxes", s.dhlListBoxes)
+		mux.HandleFunc("POST /dhl/boxes", s.dhlUpsertBox)
+		mux.HandleFunc("DELETE /dhl/boxes/{id}", s.dhlDeleteBox)
+
+		mux.HandleFunc("GET /dhl/tests", s.dhlListTestHistory)
+		mux.HandleFunc("GET /dhl/logs", s.dhlListLogs)
+		mux.HandleFunc("DELETE /dhl/logs", s.dhlPurgeLogs)
 	})
 }
 
@@ -702,6 +880,8 @@ func (s *server) fetchVendor(ctx context.Context, vendorID int64) *vendorInfo {
 // dhlOrderDetail — GET /dhl/order/{id} : adresse, articles, poids total,
 // code HS, expédition existante, tracking live, tarif estimé (best-effort).
 func (s *server) dhlOrderDetail(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
 	orderID := atoi64(r.PathValue("id"))
 	order, err := s.fetchOrder(r.Context(), orderID)
 	if err != nil {
@@ -833,6 +1013,8 @@ func atoi64(s string) int64 {
 // body optionnel : { weight, length, width, height, hs_code } pour corriger
 // manuellement avant envoi (même logique "override" que le PHP).
 func (s *server) dhlBuildAndCreateShipment(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
 	if s.dhlUsername == "" || s.dhlPassword == "" {
 		kit.Fail(w, 503, "dhl_not_configured", "DHL_API_USERNAME / DHL_API_PASSWORD absents")
 		return
@@ -1093,6 +1275,8 @@ func (s *server) dhlAuthHeader(req *http.Request) {
 
 // dhlRate — GET /dhl/rate?origin_country=SN&origin_city=Dakar&dest_country=FR&dest_city=Paris&weight_kg=2
 func (s *server) dhlRate(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
 	if s.dhlUsername == "" || s.dhlPassword == "" {
 		kit.Fail(w, 503, "dhl_not_configured", "DHL_API_USERNAME / DHL_API_PASSWORD absents")
 		return
@@ -1149,6 +1333,8 @@ func extractDHLPrice(resp map[string]any) (float64, string) {
 }
 
 func (s *server) dhlCreateShipment(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
 	if s.dhlUsername == "" || s.dhlPassword == "" {
 		kit.Fail(w, 503, "dhl_not_configured", "DHL_API_USERNAME / DHL_API_PASSWORD absents")
 		return
@@ -1199,6 +1385,8 @@ func (s *server) dhlCreateShipment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) dhlRefreshTracking(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
 	if s.dhlUsername == "" || s.dhlPassword == "" {
 		kit.Fail(w, 503, "dhl_not_configured", "DHL_API_USERNAME / DHL_API_PASSWORD absents")
 		return
@@ -1277,7 +1465,11 @@ func mapDHLStatusCode(code string) string {
 
 // dhlRequestWithRetry — retry sur l'erreur 996 DHL (service temporairement
 // indisponible, règle explicite du brief de migration), 3 tentatives.
+// Journalise chaque requête/réponse dans dhl_api_logs (onglet "Logs &
+// Debug" de la configuration) — équivalent du fichier miad_dhl_debug.log
+// du plugin WordPress.
 func (s *server) dhlRequestWithRetry(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	s.logDHL(ctx, "request", method+" "+path, string(body))
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		var reqBody io.Reader
@@ -1302,6 +1494,7 @@ func (s *server) dhlRequestWithRetry(ctx context.Context, method, path string, b
 		resp.Body.Close()
 
 		if resp.StatusCode == 200 || resp.StatusCode == 201 {
+			s.logDHL(ctx, "response", fmt.Sprintf("%s %s -> %d", method, path, resp.StatusCode), string(respBody))
 			return respBody, nil
 		}
 		if bytes.Contains(respBody, []byte("996")) {
@@ -1309,11 +1502,288 @@ func (s *server) dhlRequestWithRetry(ctx context.Context, method, path string, b
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 			continue
 		}
+		s.logDHL(ctx, "response", fmt.Sprintf("%s %s -> %d", method, path, resp.StatusCode), string(respBody))
 		return nil, fmt.Errorf("DHL a répondu %d: %s", resp.StatusCode, string(respBody))
 	}
+	s.logDHL(ctx, "response", method+" "+path+" -> injoignable après 3 tentatives", fmt.Sprint(lastErr))
 	return nil, fmt.Errorf("DHL injoignable après 3 tentatives: %w", lastErr)
+}
+
+// logDHL — best-effort, ne bloque jamais un appel DHL réel si l'écriture
+// du log échoue.
+func (s *server) logDHL(ctx context.Context, direction, summary, body string) {
+	if len(body) > 20000 {
+		body = body[:20000] + "... (tronqué)"
+	}
+	_, _ = s.db.Exec(ctx,
+		"INSERT INTO dhl_api_logs (direction, summary, body) VALUES ($1, $2, $3)", direction, summary, body)
 }
 
 func randomMessageRef() string {
 	return "miad-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+/* ============================================================
+   Configuration DHL — portage de l'onglet "Réglages" du plugin
+   WordPress (miad-dhl.php / miad_dhl_render_admin_page) : identifiants
+   API, adresse expéditeur, notifications, codes HS, boîtes personnalisées,
+   tests & logs. Voir dhlSettingsFields/loadDHLSettings/saveDHLSettings
+   plus haut pour le mécanisme de stockage.
+   ============================================================ */
+
+// dhlGetSettings — GET /dhl/settings : renvoie tous les champs éditables,
+// sauf les secrets (mot de passe API) qui ne ressortent jamais en clair —
+// seulement un booléen "configuré" pour ne pas exposer un identifiant déjà
+// saisi à qui a accès en lecture au dashboard.
+func (s *server) dhlGetSettings(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	out := map[string]any{}
+	for k, ptr := range s.dhlSettingsFields() {
+		if dhlSecretKeys[k] {
+			out[k+"_configured"] = *ptr != ""
+			continue
+		}
+		out[k] = *ptr
+	}
+	kit.JSON(w, 200, out)
+}
+
+// dhlPutSettings — PUT /dhl/settings : met à jour un sous-ensemble des
+// champs (seuls les champs présents dans le body sont modifiés — un champ
+// secret laissé vide côté UI signifie "ne pas changer", pas "vider").
+func (s *server) dhlPutSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	fields := s.dhlSettingsFields()
+	toSave := map[string]string{}
+	for k, v := range body {
+		if _, ok := fields[k]; !ok {
+			continue // clé inconnue, ignorée plutôt que rejetée (tolérance aux champs UI non encore branchés)
+		}
+		if dhlSecretKeys[k] && v == "" {
+			continue // champ secret vide = "inchangé", jamais écrasé par du vide
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.saveDHLSettings(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave)})
+}
+
+// dhlTestConnection — POST /dhl/settings/test-connection : équivalent de
+// miad_dhl_test_connection() (plugin WordPress) — un appel /rates minimal
+// (Dakar -> Paris, 1kg) pour valider les identifiants sans créer de vraie
+// expédition. Résultat journalisé dans dhl_test_history (onglet "Tests &
+// Validation").
+func (s *server) dhlTestConnection(w http.ResponseWriter, r *http.Request) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	if s.dhlUsername == "" || s.dhlPassword == "" {
+		kit.Fail(w, 503, "dhl_not_configured", "identifiants DHL absents — renseigner d'abord dhl_username/dhl_password")
+		return
+	}
+	path := "/rates?" + fmt.Sprintf(
+		"accountNumber=%s&originCountryCode=%s&originCityName=%s&destinationCountryCode=FR&destinationCityName=Paris&weight=1&length=10&width=10&height=10&plannedShippingDate=%s&isCustomsDeclarable=true&unitOfMeasurement=metric",
+		s.dhlAccount, s.shipperCountry, s.shipperCity, nextShippingDate())
+
+	body, err := s.dhlRequestWithRetry(r.Context(), http.MethodGet, path, nil)
+	status, summary := "SUCCESS", "connexion DHL OK"
+	if err != nil {
+		status, summary = "FAILURE", err.Error()
+	}
+	_, _ = s.db.Exec(r.Context(),
+		"INSERT INTO dhl_test_history (test_type, reference, status, environment, result_summary) VALUES ($1,$2,$3,$4,$5)",
+		"connection", "", status, s.dhlEnvironment, summary)
+
+	if err != nil {
+		kit.Fail(w, 502, "dhl_test_failed", summary)
+		return
+	}
+	var parsed map[string]any
+	_ = json.Unmarshal(body, &parsed)
+	kit.JSON(w, 200, map[string]any{"ok": true, "status": status, "sample_response": parsed})
+}
+
+/* ---------- Codes douaniers HS ---------- */
+
+func (s *server) dhlListHSCodes(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), "SELECT id, type, code FROM dhl_hs_codes ORDER BY type")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var t, code string
+		if rows.Scan(&id, &t, &code) == nil {
+			out = append(out, map[string]any{"id": id, "type": t, "code": code})
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) dhlUpsertHSCode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Type == "" || body.Code == "" {
+		kit.Fail(w, 400, "invalid_body", "type et code obligatoires")
+		return
+	}
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO dhl_hs_codes (type, code) VALUES ($1, $2)
+		ON CONFLICT (type) DO UPDATE SET code = EXCLUDED.code
+		RETURNING id`, body.Type, body.Code).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "id": id})
+}
+
+func (s *server) dhlDeleteHSCode(w http.ResponseWriter, r *http.Request) {
+	id := atoi64(r.PathValue("id"))
+	if _, err := s.db.Exec(r.Context(), "DELETE FROM dhl_hs_codes WHERE id = $1", id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+/* ---------- Boîtes personnalisées ---------- */
+
+func (s *server) dhlListBoxes(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, name, length_cm, width_cm, height_cm, max_weight_kg FROM dhl_custom_boxes ORDER BY name")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, name string
+		var l, wdt, h, maxW float64
+		if rows.Scan(&id, &name, &l, &wdt, &h, &maxW) == nil {
+			out = append(out, map[string]any{
+				"id": id, "name": name, "length_cm": l, "width_cm": wdt, "height_cm": h, "max_weight_kg": maxW,
+			})
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) dhlUpsertBox(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID          string  `json:"id"`
+		Name        string  `json:"name"`
+		LengthCm    float64 `json:"length_cm"`
+		WidthCm     float64 `json:"width_cm"`
+		HeightCm    float64 `json:"height_cm"`
+		MaxWeightKg float64 `json:"max_weight_kg"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+		kit.Fail(w, 400, "invalid_body", "name obligatoire")
+		return
+	}
+	if body.ID == "" {
+		body.ID = "BOX_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	_, err := s.db.Exec(r.Context(), `
+		INSERT INTO dhl_custom_boxes (id, name, length_cm, width_cm, height_cm, max_weight_kg)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, length_cm=EXCLUDED.length_cm,
+			width_cm=EXCLUDED.width_cm, height_cm=EXCLUDED.height_cm, max_weight_kg=EXCLUDED.max_weight_kg`,
+		body.ID, body.Name, body.LengthCm, body.WidthCm, body.HeightCm, body.MaxWeightKg)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "id": body.ID})
+}
+
+func (s *server) dhlDeleteBox(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.db.Exec(r.Context(), "DELETE FROM dhl_custom_boxes WHERE id = $1", id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+/* ---------- Tests & logs ---------- */
+
+func (s *server) dhlListTestHistory(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, test_type, reference, status, environment, result_summary, occurred_at FROM dhl_test_history ORDER BY occurred_at DESC LIMIT 100")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var testType, ref, status, env, summary string
+		var at time.Time
+		if rows.Scan(&id, &testType, &ref, &status, &env, &summary, &at) == nil {
+			out = append(out, map[string]any{
+				"id": id, "test_type": testType, "reference": ref, "status": status,
+				"environment": env, "result_summary": summary, "occurred_at": at.UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) dhlListLogs(w http.ResponseWriter, r *http.Request) {
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, direction, summary, body, occurred_at FROM dhl_api_logs ORDER BY occurred_at DESC LIMIT $1", limit)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var direction, summary, body string
+		var at time.Time
+		if rows.Scan(&id, &direction, &summary, &body, &at) == nil {
+			out = append(out, map[string]any{
+				"id": id, "direction": direction, "summary": summary, "body": body,
+				"occurred_at": at.UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) dhlPurgeLogs(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.db.Exec(r.Context(), "DELETE FROM dhl_api_logs"); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
 }
