@@ -289,7 +289,8 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, vendorID, categoryID, brandID int64
+		var id, vendorID, categoryID int64
+		var brandID *int64
 		var price float64
 		var salePrice *float64
 		var trid, l, name, slug, status, sku string
