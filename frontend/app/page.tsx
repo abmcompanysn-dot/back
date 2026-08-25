@@ -63,6 +63,12 @@ const SHIPPING_FALLBACK = {
 // ajoutait un aller-retour réseau inutile à la lenteur signalée le
 // 2026-07-23 sur "Voir tout" — contrairement à shippingRates, qui n'a pas
 // d'équivalent client-side et doit donc rester à jour à chaque navigation.
+// GAP CONNU (2026-08-25) : shippingResult ci-dessous appelle encore
+// l'ancien WordPress mort (NEXT_PUBLIC_WC_URL jamais positionné sur
+// Cloudflare Pages) — retombe donc TOUJOURS sur SHIPPING_FALLBACK codé en
+// dur, jamais une vraie donnée. Même gap que app/api/shipping-rates/route.ts
+// (voir son commentaire) — shipping-svc (Go) a un schéma incompatible,
+// décision explicite du fondateur : laisser tel quel pour l'instant.
 async function getInitialData(needsCategories: boolean) {
   const WC_BASE = process.env.NEXT_PUBLIC_WC_URL || 'https://api.miadmarket.com'
   const [categoriesResult, shippingResult] = await Promise.allSettled([

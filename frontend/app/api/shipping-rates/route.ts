@@ -2,6 +2,16 @@ import { NextResponse } from 'next/server'
 
 export const runtime = 'edge';
 
+// GAP CONNU (2026-08-25) : appelle encore l'ancien WordPress mort
+// (NEXT_PUBLIC_WC_URL n'a jamais été positionné sur Cloudflare Pages) —
+// retombe donc TOUJOURS sur le fallback codé en dur ci-dessous, jamais sur
+// une vraie donnée. shipping-svc (Go) expose bien GET /shipping-rates,
+// mais avec un schéma différent (zones par pays, base_rate_usd/
+// per_item_usd) qui ne correspond pas à ce que ce fichier et useShippingRates.ts
+// attendent (local/zone_africa/zones{AF,EU,...}:{standard,express}) —
+// décision explicite du fondateur (2026-08-25) : laisser tel quel pour
+// l'instant, migration prévue plus tard. Ne pas migrer silencieusement
+// avec un mapping deviné entre-temps.
 const WC_BASE = process.env.NEXT_PUBLIC_WC_URL || 'https://api.miadmarket.com'
 
 export const revalidate = 300 // revalide toutes les 5 min (ISR)
