@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS customers (
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT '';
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS salt TEXT DEFAULT '';
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS vendor_id BIGINT;
+-- Import historique WooCommerce (cmd/wc-data-import) : l'API REST
+-- WooCommerce n'expose jamais wp_users.user_pass — un client importé n'a
+-- donc aucun mot de passe utilisable tant qu'il ne passe pas par "mot de
+-- passe oublié" (décision validée le 2026-08-25, voir wc-data-import).
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS admins (
   id            BIGSERIAL PRIMARY KEY,
   email         TEXT UNIQUE NOT NULL,
@@ -691,14 +696,26 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 	}
 	var id int64
 	var hash, salt string
+	var mustReset bool
 	err := s.db.QueryRow(r.Context(),
-		"SELECT id, password_hash, salt FROM customers WHERE lower(email) = lower($1)", body.Email,
-	).Scan(&id, &hash, &salt)
-	if err == pgx.ErrNoRows || hash == "" || hashPassword(salt, body.Password) != hash {
+		"SELECT id, password_hash, salt, must_reset_password FROM customers WHERE lower(email) = lower($1)", body.Email,
+	).Scan(&id, &hash, &salt, &mustReset)
+	if err == pgx.ErrNoRows || hash == "" {
+		// Compte importé (must_reset_password) : message dédié plutôt que
+		// le "email ou mot de passe incorrect" générique, pour orienter
+		// directement vers le flux "mot de passe oublié" côté frontend.
+		if err == nil && mustReset {
+			kit.Fail(w, 403, "password_reset_required", "compte importé — veuillez définir un mot de passe via « mot de passe oublié »")
+			return
+		}
 		kit.Fail(w, 401, "invalid_credentials", "email ou mot de passe incorrect")
 		return
 	} else if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if hashPassword(salt, body.Password) != hash {
+		kit.Fail(w, 401, "invalid_credentials", "email ou mot de passe incorrect")
 		return
 	}
 
@@ -740,7 +757,7 @@ func (s *server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	salt := randomToken(12)
 	tag, err := s.db.Exec(r.Context(),
-		"UPDATE customers SET password_hash = $1, salt = $2 WHERE lower(email) = lower($3)",
+		"UPDATE customers SET password_hash = $1, salt = $2, must_reset_password = FALSE WHERE lower(email) = lower($3)",
 		hashPassword(salt, body.NewPassword), salt, body.Email)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -844,7 +861,7 @@ func (s *server) impersonateVendor(w http.ResponseWriter, r *http.Request) {
 		"exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
 	kit.JSON(w, 200, map[string]any{
-		"session": map[string]any{"jwt": jwt, "expires_at": expires},
+		"session":   map[string]any{"jwt": jwt, "expires_at": expires},
 		"vendor_id": vendorID, "customer_id": customerID,
 	})
 }

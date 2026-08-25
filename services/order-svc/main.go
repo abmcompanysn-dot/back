@@ -95,6 +95,17 @@ WHERE payment_status = 'pending' AND fulfillment_stage = 'pending'
 CREATE INDEX IF NOT EXISTS idx_orders_fulfillment_stage ON orders (fulfillment_stage, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders (payment_status);
 
+-- Import historique WooCommerce (cmd/wc-data-import) : wc_order_id +
+-- wc_vendor_id identifient de façon stable UNE sous-commande importée
+-- (une commande WooCommerce éclatée par vendeur donne plusieurs lignes
+-- orders ici, d'où la clé composite plutôt qu'un simple wc_order_id
+-- UNIQUE) — permet de relancer l'import sans dupliquer (ON CONFLICT).
+-- orders.id reste un BIGSERIAL natif : rien d'externe ne référence un
+-- id de sous-commande WooCommerce (contrairement à customers.id, voir
+-- auth-svc), donc pas besoin de forcer sa valeur ici.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS wc_order_id BIGINT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_wc_import ON orders (wc_order_id, vendor_id) WHERE wc_order_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS coupons (
   code        TEXT PRIMARY KEY,
   type        TEXT NOT NULL CHECK (type IN ('percent','fixed')),
