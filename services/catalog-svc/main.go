@@ -412,19 +412,26 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
 	lang := defLang(r.URL.Query().Get("lang"))
 	row := s.db.QueryRow(r.Context(), `
-		SELECT p.id, p.trid, p.lang, p.vendor_id, p.category_id, p.name, p.slug,
-		       p.description, p.price_usd, p.sale_price_usd, p.status, p.images, p.is_variable,
-		       p.weight_kg, p.hs_code, p.origin_country
+		SELECT p.id, p.trid, p.lang, p.vendor_id, p.category_id, p.brand_id, p.name, p.slug,
+		       p.description, p.short_description, p.price_usd, p.sale_price_usd, p.status, p.images, p.is_variable,
+		       p.sku, p.barcode, p.stock, p.low_stock_threshold, p.backorders_allowed,
+		       p.weight_kg, p.length_cm, p.width_cm, p.height_cm, p.shipping_class,
+		       p.meta_title, p.meta_description, p.hs_code, p.origin_country
 		FROM products p WHERE p.id = $1 AND p.lang = $2`, id, lang)
 
 	var pID, vendorID, catID int64
+	var brandID *int64
 	var price float64
-	var salePrice, weightKg *float64
-	var trid, l, name, slug, desc, status, hsCode, originCountry string
+	var salePrice, weightKg, lengthCm, widthCm, heightCm *float64
+	var trid, l, name, slug, desc, shortDesc, status, sku, barcode, shippingClass, metaTitle, metaDesc, hsCode, originCountry string
+	var stock, lowStockThreshold int
+	var backordersAllowed bool
 	var images []byte
 	var isVar bool
-	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &name, &slug, &desc, &price, &salePrice, &status, &images, &isVar,
-		&weightKg, &hsCode, &originCountry); err != nil {
+	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &brandID, &name, &slug, &desc, &shortDesc, &price, &salePrice, &status, &images, &isVar,
+		&sku, &barcode, &stock, &lowStockThreshold, &backordersAllowed,
+		&weightKg, &lengthCm, &widthCm, &heightCm, &shippingClass,
+		&metaTitle, &metaDesc, &hsCode, &originCountry); err != nil {
 		if err == pgx.ErrNoRows {
 			kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable en lang=%s — erreur explicite, pas de page vide silencieuse", id, lang))
 			return
@@ -464,7 +471,20 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := productToWooShape(pID, trid, l, vendorID, catID, name, slug, desc, price, salePrice, status, isVar, images, variations)
+	out["brand_id"] = brandID
+	out["short_description"] = shortDesc
+	out["sku"] = sku
+	out["barcode"] = barcode
+	out["stock"] = stock
+	out["low_stock_threshold"] = lowStockThreshold
+	out["backorders_allowed"] = backordersAllowed
 	out["weight_kg"] = weightKg
+	out["length_cm"] = lengthCm
+	out["width_cm"] = widthCm
+	out["height_cm"] = heightCm
+	out["shipping_class"] = shippingClass
+	out["meta_title"] = metaTitle
+	out["meta_description"] = metaDesc
 	out["hs_code"] = hsCode
 	out["origin_country"] = originCountry
 	out["linked"] = map[string]any{"id": linkedID, "lang": linkedLang}

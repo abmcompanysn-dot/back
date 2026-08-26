@@ -28,15 +28,32 @@ interface VariationRow {
   image_url: string
 }
 
+// TranslatedFields — tout ce qui est traduisible côté produit (chaque
+// langue est une ligne distincte côté catalog-svc, voir products.lang).
+// Le reste du Draft (prix, stock, images, catégorie...) est partagé et
+// dupliqué automatiquement par createProduct sur les deux lignes — pas
+// besoin de le traduire, une seule copie suffit dans le formulaire.
+interface TranslatedFields {
+  name: string
+  description: string
+  short_description: string
+  meta_title: string
+  meta_description: string
+}
+
+const EMPTY_TRANSLATION: TranslatedFields = {
+  name: '',
+  description: '',
+  short_description: '',
+  meta_title: '',
+  meta_description: '',
+}
+
 interface Draft {
   vendor_id: string
   category_id: string
   brand_id: string
-  name_fr: string
-  name_en: string
   slug: string
-  description: string
-  short_description: string
   price_usd: string
   sale_price_usd: string
   sku: string
@@ -50,8 +67,6 @@ interface Draft {
   width_cm: string
   height_cm: string
   shipping_class: string
-  meta_title: string
-  meta_description: string
   product_type: 'simple' | 'variable'
   variations: VariationRow[]
 }
@@ -60,11 +75,7 @@ const EMPTY: Draft = {
   vendor_id: '',
   category_id: '',
   brand_id: '',
-  name_fr: '',
-  name_en: '',
   slug: '',
-  description: '',
-  short_description: '',
   price_usd: '',
   sale_price_usd: '',
   sku: '',
@@ -78,8 +89,6 @@ const EMPTY: Draft = {
   width_cm: '',
   height_cm: '',
   shipping_class: '',
-  meta_title: '',
-  meta_description: '',
   product_type: 'simple',
   variations: [],
 }
@@ -111,54 +120,95 @@ export function ProductForm() {
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Traductions : deux lignes distinctes côté catalog-svc (products.lang),
+  // reliées par trid — voir le commentaire sur TranslatedFields. En
+  // création, seul editLang='fr' est utilisé (name_en optionnel géré à
+  // part côté POST, voir save()). En édition, on charge les deux langues
+  // via `linked` (renvoyé par GET /products/{id}) pour permettre de
+  // switcher FR/EN dans le même formulaire sans perdre les saisies.
+  const [editLang, setEditLang] = useState<'fr' | 'en'>('fr')
+  const [translations, setTranslations] = useState<Record<'fr' | 'en', TranslatedFields>>({
+    fr: { ...EMPTY_TRANSLATION },
+    en: { ...EMPTY_TRANSLATION },
+  })
+  const [productIDs, setProductIDs] = useState<Record<'fr' | 'en', string | null>>({ fr: id ?? null, en: null })
+
   useEffect(() => {
     api.get<{ items: Vendor[] }>('/admin/api/vendors').then((b) => setVendors(b.items || [])).catch(() => {})
     api.get<{ categories: Category[] }>('/admin/api/categories').then((b) => setCategories(b.categories || [])).catch(() => {})
     api.get<{ items: Brand[] }>('/admin/api/brands').then((b) => setBrands(b.items || [])).catch(() => {})
   }, [])
 
+  function applyProductToState(p: any, lang: 'fr' | 'en') {
+    setTranslations((t) => ({
+      ...t,
+      [lang]: {
+        name: p.name ?? '',
+        description: p.description ?? '',
+        short_description: p.short_description ?? '',
+        meta_title: p.meta_title ?? '',
+        meta_description: p.meta_description ?? '',
+      },
+    }))
+    setProductIDs((ids) => ({ ...ids, [lang]: String(p.id) }))
+    // Champs partagés (non traduisibles) : chargés une seule fois depuis
+    // la langue FR de référence — les deux lignes sont censées être
+    // identiques sur ces champs (dupliqués à l'écriture, voir
+    // createProduct/updateProductImages côté Go).
+    if (lang === 'fr') {
+      setDraft({
+        vendor_id: String(p.vendor_id ?? ''),
+        category_id: String(p.category_id ?? ''),
+        brand_id: String(p.brand_id ?? ''),
+        slug: p.slug ?? '',
+        price_usd: String(p.price_usd ?? ''),
+        sale_price_usd: p.sale_price ? String(p.sale_price) : '',
+        sku: p.sku ?? '',
+        barcode: p.barcode ?? '',
+        stock: String(p.stock ?? 0),
+        low_stock_threshold: String(p.low_stock_threshold ?? 3),
+        backorders_allowed: !!p.backorders_allowed,
+        images: (p.images || []).map((im: { src: string } | string) => (typeof im === 'string' ? im : im.src)),
+        weight_kg: p.weight_kg ? String(p.weight_kg) : '',
+        length_cm: p.length_cm ? String(p.length_cm) : '',
+        width_cm: p.width_cm ? String(p.width_cm) : '',
+        height_cm: p.height_cm ? String(p.height_cm) : '',
+        shipping_class: p.shipping_class ?? '',
+        product_type: p.is_variable ? 'variable' : 'simple',
+        variations: (p.variations || []).map((v: any) => ({
+          id: v.id,
+          sku: v.sku ?? '',
+          attributes: v.attributes ?? {},
+          price_usd: String(v.price_usd ?? ''),
+          stock: String(v.stock ?? 0),
+          image_url: v.image_url ?? '',
+        })),
+      })
+    }
+  }
+
   useEffect(() => {
-    if (!isEdit) return
+    if (!isEdit || !id) return
     api
       .get<any>(`/admin/api/products/${id}`)
       .then((p) => {
-        setDraft({
-          vendor_id: String(p.vendor_id ?? ''),
-          category_id: String(p.category_id ?? ''),
-          brand_id: String(p.brand_id ?? ''),
-          name_fr: p.name ?? '',
-          name_en: '',
-          slug: p.slug ?? '',
-          description: p.description ?? '',
-          short_description: '',
-          price_usd: String(p.price_usd ?? ''),
-          sale_price_usd: p.sale_price ? String(p.sale_price) : '',
-          sku: p.sku ?? '',
-          barcode: '',
-          stock: String(p.stock ?? 0),
-          low_stock_threshold: String(p.low_stock_threshold ?? 3),
-          backorders_allowed: false,
-          images: (p.images || []).map((im: { src: string }) => im.src),
-          weight_kg: '',
-          length_cm: '',
-          width_cm: '',
-          height_cm: '',
-          shipping_class: '',
-          meta_title: '',
-          meta_description: '',
-          product_type: p.is_variable ? 'variable' : 'simple',
-          variations: (p.variations || []).map((v: any) => ({
-            id: v.id,
-            sku: v.sku ?? '',
-            attributes: v.attributes ?? {},
-            price_usd: String(v.price_usd ?? ''),
-            stock: String(v.stock ?? 0),
-            image_url: v.image_url ?? '',
-          })),
-        })
+        applyProductToState(p, (p.lang as 'fr' | 'en') || 'fr')
+        const linkedID = p.linked?.id
+        const linkedLang = p.linked?.lang as 'fr' | 'en' | undefined
+        if (linkedID && linkedLang) {
+          api
+            .get<any>(`/admin/api/products/${linkedID}`)
+            .then((lp) => applyProductToState(lp, linkedLang))
+            .catch(() => {})
+        }
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'échec du chargement du produit'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isEdit])
+
+  function setTranslated<K extends keyof TranslatedFields>(key: K, value: TranslatedFields[K]) {
+    setTranslations((t) => ({ ...t, [editLang]: { ...t[editLang], [key]: value } }))
+  }
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((d) => ({ ...d, [key]: value }))
@@ -227,9 +277,32 @@ export function ProductForm() {
     }
   }
 
+  // Champs partagés (non traduisibles) — identiques quelle que soit la
+  // langue, dupliqués sur les deux lignes côté catalog-svc.
+  function sharedPayload() {
+    return {
+      category_id: draft.category_id ? Number(draft.category_id) : undefined,
+      brand_id: draft.brand_id ? Number(draft.brand_id) : undefined,
+      price_usd: draft.price_usd ? Number(draft.price_usd) : undefined,
+      sale_price_usd: draft.sale_price_usd ? Number(draft.sale_price_usd) : null,
+      sku: draft.sku,
+      barcode: draft.barcode,
+      stock: Number(draft.stock || 0),
+      low_stock_threshold: Number(draft.low_stock_threshold || 3),
+      backorders_allowed: draft.backorders_allowed,
+      images: draft.images,
+      weight_kg: draft.weight_kg ? Number(draft.weight_kg) : undefined,
+      length_cm: draft.length_cm ? Number(draft.length_cm) : undefined,
+      width_cm: draft.width_cm ? Number(draft.width_cm) : undefined,
+      height_cm: draft.height_cm ? Number(draft.height_cm) : undefined,
+      shipping_class: draft.shipping_class,
+    }
+  }
+
   async function save() {
-    if (!draft.name_fr.trim()) {
+    if (!translations.fr.name.trim()) {
       setError('le nom du produit (FR) est obligatoire')
+      setEditLang('fr')
       setTab('general')
       return
     }
@@ -247,38 +320,38 @@ export function ProductForm() {
     setError(null)
     try {
       if (isEdit) {
-        await api.patch(`/admin/api/products/${id}`, {
-          name: draft.name_fr,
-          description: draft.description,
-          short_description: draft.short_description,
-          category_id: draft.category_id ? Number(draft.category_id) : undefined,
-          brand_id: draft.brand_id ? Number(draft.brand_id) : undefined,
-          price_usd: draft.price_usd ? Number(draft.price_usd) : undefined,
-          sale_price_usd: draft.sale_price_usd ? Number(draft.sale_price_usd) : null,
-          sku: draft.sku,
-          barcode: draft.barcode,
-          stock: Number(draft.stock || 0),
-          low_stock_threshold: Number(draft.low_stock_threshold || 3),
-          backorders_allowed: draft.backorders_allowed,
-          images: draft.images,
-          weight_kg: draft.weight_kg ? Number(draft.weight_kg) : undefined,
-          length_cm: draft.length_cm ? Number(draft.length_cm) : undefined,
-          width_cm: draft.width_cm ? Number(draft.width_cm) : undefined,
-          height_cm: draft.height_cm ? Number(draft.height_cm) : undefined,
-          shipping_class: draft.shipping_class,
-          meta_title: draft.meta_title,
-          meta_description: draft.meta_description,
+        const shared = sharedPayload()
+        // La ligne FR reçoit systématiquement les champs partagés (source
+        // de vérité) ; la ligne EN ne les reçoit que si elle existe déjà
+        // (linked résolu au chargement) — jamais recréée ici.
+        await api.patch(`/admin/api/products/${productIDs.fr}`, {
+          ...shared,
+          name: translations.fr.name,
+          description: translations.fr.description,
+          short_description: translations.fr.short_description,
+          meta_title: translations.fr.meta_title,
+          meta_description: translations.fr.meta_description,
         })
+        if (productIDs.en) {
+          await api.patch(`/admin/api/products/${productIDs.en}`, {
+            ...shared,
+            name: translations.en.name || translations.fr.name,
+            description: translations.en.description,
+            short_description: translations.en.short_description,
+            meta_title: translations.en.meta_title,
+            meta_description: translations.en.meta_description,
+          })
+        }
         if (draft.product_type === 'variable') {
-          await saveVariations(id!)
+          await saveVariations(productIDs.fr!)
         }
       } else {
         await api.post('/admin/api/products', {
           vendor_id: Number(draft.vendor_id),
           category_id: draft.category_id ? Number(draft.category_id) : 0,
           brand_id: draft.brand_id ? Number(draft.brand_id) : 0,
-          name_fr: draft.name_fr,
-          name_en: draft.name_en,
+          name_fr: translations.fr.name,
+          name_en: translations.en.name,
           price_usd: Number(draft.price_usd || 0),
           sku: draft.sku,
           barcode: draft.barcode,
@@ -325,23 +398,78 @@ export function ProductForm() {
       {error && <p className="error-text">{error}</p>}
 
       <div className="form-card">
-        {tab === 'general' && (
+        {tab === 'general' && !isEdit && (
           <div className="form-grid">
             <div className="form-field">
               <label>Nom du produit (FR)</label>
-              <input value={draft.name_fr} onChange={(e) => set('name_fr', e.target.value)} />
+              <input value={translations.fr.name} onChange={(e) => setTranslations((t) => ({ ...t, fr: { ...t.fr, name: e.target.value } }))} />
             </div>
             <div className="form-field">
               <label>Nom du produit (EN)</label>
-              <input value={draft.name_en} onChange={(e) => set('name_en', e.target.value)} placeholder="optionnel — repli sur le FR" />
+              <input
+                value={translations.en.name}
+                onChange={(e) => setTranslations((t) => ({ ...t, en: { ...t.en, name: e.target.value } }))}
+                placeholder="optionnel — repli sur le FR"
+              />
             </div>
             <div className="form-field full">
               <label>Description courte</label>
-              <textarea rows={2} value={draft.short_description} onChange={(e) => set('short_description', e.target.value)} />
+              <textarea
+                rows={2}
+                value={translations.fr.short_description}
+                onChange={(e) => setTranslations((t) => ({ ...t, fr: { ...t.fr, short_description: e.target.value } }))}
+              />
             </div>
             <div className="form-field full">
               <label>Description détaillée</label>
-              <textarea rows={8} value={draft.description} onChange={(e) => set('description', e.target.value)} />
+              <textarea
+                rows={8}
+                value={translations.fr.description}
+                onChange={(e) => setTranslations((t) => ({ ...t, fr: { ...t.fr, description: e.target.value } }))}
+              />
+            </div>
+          </div>
+        )}
+
+        {tab === 'general' && isEdit && (
+          <div>
+            {/* Toggle FR/EN — édition uniquement : en création la version EN
+                est juste un repli optionnel saisi à côté (voir ci-dessus),
+                mais une fois le produit créé, les deux langues sont deux
+                lignes indépendantes à éditer séparément (voir save()). */}
+            <div className="form-tabs" style={{ marginBottom: 16 }}>
+              <button type="button" className={editLang === 'fr' ? 'active' : ''} onClick={() => setEditLang('fr')}>
+                🇫🇷 Français
+              </button>
+              <button
+                type="button"
+                className={editLang === 'en' ? 'active' : ''}
+                onClick={() => setEditLang('en')}
+                disabled={!productIDs.en}
+                title={productIDs.en ? undefined : 'Aucune traduction anglaise liée à ce produit'}
+              >
+                🇬🇧 English {!productIDs.en && '(absente)'}
+              </button>
+            </div>
+            <div className="form-grid">
+              <div className="form-field full">
+                <label>Nom du produit ({editLang.toUpperCase()})</label>
+                <input value={translations[editLang].name} onChange={(e) => setTranslated('name', e.target.value)} />
+              </div>
+              <div className="form-field full">
+                <label>Description courte ({editLang.toUpperCase()})</label>
+                <textarea rows={2} value={translations[editLang].short_description} onChange={(e) => setTranslated('short_description', e.target.value)} />
+              </div>
+              <div className="form-field full">
+                <label>Description détaillée ({editLang.toUpperCase()})</label>
+                <textarea rows={8} value={translations[editLang].description} onChange={(e) => setTranslated('description', e.target.value)} />
+              </div>
+              {editLang === 'en' && !productIDs.en && (
+                <p className="hint">
+                  Ce produit n'a pas encore de traduction anglaise. Utilisez le CLI (<code>--name-en</code>) pour en créer une —
+                  la création de traduction depuis cet écran n'est pas encore disponible.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -577,20 +705,30 @@ export function ProductForm() {
 
         {tab === 'seo' && (
           <div className="form-grid">
+            {isEdit && (
+              <p className="hint form-field full">
+                Édition du SEO pour la langue {editLang.toUpperCase()} — changez de langue depuis l'onglet
+                « Informations générales ».
+              </p>
+            )}
             <div className="form-field full">
               <label>Meta titre</label>
-              <input value={draft.meta_title} onChange={(e) => set('meta_title', e.target.value)} />
+              <input value={translations[editLang].meta_title} onChange={(e) => setTranslated('meta_title', e.target.value)} />
             </div>
             <div className="form-field full">
               <label>Meta description</label>
-              <textarea rows={3} value={draft.meta_description} onChange={(e) => set('meta_description', e.target.value)} />
+              <textarea rows={3} value={translations[editLang].meta_description} onChange={(e) => setTranslated('meta_description', e.target.value)} />
             </div>
             <div className="form-field full">
               <label>Aperçu Google</label>
               <div style={{ border: '1px solid #eee', borderRadius: 8, padding: 12, background: '#fafbfc' }}>
-                <div style={{ color: '#1a0dab', fontSize: 16 }}>{draft.meta_title || draft.name_fr || 'Titre du produit'}</div>
+                <div style={{ color: '#1a0dab', fontSize: 16 }}>
+                  {translations[editLang].meta_title || translations[editLang].name || 'Titre du produit'}
+                </div>
                 <div style={{ color: '#006621', fontSize: 12 }}>miadmarket.ca/?v=product&amp;slug={draft.slug || 'slug-du-produit'}</div>
-                <div style={{ color: '#545454', fontSize: 13 }}>{draft.meta_description || draft.short_description || 'Description du produit…'}</div>
+                <div style={{ color: '#545454', fontSize: 13 }}>
+                  {translations[editLang].meta_description || translations[editLang].short_description || 'Description du produit…'}
+                </div>
               </div>
             </div>
           </div>
