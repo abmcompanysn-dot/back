@@ -246,6 +246,11 @@ func main() {
 		mux.HandleFunc("DELETE /admin/api/products/{id}/variations/{variation_id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodDelete, s.catalogURL+"/products/"+r.PathValue("id")+"/variations/"+r.PathValue("variation_id"))
 		}))
+		// Modération produit vendeur (require_moderation) — GET /admin/api/products?status=pending_review
+		// existant suffit pour la liste (déjà filtrable), seul PATCH .../moderate manquait.
+		mux.HandleFunc("PATCH /admin/api/products/{id}/moderate", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.catalogURL+"/products/"+r.PathValue("id")+"/moderate")
+		}))
 		mux.HandleFunc("GET /admin/api/reviews", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/reviews" })))
 		mux.HandleFunc("PATCH /admin/api/reviews/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPatch, s.catalogURL+"/reviews/"+r.PathValue("id"))
