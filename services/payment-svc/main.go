@@ -15,10 +15,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +28,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stripe/stripe-go/v82/webhook"
 
 	"github.com/miadmarket/miad-backend/internal/kit"
 )
@@ -932,7 +929,18 @@ func (s *server) fetchExchangeRate(ctx context.Context, currency string) (float6
 
 /* ---------- Webhooks ---------- */
 
-// stripeWebhook — vérification HMAC réelle de Stripe-Signature.
+// stripeWebhook — vérification de signature via le SDK officiel Stripe
+// (github.com/stripe/stripe-go/webhook). Remplace une implémentation HMAC
+// manuelle qui contenait un vrai bug : elle retirait le préfixe "whsec_"
+// du secret avant de l'utiliser comme clé HMAC. Stripe utilise le secret
+// COMPLET (préfixe "whsec_" inclus) comme clé — voir webhook.ComputeSignature
+// dans le SDK officiel, `hmac.New(sha256.New, []byte(secret))` sans aucun
+// TrimPrefix. Ce bug (distinct du bug base64 corrigé plus tôt) a été
+// confirmé le 2026-08-26 en comparant notre calcul manuel à celui du SDK
+// officiel sur un vrai payload Stripe : le SDK validait la signature avec
+// succès, notre code la rejetait systématiquement (silencieusement, kit.Fail
+// ne logue rien) — cause racine du "paiement non confirmé" malgré paiement
+// réussi côté Stripe pour toutes les commandes de test de la session.
 func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	secret := s.stripeWebhookSecret
 	if secret == "" {
@@ -945,39 +953,27 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sig := r.Header.Get("Stripe-Signature")
-	ok, reason, computed, received := validStripeSignature(body, sig, secret)
-	if !ok {
-		// Diagnostic temporaire (2026-08-26) : kit.Fail n'écrit jamais dans
-		// les logs, donc ce rejet était totalement invisible même après le
-		// fix du décodage base64 — un webhook rejeté au même endroit pour
-		// une raison DIFFÉRENTE (secret mal configuré, en-tête absent...)
-		// aurait semblé identique de l'extérieur sans ce log. Deuxième round
-		// (toujours le 2026-08-26) : le premier fix base64 était réel mais
-		// insuffisant — un nouveau test (commande #35) échouait encore avec
-		// exactement le même symptôme. Ce log compare maintenant la
-		// signature CALCULÉE à celle REÇUE (au lieu de juste dire "invalide"),
-		// ce qui distingue un vrai mismatch HMAC (body altéré en transit,
-		// ex. par un proxy) d'un problème de timestamp/en-tête.
-		slog.Error("signature Stripe rejetée", "reason", reason, "sig_header", sig, "computed_sig", computed, "received_sig", received, "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body), "content_length_header", r.ContentLength, "transfer_encoding", r.TransferEncoding, "body_b64", base64.StdEncoding.EncodeToString(body))
+	stripeEvent, err := webhook.ConstructEventWithOptions(body, sig, secret, webhook.ConstructEventOptions{
+		IgnoreAPIVersionMismatch: true,
+	})
+	if err != nil {
+		slog.Error("signature Stripe rejetée", "err", err, "sig_header_present", sig != "", "secret_len", len(secret), "body_len", len(body))
 		kit.Fail(w, 401, "bad_signature", "signature Stripe invalide — événement rejeté")
 		return
 	}
-	var event struct {
-		Type string `json:"type"`
-		Data struct {
-			Object struct {
-				ID       string `json:"id"`
-				Metadata struct {
-					OrderID string `json:"order_id"`
-				} `json:"metadata"`
-			} `json:"object"`
-		} `json:"data"`
+	var eventData struct {
+		Object struct {
+			ID       string `json:"id"`
+			Metadata struct {
+				OrderID string `json:"order_id"`
+			} `json:"metadata"`
+		} `json:"object"`
 	}
-	if err := json.Unmarshal(body, &event); err != nil {
+	if err := json.Unmarshal(stripeEvent.Data.Raw, &eventData); err != nil {
 		kit.Fail(w, 400, "invalid_event", err.Error())
 		return
 	}
-	orderID, _ := strconv.ParseInt(event.Data.Object.Metadata.OrderID, 10, 64)
+	orderID, _ := strconv.ParseInt(eventData.Object.Metadata.OrderID, 10, 64)
 	// Log explicite de CHAQUE webhook reçu (type + order_id résolu) : sans
 	// ça, un événement Stripe qui tombe dans un cas inattendu (metadata
 	// vide, type non géré, orderID=0) échouait silencieusement — kit.Fail
@@ -985,67 +981,15 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	// ici était invisible même en lisant les logs du pod (bug de prod
 	// trouvé le 2026-08-26 : paiement confirmé côté Stripe, mais order-svc
 	// jamais notifié, sans aucune trace exploitable).
-	slog.Info("webhook Stripe reçu", "type", event.Type, "order_id", orderID, "raw_order_id", event.Data.Object.Metadata.OrderID, "payment_intent_id", event.Data.Object.ID)
-	switch event.Type {
+	slog.Info("webhook Stripe reçu", "type", stripeEvent.Type, "order_id", orderID, "raw_order_id", eventData.Object.Metadata.OrderID, "payment_intent_id", eventData.Object.ID)
+	switch stripeEvent.Type {
 	case "payment_intent.succeeded":
-		s.confirmPayment(w, r, orderID, "stripe", event.Data.Object.ID)
+		s.confirmPayment(w, r, orderID, "stripe", eventData.Object.ID)
 	case "payment_intent.payment_failed", "payment_intent.canceled":
 		s.markFailed(w, r, orderID, "stripe")
 	default:
-		kit.JSON(w, 200, map[string]string{"received": event.Type})
+		kit.JSON(w, 200, map[string]string{"received": string(stripeEvent.Type)})
 	}
-}
-
-// validStripeSignature renvoie (valide, motif-si-invalide, signature-calculée,
-// signature-reçue) — les deux dernières valeurs sont uniquement pour le log
-// de diagnostic temporaire dans stripeWebhook, jamais exposées au client.
-func validStripeSignature(body []byte, header, secret string) (bool, string, string, string) {
-	var t, v1 string
-	for _, part := range strings.Split(header, ",") {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		switch kv[0] {
-		case "t":
-			t = kv[1]
-		case "v1":
-			v1 = kv[1]
-		}
-	}
-	if t == "" || v1 == "" {
-		return false, "t_ou_v1_absent", "", v1
-	}
-	if !strings.HasPrefix(secret, "whsec_") {
-		return false, "secret_sans_prefixe_whsec", "", v1
-	}
-	ts, err := strconv.ParseInt(t, 10, 64)
-	if err != nil {
-		return false, "timestamp_illisible", "", v1
-	}
-	if time.Now().Unix()-ts > 300 {
-		return false, "timestamp_trop_vieux", "", v1
-	}
-	// Le "signing secret" Stripe (whsec_...) est TOUJOURS du texte ASCII
-	// brut après le préfixe, jamais du base64 — malgré son apparence qui
-	// peut y ressembler (lettres/chiffres). Le code décodait AVANT en
-	// base64 en priorité, et comme certains secrets (dont celui de test
-	// utilisé ici, whsec_uvvxxyjVzbxpZw6nPfqsrS34HOeMPaeu) forment par
-	// coïncidence une chaîne base64 valide, le décodage réussissait à
-	// tort et produisait une clé HMAC corrompue au lieu du vrai secret —
-	// donc TOUTE signature Stripe échouait silencieusement (401 avant même
-	// le parsing de l'événement, kit.Fail ne logue rien). Bug de prod
-	// trouvé le 2026-08-26 : paiement réussi côté Stripe, webhook livré,
-	// mais commande jamais confirmée.
-	key := []byte(strings.TrimPrefix(secret, "whsec_"))
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(t + "."))
-	mac.Write(body)
-	computed := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(computed), []byte(v1)) {
-		return false, "hmac_mismatch", computed, v1
-	}
-	return true, "", computed, v1
 }
 
 // paydunyaCallback — PayDunya notifie avec le token de la facture.
