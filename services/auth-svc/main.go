@@ -361,12 +361,22 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 2FA obligatoire (2026-08-26) : un compte sans totp_enabled reçoit
+	// quand même son JWT (sinon impossible d'atteindre l'écran de setup,
+	// qui exige lui-même un JWT admin valide — voir setup2FA) mais avec
+	// ce claim, que le frontend intercepte pour verrouiller la navigation
+	// sur l'écran de configuration 2FA tant qu'elle n'est pas activée.
+	// Pas une restriction backend (requireAdmin ne le vérifie pas) —
+	// uniquement un signal pour forcer le parcours côté UI.
+	totpSetupRequired := !totpEnabled
+
 	sv := s.adminSessionVersion(r.Context(), id)
 	jwt, expires := s.signJWT(map[string]any{
 		"sub": id, "iss": "miad-auth", "role": role, "email": body.Email, "sv": sv,
 		"exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
 	kit.JSON(w, 200, map[string]any{
+		"totp_setup_required": totpSetupRequired,
 		"session": map[string]string{"jwt": jwt, "expires_at": expires},
 		"role":    role,
 		"email":   body.Email,
@@ -393,10 +403,10 @@ func (s *server) firebaseAdminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var id int64
 	var role string
-	var isActive bool
+	var isActive, totpEnabled bool
 	err = s.db.QueryRow(r.Context(),
-		"SELECT id, role, is_active FROM admins WHERE lower(email) = lower($1)", info.Email,
-	).Scan(&id, &role, &isActive)
+		"SELECT id, role, is_active, totp_enabled FROM admins WHERE lower(email) = lower($1)", info.Email,
+	).Scan(&id, &role, &isActive, &totpEnabled)
 	if err == pgx.ErrNoRows {
 		kit.Fail(w, 403, "not_admin", fmt.Sprintf("%s est authentifié Firebase mais n'a pas le rôle admin", info.Email))
 		return
@@ -414,9 +424,10 @@ func (s *server) firebaseAdminLogin(w http.ResponseWriter, r *http.Request) {
 		"provider": "firebase", "exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
 	kit.JSON(w, 200, map[string]any{
-		"session": map[string]string{"jwt": jwt, "expires_at": expires},
-		"role":    role,
-		"email":   info.Email,
+		"totp_setup_required": !totpEnabled,
+		"session":             map[string]string{"jwt": jwt, "expires_at": expires},
+		"role":                role,
+		"email":               info.Email,
 	})
 }
 

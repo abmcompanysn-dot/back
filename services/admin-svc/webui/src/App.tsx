@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './lib/auth'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
+import { ForceTotpSetup } from './pages/ForceTotpSetup'
 import { Overview } from './pages/Overview'
 import { AllUsers } from './pages/users/AllUsers'
 import { CustomerDetail } from './pages/users/CustomerDetail'
@@ -30,9 +31,13 @@ import { FinanceOverview } from './pages/finance/FinanceOverview'
 import { Transactions } from './pages/finance/Transactions'
 import { Gateways } from './pages/finance/Gateways'
 
+// RequireAuth bloque aussi sur ForceTotpSetup si totpSetupRequired (2FA
+// obligatoire, voir auth.tsx) — un admin ne peut atteindre AUCUNE route
+// du dashboard tant qu'il n'a pas configuré et confirmé sa 2FA.
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, totpSetupRequired } = useAuth()
   if (!isAuthenticated) return <Navigate to="/admin/login" replace />
+  if (totpSetupRequired) return <ForceTotpSetup />
   return <>{children}</>
 }
 
