@@ -659,10 +659,10 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                         <div key={order.id} className="p-3 hover:bg-muted/30 rounded-2xl transition-colors border border-transparent hover:border-border">
                           <div className="flex items-center gap-4">
                             <div className="w-14 h-14 bg-muted rounded-xl flex items-center justify-center shrink-0 overflow-hidden border border-border/50">
-                              <img src={order.line_items[0]?.image?.src || "/logo/logo.png"} className="w-full h-full object-cover" alt="" />
+                              <img src={order.line_items?.[0]?.image?.src || "/logo/logo.png"} className="w-full h-full object-cover" alt="" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-black truncate text-foreground uppercase tracking-tight">#{order.id} - {order.line_items[0]?.name}</p>
+                              <p className="text-xs font-black truncate text-foreground uppercase tracking-tight">#{order.id} - {order.line_items?.[0]?.name}</p>
                               <p className="text-[10px] text-muted-foreground font-bold" suppressHydrationWarning>{new Date(order.date_created).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</p>
                             </div>
                             <div className="text-right shrink-0">
@@ -772,7 +772,7 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-4">
                               <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center shrink-0 overflow-hidden">
-                                {order.line_items[0]?.image?.src
+                                {order.line_items?.[0]?.image?.src
                                   ? <img src={order.line_items[0].image.src} alt="" className="w-full h-full object-cover" />
                                   : <Package size={20} className="text-muted-foreground" />
                                 }
@@ -780,7 +780,7 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                               <div>
                                 <p className="font-bold text-sm">Commande #{order.id}</p>
                                 <p className="text-xs text-muted-foreground" suppressHydrationWarning>
-                                  {new Date(order.date_created).toLocaleDateString('fr-FR')} · {order.line_items.length} article(s)
+                                  {new Date(order.date_created).toLocaleDateString('fr-FR')} · {order.line_items?.length ?? 0} article(s)
                                 </p>
                                 {getOrderCardInfo(order) && (
                                   <p className="text-[10px] text-muted-foreground font-bold mt-0.5">
