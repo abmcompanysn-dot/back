@@ -146,6 +146,16 @@ export async function GET(req: Request) {
   const refresh = searchParams.get('refresh') === 'true'
   const random = searchParams.get('random') === 'true'
   const seed = searchParams.get('seed') || ''
+  // ids= — récupérer un jeu précis de produits déjà connus (wishlist,
+  // panier) EN PASSANT PAR CETTE ROUTE plutôt que catalog-svc directement
+  // (voir lib/woo-catalog.ts fetchWooProductsByIds) : catalog-svc ne
+  // renvoie que vendor_id brut, l'enrichissement en vrai objet vendor
+  // (nom, logo — voir mapProduct plus bas) ne se fait QUE dans ce
+  // handler. Un appel direct à catalog-svc laisse vendor absent, ce qui
+  // fait planter tout composant qui lit product.vendor.name (bug de
+  // production trouvé le 2026-08-26 sur CartPage.tsx après connexion).
+  const idsParam = searchParams.get('ids')
+  const explicitIds = idsParam ? idsParam.split(',').map((s) => s.trim()).filter(Boolean) : null
 
   let perPage = parseInt(searchParams.get('per_page') || '100');
   if (perPage > 100) perPage = 100;
@@ -211,20 +221,25 @@ export async function GET(req: Request) {
       }
     }
 
+    if (explicitIds && explicitIds.length === 0) {
+      return NextResponse.json({ products: [], total: 0, pages: 1 });
+    }
+
     let apiUrl: URL;
     if (id) {
       apiUrl = new URL(`${CATALOG_SVC_URL}/products/${id}`);
       if (lang) apiUrl.searchParams.set('lang', lang);
     } else {
       apiUrl = new URL(`${CATALOG_SVC_URL}/products`);
-      apiUrl.searchParams.set('page_size', perPage.toString());
-      apiUrl.searchParams.set('page', randomPageIds ? '1' : page);
+      apiUrl.searchParams.set('page_size', explicitIds ? String(explicitIds.length) : perPage.toString());
+      apiUrl.searchParams.set('page', (randomPageIds || explicitIds) ? '1' : page);
       if (slug) apiUrl.searchParams.set('slug', slug);
       if (categoryId) apiUrl.searchParams.set('category_id', categoryId);
       if (vendor) apiUrl.searchParams.set('vendor_id', vendor);
       if (search) apiUrl.searchParams.set('q', search);
       if (lang) apiUrl.searchParams.set('lang', lang);
       if (randomPageIds) apiUrl.searchParams.set('include', randomPageIds.join(','));
+      else if (explicitIds) apiUrl.searchParams.set('include', explicitIds.join(','));
     }
 
     const response = await fetch(apiUrl.toString(), {
