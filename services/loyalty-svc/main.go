@@ -16,6 +16,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +108,27 @@ CREATE TABLE IF NOT EXISTS rep_order_acknowledgements (
   representative_id BIGINT NOT NULL REFERENCES representatives(id),
   acknowledged_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------- WhatsApp (Twilio) ----------
+-- Reprend le plugin WordPress "MIAD Representative Manager" (notifications
+-- représentant/super-rep + admin à la confirmation vendeur, notifications
+-- client à chaque étape de livraison), perdu lors de la migration hors
+-- WordPress. Chaque envoi (et chaque réception via le webhook entrant) est
+-- journalisé ici, succès ou échec — jamais silencieux.
+CREATE TABLE IF NOT EXISTS whatsapp_logs (
+  id             BIGSERIAL PRIMARY KEY,
+  direction      TEXT NOT NULL DEFAULT 'out', -- out | in (webhook Twilio)
+  phone          TEXT NOT NULL DEFAULT '',
+  recipient_type TEXT NOT NULL DEFAULT '',    -- representative | super_rep | admin | client
+  order_id       BIGINT,
+  template_sid   TEXT DEFAULT '',
+  message_body   TEXT DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'queued', -- queued | sent | failed
+  error          TEXT DEFAULT '',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_logs_order ON whatsapp_logs (order_id);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_logs_created ON whatsapp_logs (created_at DESC);
 `
 
 type server struct {
@@ -114,6 +136,40 @@ type server struct {
 	kafka     sarama.SyncProducer
 	vendorURL string
 	orderURL  string
+
+	settings *kit.SettingsStore
+	// Champs pointés par settings (voir NewSettingsStore) — mêmes garanties
+	// que payment-svc/notification-svc : jamais lus directement ailleurs
+	// que via ces champs après settings.Load()/Save().
+	twilioAccountSID            string
+	twilioAuthToken             string
+	twilioWhatsappFrom          string
+	twilioAdminNumbers          string // liste séparée par virgule, ex: "+221771234567,+33612345678"
+	twilioEnableRep             string // "yes" / "no" — texte plutôt que bool, SettingsField n'a que des *string
+	twilioEnableAdmin           string
+	twilioEnableClient          string
+	twilioTemplateRepNewOrder   string // Content SID Twilio (HXxxxx...) — vide = repli texte brut
+	twilioTemplateClientConfirm string
+	twilioTemplateClientShipped string
+	twilioTemplateAdminNewOrder string
+}
+
+const settingsTable = "loyalty_settings"
+
+func (s *server) settingsFields() []kit.SettingsField {
+	return []kit.SettingsField{
+		{Key: "twilio_account_sid", Ptr: &s.twilioAccountSID, Secret: true, Description: "Account SID Twilio (notifications WhatsApp)"},
+		{Key: "twilio_auth_token", Ptr: &s.twilioAuthToken, Secret: true, Description: "Auth Token Twilio"},
+		{Key: "twilio_whatsapp_from", Ptr: &s.twilioWhatsappFrom, Description: "Numéro WhatsApp Business Twilio (ex: whatsapp:+14155238886)"},
+		{Key: "twilio_admin_numbers", Ptr: &s.twilioAdminNumbers, Description: "Numéros WhatsApp admin à notifier, séparés par une virgule"},
+		{Key: "twilio_enable_rep", Ptr: &s.twilioEnableRep, Description: "Activer les notifications WhatsApp aux représentants (yes/no)"},
+		{Key: "twilio_enable_admin", Ptr: &s.twilioEnableAdmin, Description: "Activer les notifications WhatsApp à l'admin (yes/no)"},
+		{Key: "twilio_enable_client", Ptr: &s.twilioEnableClient, Description: "Activer les notifications WhatsApp aux clients (yes/no)"},
+		{Key: "twilio_template_rep_new_order", Ptr: &s.twilioTemplateRepNewOrder, Description: "Content SID — représentant, nouvelle commande"},
+		{Key: "twilio_template_client_confirm", Ptr: &s.twilioTemplateClientConfirm, Description: "Content SID — client, confirmation paiement"},
+		{Key: "twilio_template_client_shipped", Ptr: &s.twilioTemplateClientShipped, Description: "Content SID — client, expédition/international"},
+		{Key: "twilio_template_admin_new_order", Ptr: &s.twilioTemplateAdminNewOrder, Description: "Content SID — admin, nouvelle commande"},
+	}
 }
 
 func main() {
@@ -125,7 +181,7 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration impossible", "err", err)
 		return
 	}
@@ -135,23 +191,52 @@ func main() {
 		kafka:     kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
 		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+
+		twilioAccountSID:   kit.Env("TWILIO_ACCOUNT_SID", ""),
+		twilioAuthToken:    kit.Env("TWILIO_AUTH_TOKEN", ""),
+		twilioWhatsappFrom: kit.Env("TWILIO_WHATSAPP_FROM", ""),
+		twilioEnableRep:    kit.Env("TWILIO_ENABLE_REP", "yes"),
+		twilioEnableAdmin:  kit.Env("TWILIO_ENABLE_ADMIN", "no"),
+		twilioEnableClient: kit.Env("TWILIO_ENABLE_CLIENT", "no"),
 	}
+	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
+	if err := s.settings.Load(ctx); err != nil {
+		log.Error("chargement loyalty_settings impossible", "err", err)
+	}
+
 	// Module Parrainage : un client inscrit avec ?ref=<code> est lié à son
 	// représentant via cet événement, plutôt qu'un appel HTTP synchrone
 	// depuis auth-svc/registerCustomer (couplage dur évité — l'inscription
 	// ne doit jamais échouer à cause d'un souci de parrainage).
 	go s.consumeCustomerEvents(log)
+	// Notifications WhatsApp : commande confirmée (représentant/admin) et
+	// changement d'étape de livraison (client) — voir consumeWhatsappEvents.
+	go s.consumeWhatsappEvents(log)
 
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
+	health.Add("twilio_credentials", func(ctx context.Context) error {
+		if s.twilioAccountSID == "" || s.twilioAuthToken == "" {
+			return fmt.Errorf("clés Twilio absentes — notifications WhatsApp journalisées sans envoi réel")
+		}
+		return nil
+	})
 
 	kit.Run("loyalty-svc", kit.Env("PORT_LOYALTY", "8091"), log, health, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /settings", s.getSettings)
+		mux.HandleFunc("PUT /settings", s.putSettings)
+
 		// Coins
 		mux.HandleFunc("GET /coins/{customer_id}", s.getCoins)
 		mux.HandleFunc("POST /coins/daily", s.claimDaily)
 		mux.HandleFunc("GET /coins/leaderboard", s.leaderboard)
 		mux.HandleFunc("GET /coupons", s.listCoupons)
 		mux.HandleFunc("POST /coupons/validate", s.validateCoupon)
+
+		// WhatsApp (Twilio)
+		mux.HandleFunc("GET /whatsapp/logs", s.listWhatsappLogs)
+		mux.HandleFunc("POST /whatsapp/resend/{order_id}", s.resendWhatsappForOrder)
+		mux.HandleFunc("POST /whatsapp/incoming", s.whatsappIncomingWebhook)
 
 		// Représentants
 		// "representatives" (pluriel, sans variable) — pas de conflit avec
@@ -941,4 +1026,460 @@ func (s *server) acknowledgeOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kit.JSON(w, 200, map[string]any{"order_id": orderID, "representative_id": body.RepresentativeID, "acknowledged": true})
+}
+
+/* ============================================================
+   WhatsApp (Twilio) — reprend le plugin WP "MIAD Representative
+   Manager" : notifications représentant/super-rep + admin quand une
+   commande est confirmée par le vendeur (processing), notifications
+   client à chaque étape de la chaîne de livraison.
+   ============================================================ */
+
+func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
+	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	toSave := map[string]string{}
+	for k, v := range body {
+		if !s.settings.IsKnown(k) {
+			continue
+		}
+		if s.settings.IsSecret(k) && v == "" {
+			continue // champ secret vide = "inchangé", jamais écrasé par du vide
+		}
+		toSave[k] = v
+	}
+	if len(toSave) == 0 {
+		kit.Fail(w, 400, "no_valid_fields", "aucun champ reconnu à mettre à jour")
+		return
+	}
+	if err := s.settings.Save(r.Context(), toSave); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true, "updated": len(toSave)})
+}
+
+// sendWhatsApp — POST form-encodé vers l'API Twilio (Basic Auth SID/Token),
+// même style que createStripePaymentIntent (payment-svc). ContentSid+
+// ContentVariables si un template est configuré, sinon repli sur Body texte
+// brut — comme le faisait le PHP (if ($sid) {...} else {...}). Journalise
+// TOUJOURS dans whatsapp_logs (succès ou échec) et ne renvoie jamais
+// d'erreur bloquante à l'appelant : un envoi WhatsApp raté ne doit jamais
+// faire échouer un changement de statut de commande ou d'étape de livraison.
+func (s *server) sendWhatsApp(ctx context.Context, to, recipientType string, orderID *int64, contentSid string, vars map[string]string, fallbackBody string) {
+	status, errMsg := "queued", ""
+	bodyLogged := fallbackBody
+
+	if to == "" {
+		return // pas de numéro connu pour ce destinataire — rien à journaliser
+	}
+	if s.twilioAccountSID == "" || s.twilioAuthToken == "" || s.twilioWhatsappFrom == "" {
+		status, errMsg = "failed", "clés Twilio non configurées"
+	} else {
+		form := url.Values{}
+		form.Set("To", "whatsapp:"+strings.TrimPrefix(to, "whatsapp:"))
+		form.Set("From", "whatsapp:"+strings.TrimPrefix(s.twilioWhatsappFrom, "whatsapp:"))
+		if contentSid != "" {
+			varsJSON, _ := json.Marshal(vars)
+			form.Set("ContentSid", contentSid)
+			form.Set("ContentVariables", string(varsJSON))
+			bodyLogged = fmt.Sprintf("[template %s] %s", contentSid, string(varsJSON))
+		} else {
+			form.Set("Body", fallbackBody)
+		}
+
+		endpoint := fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Messages.json", s.twilioAccountSID)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+		req.SetBasicAuth(s.twilioAccountSID, s.twilioAuthToken)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			status, errMsg = "failed", err.Error()
+		} else {
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode >= 300 {
+				status, errMsg = "failed", fmt.Sprintf("Twilio a refusé (%d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+			} else {
+				status = "sent"
+			}
+		}
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO whatsapp_logs (direction, phone, recipient_type, order_id, template_sid, message_body, status, error)
+		VALUES ('out',$1,$2,$3,$4,$5,$6,$7)`,
+		to, recipientType, orderID, contentSid, bodyLogged, status, errMsg); err != nil {
+		slog.Default().Error("persistance whatsapp_logs impossible", "err", err)
+	}
+}
+
+/* ---------- Déclenchement : commande confirmée → représentant(s) + admin ---------- */
+
+// notifyOrderProcessing — reproduit miad_notify_rep_new_order (PHP) :
+// résout le pays du vendeur (vendor-svc), notifie le(s) représentant(s) du
+// pays + tous les super-représentants, puis les numéros admin configurés.
+func (s *server) notifyOrderProcessing(ctx context.Context, log *slog.Logger, orderID int64) {
+	var order struct {
+		Reference       string          `json:"reference"`
+		VendorID        int64           `json:"vendor_id"`
+		TotalUSD        float64         `json:"total_usd"`
+		Lines           json.RawMessage `json:"lines"`
+		ShippingAddress json.RawMessage `json:"shipping_address"`
+		BillingAddress  json.RawMessage `json:"billing_address"`
+	}
+	if err := fetchJSONInto(ctx, fmt.Sprintf("%s/orders/%d", s.orderURL, orderID), &order); err != nil {
+		log.Error("whatsapp: commande introuvable", "order_id", orderID, "err", err)
+		return
+	}
+
+	var vendor struct {
+		Name    string `json:"store_name"`
+		Country string `json:"country"`
+	}
+	if err := fetchJSONInto(ctx, fmt.Sprintf("%s/vendors/%d", s.vendorURL, order.VendorID), &vendor); err != nil {
+		log.Error("whatsapp: boutique introuvable", "vendor_id", order.VendorID, "err", err)
+		return
+	}
+
+	addr := parseAddress(order.ShippingAddress)
+	if addr.empty() {
+		addr = parseAddress(order.BillingAddress)
+	}
+	productsSummary := summarizeLines(order.Lines)
+	totalFmt := fmt.Sprintf("%.2f $", order.TotalUSD)
+
+	// ---------- Représentant(s) du pays + super-représentants ----------
+	if s.twilioEnableRep == "yes" {
+		rows, err := s.db.Query(ctx,
+			"SELECT whatsapp FROM representatives WHERE (country = $1 AND is_super_rep = FALSE) OR is_super_rep = TRUE",
+			vendor.Country)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var wa *string
+				_ = rows.Scan(&wa)
+				if wa == nil || *wa == "" {
+					continue
+				}
+				fallback := fmt.Sprintf("🛒 *Nouvelle commande #%s*\nBoutique : %s\nClient : %s\nMontant : *%s*\nAdresse : %s\nProduits : %s",
+					order.Reference, vendor.Name, addr.fullName(), totalFmt, addr.oneLine(), productsSummary)
+				s.sendWhatsApp(ctx, *wa, "representative", &orderID, s.twilioTemplateRepNewOrder, map[string]string{
+					"1": order.Reference + " — " + productsSummary,
+					"2": vendor.Name,
+					"3": totalFmt,
+					"4": addr.fullName(),
+					"5": addr.oneLine(),
+					"6": productsSummary,
+				}, fallback)
+			}
+		}
+	}
+
+	// ---------- Admin ----------
+	if s.twilioEnableAdmin == "yes" && s.twilioAdminNumbers != "" {
+		for _, phone := range strings.Split(s.twilioAdminNumbers, ",") {
+			phone = strings.TrimSpace(phone)
+			if phone == "" {
+				continue
+			}
+			fallback := fmt.Sprintf("📦 *Commande #%s* — %s — *%s* — %s", order.Reference, addr.fullName(), totalFmt, addr.oneLine())
+			s.sendWhatsApp(ctx, phone, "admin", &orderID, s.twilioTemplateAdminNewOrder, map[string]string{
+				"1": order.Reference,
+				"2": addr.fullName(),
+				"3": totalFmt,
+				"4": time.Now().Format("02/01/2006 15:04"),
+				"5": addr.oneLine(),
+			}, fallback)
+		}
+	}
+}
+
+/* ---------- Déclenchement : étape de livraison → client ---------- */
+
+var deliveryStageClientMessages = map[string]string{
+	"rep_received": "📥 Bonjour %s, votre commande #%s a été réceptionnée par notre représentant local.",
+	"local_pickup": "🚚 Bonjour %s, votre commande #%s a été prise en charge par le transporteur local.",
+	"intl_handoff": "✈️ Bonjour %s, votre commande #%s est remise au transporteur international.",
+	"delivered":    "🎉 Bonjour %s, votre commande #%s a été livrée. Merci pour votre confiance !",
+}
+
+// notifyDeliveryStage — reproduit miad_process_delivery_stage_update (PHP),
+// partie client uniquement (l'écriture de l'étape elle-même reste dans
+// fulfillment-svc, seule propriétaire de shipments.delivery_stage).
+func (s *server) notifyDeliveryStage(ctx context.Context, log *slog.Logger, orderID int64, stage string) {
+	if s.twilioEnableClient != "yes" {
+		return
+	}
+	tmpl, ok := deliveryStageClientMessages[stage]
+	if !ok {
+		return
+	}
+
+	var order struct {
+		BillingAddress json.RawMessage `json:"billing_address"`
+	}
+	if err := fetchJSONInto(ctx, fmt.Sprintf("%s/orders/%d", s.orderURL, orderID), &order); err != nil {
+		log.Error("whatsapp: commande introuvable pour notif étape", "order_id", orderID, "err", err)
+		return
+	}
+	addr := parseAddress(order.BillingAddress)
+	if addr.phone == "" {
+		return // pas de numéro client connu — rien à envoyer
+	}
+
+	fallback := fmt.Sprintf(tmpl, addr.firstName(), strconv.FormatInt(orderID, 10))
+	if stage == "intl_handoff" {
+		s.sendWhatsApp(ctx, addr.phone, "client", &orderID, s.twilioTemplateClientShipped, map[string]string{
+			"1": addr.firstName(),
+			"2": strconv.FormatInt(orderID, 10),
+			"3": "N/A",
+		}, fallback)
+		return
+	}
+	s.sendWhatsApp(ctx, addr.phone, "client", &orderID, "", nil, fallback)
+}
+
+/* ---------- Consumer Kafka ---------- */
+
+var whatsappWatchedTopics = []string{"order.status_changed", "shipment.delivery_stage_changed"}
+
+// consumeWhatsappEvents — même pattern que notification-svc.consume :
+// retry/backoff sur Kafka indisponible, jamais fatal pour le service.
+// Groupe de consommateur dédié ("loyalty-svc-whatsapp") pour ne pas
+// interférer avec consumeCustomerEvents (groupe "loyalty-svc", topic
+// customer.registered) — deux groupes distincts consomment indépendamment.
+func (s *server) consumeWhatsappEvents(log *slog.Logger) {
+	brokers := kit.Env("KAFKA_BROKERS", "kafka:9092")
+	if brokers == "" {
+		log.Warn("KAFKA_BROKERS vide — notifications WhatsApp désactivées (mode dev)")
+		return
+	}
+	cfg := sarama.NewConfig()
+	cfg.Consumer.Offsets.Initial = sarama.OffsetOldest
+	cfg.Version = sarama.V2_8_0_0
+
+	for {
+		group, err := sarama.NewConsumerGroup([]string{brokers}, "loyalty-svc-whatsapp", cfg)
+		if err != nil {
+			log.Error("kafka injoignable (whatsapp) — retry 5 s", "err", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		log.Info("consommateur whatsapp connecté", "topics", whatsappWatchedTopics)
+		handler := whatsappConsumer{s: s, log: log}
+		_ = group.Consume(context.Background(), whatsappWatchedTopics, handler)
+		group.Close()
+	}
+}
+
+type whatsappConsumer struct {
+	s   *server
+	log *slog.Logger
+}
+
+func (c whatsappConsumer) Setup(sarama.ConsumerGroupSession) error   { return nil }
+func (c whatsappConsumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+func (c whatsappConsumer) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for msg := range claim.Messages() {
+		switch msg.Topic {
+		case "order.status_changed":
+			var payload struct {
+				OrderID int64  `json:"order_id"`
+				Status  string `json:"status"`
+			}
+			if json.Unmarshal(msg.Value, &payload) == nil && payload.Status == "processing" && payload.OrderID > 0 {
+				c.s.notifyOrderProcessing(sess.Context(), c.log, payload.OrderID)
+			}
+		case "shipment.delivery_stage_changed":
+			var payload struct {
+				OrderID int64  `json:"order_id"`
+				Stage   string `json:"stage"`
+			}
+			if json.Unmarshal(msg.Value, &payload) == nil && payload.OrderID > 0 {
+				c.s.notifyDeliveryStage(sess.Context(), c.log, payload.OrderID, payload.Stage)
+			}
+		}
+		sess.MarkMessage(msg, "")
+	}
+	return nil
+}
+
+/* ---------- Endpoints admin : logs, testeur, webhook entrant ---------- */
+
+// listWhatsappLogs — GET /whatsapp/logs?order_id=&recipient_type=&limit=
+func (s *server) listWhatsappLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	where := "WHERE 1=1"
+	args := []any{}
+	if orderID := q.Get("order_id"); orderID != "" {
+		args = append(args, orderID)
+		where += fmt.Sprintf(" AND order_id = $%d", len(args))
+	}
+	if recipientType := q.Get("recipient_type"); recipientType != "" {
+		args = append(args, recipientType)
+		where += fmt.Sprintf(" AND recipient_type = $%d", len(args))
+	}
+	limit, _ := strconv.Atoi(kit.EnvOr(q.Get("limit"), "100"))
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, direction, phone, recipient_type, order_id, template_sid, message_body, status, error, created_at
+		FROM whatsapp_logs `+where+` ORDER BY created_at DESC LIMIT `+strconv.Itoa(limit), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var direction, phone, recipientType, templateSid, messageBody, status, errMsg string
+		var orderID *int64
+		var at time.Time
+		if err := rows.Scan(&id, &direction, &phone, &recipientType, &orderID, &templateSid, &messageBody, &status, &errMsg, &at); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "direction": direction, "phone": phone, "recipient_type": recipientType,
+			"order_id": orderID, "template_sid": templateSid, "message_body": messageBody,
+			"status": status, "error": errMsg, "created_at": at.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items})
+}
+
+// resendWhatsappForOrder — équivalent du testeur PHP ("Renvoyer la
+// notification") : rejoue la même logique que le déclencheur Kafka
+// "processing", sans changer le statut de la commande.
+func (s *server) resendWhatsappForOrder(w http.ResponseWriter, r *http.Request) {
+	orderID, err := strconv.ParseInt(r.PathValue("order_id"), 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_order_id", "order_id invalide")
+		return
+	}
+	s.notifyOrderProcessing(r.Context(), slog.Default(), orderID)
+	kit.JSON(w, 200, map[string]any{"order_id": orderID, "resent": true})
+}
+
+// whatsappIncomingWebhook — POST /whatsapp/incoming, appelé par Twilio à
+// chaque message WhatsApp entrant (réponse d'un client/représentant).
+// Périmètre minimal (comme dans l'ancien plugin) : journaliser, répondre
+// 200 avec un TwiML vide — pas de logique de réponse automatique.
+func (s *server) whatsappIncomingWebhook(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	from := strings.TrimPrefix(r.FormValue("From"), "whatsapp:")
+	body := r.FormValue("Body")
+	if from != "" {
+		if _, err := s.db.Exec(r.Context(), `
+			INSERT INTO whatsapp_logs (direction, phone, recipient_type, message_body, status)
+			VALUES ('in',$1,'unknown',$2,'sent')`, from, body); err != nil {
+			slog.Default().Error("persistance whatsapp entrant impossible", "err", err)
+		}
+	}
+	w.Header().Set("Content-Type", "text/xml")
+	w.WriteHeader(200)
+	_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`))
+}
+
+/* ---------- Aides adresse/commande ---------- */
+
+type parsedAddress struct {
+	firstNameField string
+	lastNameField  string
+	phone          string
+	line1          string
+	city           string
+	country        string
+}
+
+func (a parsedAddress) fullName() string {
+	return strings.TrimSpace(a.firstNameField + " " + a.lastNameField)
+}
+
+func (a parsedAddress) firstName() string {
+	if a.firstNameField != "" {
+		return a.firstNameField
+	}
+	return "client"
+}
+
+func (a parsedAddress) oneLine() string {
+	parts := []string{}
+	for _, p := range []string{a.line1, a.city, a.country} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
+		return "N/A"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (a parsedAddress) empty() bool {
+	return a.line1 == "" && a.city == "" && a.country == "" && a.phone == ""
+}
+
+// parseAddress — les adresses order-svc sont du JSON libre venant du
+// checkout frontend (voir destCountryFrom, order-svc/main.go) : décodage
+// défensif, clés absentes → chaînes vides plutôt qu'une erreur.
+func parseAddress(raw json.RawMessage) parsedAddress {
+	var doc struct {
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Phone     string `json:"phone"`
+		Address1  string `json:"address_1"`
+		City      string `json:"city"`
+		Country   string `json:"country"`
+	}
+	_ = json.Unmarshal(raw, &doc)
+	return parsedAddress{
+		firstNameField: doc.FirstName, lastNameField: doc.LastName,
+		phone: doc.Phone, line1: doc.Address1, city: doc.City, country: doc.Country,
+	}
+}
+
+type orderLine struct {
+	Name     string `json:"name"`
+	Quantity int    `json:"quantity"`
+}
+
+func summarizeLines(raw json.RawMessage) string {
+	var lines []orderLine
+	_ = json.Unmarshal(raw, &lines)
+	if len(lines) == 0 {
+		return "N/A"
+	}
+	parts := make([]string, 0, len(lines))
+	for _, l := range lines {
+		parts = append(parts, fmt.Sprintf("%s x%d", l.Name, l.Quantity))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func fetchJSONInto(ctx context.Context, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("statut %d: %s", resp.StatusCode, string(body))
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }

@@ -37,6 +37,19 @@ const STATUS_OPTIONS = [
   'pending_payment', 'paid', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded',
 ]
 
+// Chaîne de livraison MIAD (vendeur → représentant → transport local →
+// international → livré) — distincte du statut commande ci-dessus.
+// Choisir une étape déclenche automatiquement la notification WhatsApp
+// client correspondante (voir loyalty-svc, event shipment.delivery_stage_changed).
+const DELIVERY_STAGE_OPTIONS = [
+  { value: '', label: '— non définie —' },
+  { value: 'vendor_confirmed', label: 'Vendeur a confirmé' },
+  { value: 'rep_received', label: 'Représentant a réceptionné' },
+  { value: 'local_pickup', label: 'Transport local récupéré' },
+  { value: 'intl_handoff', label: 'Remis au transport international' },
+  { value: 'delivered', label: 'Livré au client' },
+]
+
 export function OrderDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -46,6 +59,9 @@ export function OrderDetail() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [newStatus, setNewStatus] = useState('')
+  const [deliveryStage, setDeliveryStage] = useState('')
+  const [stageBusy, setStageBusy] = useState(false)
+  const [stageNotice, setStageNotice] = useState<string | null>(null)
 
   useEffect(() => {
     load()
@@ -78,6 +94,24 @@ export function OrderDetail() {
       setError(err instanceof ApiError ? err.message : 'échec du changement de statut')
     } finally {
       setBusy(false)
+    }
+  }
+
+  // changeDeliveryStage — POST /admin/api/orders/set-stage (dhlSetOrderStage
+  // côté Go), relayé vers fulfillment-svc/shipments/order/{id}/delivery-stage.
+  // Déclenche automatiquement la notification WhatsApp client correspondante
+  // (voir loyalty-svc, consumer de shipment.delivery_stage_changed).
+  async function changeDeliveryStage() {
+    if (!order || !deliveryStage) return
+    setStageBusy(true)
+    setStageNotice(null)
+    try {
+      await api.post('/admin/api/orders/set-stage', { order_id: order.id, stage: deliveryStage })
+      setStageNotice('Étape enregistrée — le client a été notifié par WhatsApp si le canal est configuré.')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "échec du changement d'étape")
+    } finally {
+      setStageBusy(false)
     }
   }
 
@@ -204,6 +238,24 @@ export function OrderDetail() {
             <p className="hint" style={{ marginTop: 8 }}>
               L'annulation réintègre automatiquement le stock des produits de cette commande.
             </p>
+
+            <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid #eee' }} />
+
+            <div className="form-field" style={{ marginBottom: 12 }}>
+              <label>Étape de livraison (chaîne MIAD)</label>
+              <select value={deliveryStage} onChange={(e) => setDeliveryStage(e.target.value)}>
+                {DELIVERY_STAGE_OPTIONS.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <span className="hint">Notifie automatiquement le client par WhatsApp (si activé dans Configuration → WhatsApp)</span>
+            </div>
+            <button className="btn-primary" disabled={stageBusy || !deliveryStage} onClick={changeDeliveryStage} style={{ width: '100%' }}>
+              {stageBusy ? 'Enregistrement…' : "Enregistrer l'étape"}
+            </button>
+            {stageNotice && <p className="hint" style={{ marginTop: 8, color: '#1a7f37', fontWeight: 600 }}>{stageNotice}</p>}
           </div>
 
           {order.coupon_code && (

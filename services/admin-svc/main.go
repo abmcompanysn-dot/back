@@ -384,6 +384,10 @@ func main() {
 		mux.HandleFunc("POST /admin/api/representative/orders/{id}/acknowledge", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.loyaltyURL+"/representative/orders/"+r.PathValue("id")+"/acknowledge")
 		}))
+		mux.HandleFunc("GET /admin/api/whatsapp/logs", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/whatsapp/logs" })))
+		mux.HandleFunc("POST /admin/api/whatsapp/resend/{order_id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.loyaltyURL+"/whatsapp/resend/"+r.PathValue("order_id"))
+		}))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
 		mux.HandleFunc("GET /admin/api/push/stats", s.requireAdmin(s.proxy(func() string { return s.notificationURL + "/push/stats" })))
 		mux.HandleFunc("POST /admin/api/push/broadcast", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
@@ -748,6 +752,7 @@ func (s *server) settingsServiceURLs() map[string]string {
 		"auth":         s.authURL,
 		"notification": s.notificationURL,
 		"email":        s.emailURL,
+		"loyalty":      s.loyaltyURL,
 	}
 }
 

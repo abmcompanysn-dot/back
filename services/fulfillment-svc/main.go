@@ -570,6 +570,11 @@ func (s *server) setDeliveryStage(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 404, "shipment_not_found", fmt.Sprintf("aucune expédition pour la commande %d — impossible de fixer l'étape avant création", orderID))
 		return
 	}
+	// Consommé par loyalty-svc pour notifier le client par WhatsApp à chaque
+	// étape (voir miad_process_delivery_stage_update, plugin WP d'origine).
+	kit.Publish(s.kafka, "shipment.delivery_stage_changed", fmt.Sprint(orderID), map[string]any{
+		"order_id": orderID, "stage": body.Stage,
+	})
 	kit.JSON(w, 200, map[string]any{"order_id": orderID, "stage": body.Stage})
 }
 

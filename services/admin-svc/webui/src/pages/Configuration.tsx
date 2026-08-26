@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { ApiError, api } from '../lib/api'
 
 // Configuration Système — regroupe toutes les variables auparavant en dur
@@ -77,6 +78,23 @@ const TABS: ServiceTab[] = [
       { key: 'resend_api_key', label: 'Clé API Resend', secret: true, hint: 'Vide = mode simulation, email jamais envoyé' },
       { key: 'from_email', label: 'Adresse expéditeur' },
       { key: 'storefront_url', label: 'URL du site public', hint: 'Utilisée dans le contenu des emails' },
+    ],
+  },
+  {
+    key: 'loyalty',
+    label: 'WhatsApp',
+    fields: [
+      { key: 'twilio_account_sid', label: 'Account SID Twilio', secret: true },
+      { key: 'twilio_auth_token', label: 'Auth Token Twilio', secret: true },
+      { key: 'twilio_whatsapp_from', label: 'Numéro WhatsApp Business', hint: 'Format whatsapp:+14155238886' },
+      { key: 'twilio_admin_numbers', label: 'Numéros admin à notifier', hint: 'Séparés par une virgule, ex: +221771234567,+33612345678' },
+      { key: 'twilio_enable_rep', label: 'Notifier les représentants', hint: 'yes ou no' },
+      { key: 'twilio_enable_admin', label: 'Notifier l’admin', hint: 'yes ou no' },
+      { key: 'twilio_enable_client', label: 'Notifier les clients', hint: 'yes ou no' },
+      { key: 'twilio_template_rep_new_order', label: 'Template — représentant, nouvelle commande', hint: 'Content SID Twilio (HXxxxx…), vide = message texte simple' },
+      { key: 'twilio_template_client_confirm', label: 'Template — client, confirmation paiement' },
+      { key: 'twilio_template_client_shipped', label: 'Template — client, expédition/international' },
+      { key: 'twilio_template_admin_new_order', label: 'Template — admin, nouvelle commande' },
     ],
   },
   {
@@ -232,6 +250,12 @@ export function Configuration() {
           </button>
         ))}
       </div>
+
+      {tab === 'loyalty' && (
+        <p className="hint" style={{ marginBottom: 12 }}>
+          <Link to="/admin/whatsapp-logs">Voir le journal des notifications WhatsApp envoyées →</Link>
+        </p>
+      )}
 
       {error && <p className="error-text">{error}</p>}
       {notice && <p className="hint" style={{ color: '#1a7f37', fontWeight: 600 }}>{notice}</p>}

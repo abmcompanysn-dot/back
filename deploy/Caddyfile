@@ -137,6 +137,12 @@
 	handle /representative* {
 		reverse_proxy loyalty-svc:8091
 	}
+	# Webhook entrant Twilio (réponses WhatsApp) — public comme /webhooks/*
+	# ci-dessus, pas de secret dans l'URL (Twilio n'envoie pas d'en-tête
+	# d'auth applicative standard sur ce type de webhook).
+	handle /whatsapp/* {
+		reverse_proxy loyalty-svc:8091
+	}
 
 	handle {
 		respond 404 {
