@@ -1,5 +1,25 @@
 :root {
   color-scheme: light dark;
+
+  /* Palette MIAD Market (2026-08-26) — blanc / vert / orange. Le vert
+     #005826 est déjà la couleur de marque utilisée sur les bannières
+     catégorie du site public ; l'orange est choisi pour s'accorder avec
+     (même famille de saturation, contraste AA sur blanc) et sert
+     uniquement d'accent (CTA secondaires, alertes) — jamais de fond
+     pleine page, pour ne pas rivaliser avec le vert comme couleur
+     dominante. */
+  --miad-green: #005826;
+  --miad-green-dark: #06280f;
+  --miad-green-light: #e6f6ec;
+  --miad-green-bright: #38ef7d;
+  --miad-orange: #d9720b;
+  --miad-orange-dark: #a85c00;
+  --miad-orange-light: #fff2e0;
+  --miad-white: #ffffff;
+  --miad-bg: #f4f5f7;
+  --miad-text: #111111;
+  --miad-text-muted: #666666;
+  --miad-border: #e4e6e9;
 }
 * {
   box-sizing: border-box;
@@ -7,8 +27,8 @@
 body {
   font-family: system-ui, sans-serif;
   margin: 0;
-  background: #f4f5f7;
-  color: #111;
+  background: var(--miad-bg);
+  color: var(--miad-text);
 }
 
 /* ---------- Layout général : sidebar fixe + zone de contenu ---------- */
@@ -20,8 +40,8 @@ body {
 .app-sidebar {
   width: 240px;
   flex-shrink: 0;
-  background: #0b2e18;
-  color: #fff;
+  background: var(--miad-green-dark);
+  color: var(--miad-white);
   display: flex;
   flex-direction: column;
   position: sticky;
@@ -85,8 +105,8 @@ body {
   color: #fff;
 }
 .sidebar-link.active {
-  background: #38ef7d;
-  color: #06280f;
+  background: var(--miad-orange);
+  color: var(--miad-white);
   font-weight: 600;
 }
 .sidebar-link .icon {
@@ -206,8 +226,8 @@ th {
 .login-card button {
   width: 100%;
   padding: 10px;
-  background: #005826;
-  color: #fff;
+  background: var(--miad-green);
+  color: var(--miad-white);
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -235,7 +255,7 @@ th {
 }
 
 .status-ok {
-  color: #0a7a2f;
+  color: var(--miad-green);
 }
 .status-down {
   color: #c02020;
@@ -266,15 +286,23 @@ pre {
 }
 .btn-danger {
   background: #c02020;
-  color: #fff;
+  color: var(--miad-white);
   border: none;
   padding: 8px 14px;
   border-radius: 6px;
   cursor: pointer;
 }
 .btn-primary {
-  background: #005826;
-  color: #fff;
+  background: var(--miad-green);
+  color: var(--miad-white);
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.btn-secondary {
+  background: var(--miad-orange);
+  color: var(--miad-white);
   border: none;
   padding: 8px 14px;
   border-radius: 6px;
@@ -353,12 +381,12 @@ button:disabled {
   white-space: nowrap;
 }
 .badge-green {
-  background: #e6f6ec;
-  color: #0a7a2f;
+  background: var(--miad-green-light);
+  color: var(--miad-green);
 }
 .badge-orange {
-  background: #fff2e0;
-  color: #a85c00;
+  background: var(--miad-orange-light);
+  color: var(--miad-orange-dark);
 }
 .badge-red {
   background: #fdeaea;
@@ -464,8 +492,8 @@ button:disabled {
   color: #111;
 }
 .subnav a.active {
-  color: #005826;
-  border-bottom-color: #005826;
+  color: var(--miad-green);
+  border-bottom-color: var(--miad-green);
   font-weight: 600;
 }
 
@@ -531,7 +559,7 @@ button:disabled {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 .toggle input:checked + .slider {
-  background: #38ef7d;
+  background: var(--miad-green);
 }
 .toggle input:checked + .slider::before {
   transform: translateX(16px);
@@ -644,8 +672,8 @@ button:disabled {
   white-space: nowrap;
 }
 .form-tabs button.active {
-  color: #005826;
-  border-bottom-color: #005826;
+  color: var(--miad-green);
+  border-bottom-color: var(--miad-green);
   font-weight: 600;
 }
 .form-card {
@@ -740,7 +768,7 @@ button:disabled {
   background: #fafbfc;
 }
 .image-dropzone.dragover {
-  border-color: #005826;
-  background: #eefaf1;
-  color: #005826;
+  border-color: var(--miad-green);
+  background: var(--miad-green-light);
+  color: var(--miad-green);
 }
