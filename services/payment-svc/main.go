@@ -970,6 +970,7 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		} `json:"object"`
 	}
 	if err := json.Unmarshal(stripeEvent.Data.Raw, &eventData); err != nil {
+		slog.Error("échec parsing event.data.object", "err", err, "type", stripeEvent.Type, "raw_len", len(stripeEvent.Data.Raw), "raw_prefix", string(stripeEvent.Data.Raw[:min(200, len(stripeEvent.Data.Raw))]))
 		kit.Fail(w, 400, "invalid_event", err.Error())
 		return
 	}
