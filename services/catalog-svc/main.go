@@ -159,9 +159,10 @@ CREATE INDEX IF NOT EXISTS idx_wishlists_customer ON wishlists (customer_id, cre
 `
 
 type server struct {
-	db       *pgxpool.Pool
-	kafka    sarama.SyncProducer
-	orderURL string
+	db        *pgxpool.Pool
+	kafka     sarama.SyncProducer
+	orderURL  string
+	vendorURL string
 }
 
 func main() {
@@ -181,7 +182,8 @@ func main() {
 	s := &server{
 		db:       db,
 		kafka:    kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		orderURL: kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 	}
 
 	health := kit.NewHealth()
@@ -215,6 +217,7 @@ func main() {
 		mux.HandleFunc("PATCH /products/{id}", s.updateProduct)
 		mux.HandleFunc("DELETE /products/{id}", s.deleteProduct)
 		mux.HandleFunc("POST /products/bulk", s.bulkUpdateProducts)
+		mux.HandleFunc("PATCH /products/{id}/moderate", s.moderateProduct)
 		mux.HandleFunc("GET /brands", s.listBrands)
 		mux.HandleFunc("POST /brands", s.createBrand)
 		mux.HandleFunc("PATCH /brands/{id}", s.updateBrand)
@@ -1260,6 +1263,18 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	imagesJSON, _ := json.Marshal(body.Images)
 	ctx := r.Context()
 
+	// Modération : un produit créé par un vendeur avec require_moderation=true
+	// (vendor-svc, défaut TRUE) part en pending_review au lieu d'active —
+	// invisible côté storefront public (listProducts filtre déjà sur
+	// status='active' par défaut) jusqu'à approbation admin. En cas d'échec
+	// de résolution (vendor-svc indisponible), on retombe sur active plutôt
+	// que de bloquer la création — la modération n'est pas plus critique que
+	// la disponibilité du service.
+	initialStatus := "active"
+	if s.requiresModeration(ctx, body.VendorID) {
+		initialStatus = "pending_review"
+	}
+
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -1270,10 +1285,10 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	insertLang := func(lang, name string) (int64, error) {
 		var id int64
 		err := tx.QueryRow(ctx, `
-			INSERT INTO products (trid, lang, vendor_id, category_id, brand_id, name, slug, price_usd, images, is_variable, sku, barcode, stock)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+			INSERT INTO products (trid, lang, vendor_id, category_id, brand_id, name, slug, price_usd, images, is_variable, sku, barcode, stock, status)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
 			trid, lang, body.VendorID, body.CategoryID, nullIfZero(body.BrandID), name, slugify(name), body.PriceUSD, imagesJSON, body.IsVariable,
-			body.SKU, body.Barcode, body.Stock,
+			body.SKU, body.Barcode, body.Stock, initialStatus,
 		).Scan(&id)
 		return id, err
 	}
@@ -1319,6 +1334,85 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	})
 
 	kit.JSON(w, 201, map[string]any{"trid": trid, "ids": []int64{idFR, idEN}})
+}
+
+// requiresModeration — interroge vendor-svc pour savoir si CE vendeur
+// publie ses produits directement ou doit passer par une approbation admin
+// (vendors.require_moderation, TRUE par défaut). Indisponibilité de
+// vendor-svc = pas de blocage de la création, juste pas de modération pour
+// cette tentative (log côté appelant si besoin, pas ici — createProduct
+// reste la seule source d'appel pour l'instant).
+func (s *server) requiresModeration(ctx context.Context, vendorID int64) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendors/%d", s.vendorURL, vendorID), nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var v struct {
+		RequireModeration bool `json:"require_moderation"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&v) != nil {
+		return false
+	}
+	return v.RequireModeration
+}
+
+// moderateProduct — admin approuve/rejette un produit en pending_review.
+// Applique le même statut aux DEUX langues du trid (comme createProduct
+// duplique déjà toute écriture par langue). Un rejet repasse le produit
+// à 'rejected' (jamais supprimé — le vendeur garde son brouillon, peut le
+// corriger et le soumettre à nouveau via un futur endpoint de resoumission,
+// hors périmètre ici).
+func (s *server) moderateProduct(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		Status string `json:"status"` // "approved" ou "rejected"
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Status != "approved" && body.Status != "rejected" {
+		kit.Fail(w, 400, "invalid_status", "status doit être approved ou rejected")
+		return
+	}
+
+	var trid string
+	var vendorID int64
+	var name string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT trid, vendor_id, name FROM products WHERE id = $1 AND status = 'pending_review'", id,
+	).Scan(&trid, &vendorID, &name); err != nil {
+		kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable ou pas en attente de modération", id))
+		return
+	}
+
+	newStatus := "active"
+	if body.Status == "rejected" {
+		newStatus = "rejected"
+	}
+	if _, err := s.db.Exec(r.Context(),
+		"UPDATE products SET status = $1 WHERE trid = $2", newStatus, trid,
+	); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	kit.Publish(s.kafka, "product.status_changed", trid, map[string]any{
+		"trid": trid, "product_id": id, "product_name": name, "vendor_id": vendorID,
+		"status": newStatus, "reason": body.Reason,
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
+
+	kit.JSON(w, 200, map[string]any{"id": id, "status": newStatus})
 }
 
 // updateProductImages remplace la liste d'images d'un produit. Le

@@ -82,6 +82,7 @@ var watchedTopics = []string{
 	"payout_request.approved",
 	"payout_request.rejected",
 	"review.created",
+	"product.status_changed",
 }
 
 type server struct {
@@ -140,6 +141,8 @@ var seedTemplates = []EmailTemplate{
 	{Name: "withdrawal_approved", Label: "Retrait approuvé", Subject: "Votre retrait #{{.payout_id}} a été approuvé", BodyHTML: withdrawalApprovedHTML},
 	{Name: "withdrawal_rejected", Label: "Retrait rejeté", Subject: "Votre retrait #{{.payout_id}} a été rejeté", BodyHTML: withdrawalRejectedHTML},
 	{Name: "new_product_review", Label: "Nouvel avis produit (vendeur)", Subject: "Nouvel avis sur {{.product_name}}", BodyHTML: newProductReviewHTML},
+	{Name: "product_approved", Label: "Produit approuvé", Subject: "Votre produit {{.product_name}} a été publié", BodyHTML: productApprovedHTML},
+	{Name: "product_rejected", Label: "Produit rejeté", Subject: "Votre produit {{.product_name}} n'a pas été approuvé", BodyHTML: productRejectedHTML},
 }
 
 // getSettings/putSettings — Configuration Système (page admin).
@@ -307,6 +310,14 @@ func (s *server) handleKafkaEvent(ctx context.Context, log *slog.Logger, msg *sa
 		s.queueWithdrawalRejected(ctx, log, payload)
 	case "review.created":
 		s.queueNewProductReview(ctx, log, payload)
+	case "product.status_changed":
+		status, _ := payload["status"].(string)
+		switch status {
+		case "active":
+			s.queueProductApproved(ctx, log, payload)
+		case "rejected":
+			s.queueProductRejected(ctx, log, payload)
+		}
 	case "order.status_changed":
 		status, _ := payload["status"].(string)
 		switch status {
@@ -615,6 +626,31 @@ func (s *server) queueNewProductReview(ctx context.Context, log *slog.Logger, pa
 	}
 	subject := fmt.Sprintf("Nouvel avis sur %v", payload["product_name"])
 	s.queueEmail(ctx, log, email, "new_product_review", subject, payload)
+}
+
+// queueProductApproved/queueProductRejected — équivalent de "New Pending
+// Product" / "Pending Product Published" / "Product Rejected" côté
+// WooCommerce/Dokan.
+func (s *server) queueProductApproved(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	vendorID, _ := payload["vendor_id"].(float64)
+	email, err := s.resolveVendorEmail(ctx, int64(vendorID))
+	if err != nil {
+		log.Warn("email vendeur introuvable pour produit approuvé", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Votre produit %v a été publié", payload["product_name"])
+	s.queueEmail(ctx, log, email, "product_approved", subject, payload)
+}
+
+func (s *server) queueProductRejected(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	vendorID, _ := payload["vendor_id"].(float64)
+	email, err := s.resolveVendorEmail(ctx, int64(vendorID))
+	if err != nil {
+		log.Warn("email vendeur introuvable pour produit rejeté", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Votre produit %v n'a pas été approuvé", payload["product_name"])
+	s.queueEmail(ctx, log, email, "product_rejected", subject, payload)
 }
 
 func (s *server) queueEmail(ctx context.Context, log *slog.Logger, to, templateName, subject string, payload map[string]any) {
@@ -1912,6 +1948,94 @@ const newProductReviewHTML = `
                 </p>
                 {{if .comment}}<p style="margin:0;font-style:italic;">"{{.comment}}"</p>{{end}}
               </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const productApprovedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Produit approuvé</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Produit publié !</h1>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre produit <strong>{{.product_name}}</strong> a été approuvé et est maintenant visible sur MIAD Market.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const productRejectedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Produit rejeté</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#c0392b;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Produit non approuvé</h1>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre produit <strong>{{.product_name}}</strong> n'a pas été approuvé pour publication.
+              </p>
+              {{if .reason}}
+              <div style="background-color:#fdf2f2;border-radius:8px;padding:16px 20px;margin:20px 0;">
+                <p style="margin:0;color:#c0392b;font-size:14px;"><strong>Motif :</strong> {{.reason}}</p>
+              </div>
+              {{end}}
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Corrigez les points signalés et contactez-nous pour une nouvelle soumission.
+              </p>
             </td>
           </tr>
           <tr>
