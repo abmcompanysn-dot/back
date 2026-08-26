@@ -140,6 +140,22 @@ ALTER TABLE reviews ADD COLUMN IF NOT EXISTS admin_reply TEXT DEFAULT '';
 ALTER TABLE reviews ALTER COLUMN customer_id DROP NOT NULL;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS guest_name TEXT DEFAULT '';
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS guest_email TEXT DEFAULT '';
+
+-- Wishlist / favoris — n'existait nulle part (ni frontend, ni backend)
+-- avant le 2026-08-26 : le bouton cœur sur les produits et la section
+-- "Liste de souhaits" du dashboard client n'étaient que des maquettes
+-- vides. product_id référence un produit dans UNE langue précise (comme
+-- product_variations) — un favori posé sur la fiche FR n'apparaît pas
+-- automatiquement sur la fiche EN du même produit, cohérent avec le
+-- reste du catalogue qui traite chaque traduction comme une ligne
+-- distincte (trid les relie, jamais fusionnées côté données).
+CREATE TABLE IF NOT EXISTS wishlists (
+  customer_id BIGINT NOT NULL,
+  product_id  BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (customer_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS idx_wishlists_customer ON wishlists (customer_id, created_at DESC);
 `
 
 type server struct {
@@ -189,6 +205,9 @@ func main() {
 		mux.HandleFunc("POST /products/{id}/reviews", s.createReview)
 		mux.HandleFunc("GET /reviews", s.listReviewsAdmin)
 		mux.HandleFunc("PATCH /reviews/{id}", s.moderateReview)
+		mux.HandleFunc("GET /wishlist/{customer_id}", s.listWishlist)
+		mux.HandleFunc("POST /wishlist/{customer_id}/{product_id}", s.addToWishlist)
+		mux.HandleFunc("DELETE /wishlist/{customer_id}/{product_id}", s.removeFromWishlist)
 		mux.HandleFunc("GET /categories", s.listCategories)
 		mux.HandleFunc("GET /search/suggestions", s.suggestions)
 		mux.HandleFunc("POST /vendor/products", s.createProduct)
@@ -695,6 +714,68 @@ func (s *server) moderateReview(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{"id": id, "updated": true})
 }
 
+/* ---------- Wishlist / favoris ---------- */
+
+// listWishlist — renvoie juste les IDs produit dans l'ordre d'ajout
+// (le plus récent en premier) ; l'enrichissement (image/prix/nom) se
+// fait côté frontend via GET /products?include=... (déjà utilisé pour
+// la recherche sémantique, voir fetchWooProductsByIds), pas ici — évite
+// de dupliquer productToWooShape pour un besoin qui n'a pas besoin d'être
+// servi par catalog-svc lui-même.
+func (s *server) listWishlist(w http.ResponseWriter, r *http.Request) {
+	customerID := atoi(r.PathValue("customer_id"))
+	if customerID == 0 {
+		kit.Fail(w, 400, "invalid_customer_id", "customer_id invalide")
+		return
+	}
+	rows, err := s.db.Query(r.Context(),
+		`SELECT product_id FROM wishlists WHERE customer_id = $1 ORDER BY created_at DESC`, customerID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"product_ids": ids})
+}
+
+func (s *server) addToWishlist(w http.ResponseWriter, r *http.Request) {
+	customerID := atoi(r.PathValue("customer_id"))
+	productID := atoi(r.PathValue("product_id"))
+	if customerID == 0 || productID == 0 {
+		kit.Fail(w, 400, "invalid_id", "customer_id et product_id invalides")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(),
+		`INSERT INTO wishlists (customer_id, product_id) VALUES ($1, $2)
+		 ON CONFLICT (customer_id, product_id) DO NOTHING`, customerID, productID); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *server) removeFromWishlist(w http.ResponseWriter, r *http.Request) {
+	customerID := atoi(r.PathValue("customer_id"))
+	productID := atoi(r.PathValue("product_id"))
+	if customerID == 0 || productID == 0 {
+		kit.Fail(w, 400, "invalid_id", "customer_id et product_id invalides")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(),
+		`DELETE FROM wishlists WHERE customer_id = $1 AND product_id = $2`, customerID, productID); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
 // createReview — verified_purchase est déterminé au mieux : si order_id
 // est fourni, on vérifie via order-svc que la commande appartient bien à
 // ce client et contient bien ce produit ; en cas de doute ou d'échec
@@ -743,6 +824,18 @@ func (s *server) createReview(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+
+	var vendorID int64
+	var productName string
+	_ = s.db.QueryRow(r.Context(), "SELECT vendor_id, name FROM products WHERE id = $1", productID).Scan(&vendorID, &productName)
+	if vendorID != 0 {
+		kit.Publish(s.kafka, "review.created", fmt.Sprint(id), map[string]any{
+			"review_id": id, "product_id": productID, "product_name": productName, "vendor_id": vendorID,
+			"rating": body.Rating, "comment": body.Comment,
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
 	kit.JSON(w, 201, map[string]any{"id": id, "verified_purchase": verified})
 }
 
