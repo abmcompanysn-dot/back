@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -94,6 +95,16 @@ func main() {
 	health.Add("catalog-svc", func(ctx context.Context) error {
 		return ping(ctx, s.catalogURL+"/healthz")
 	})
+
+	// vendors.product_count était dénormalisé "sur événement catalog" en
+	// commentaire depuis toujours, sans qu'aucun consumer n'existe jamais
+	// (0 pour les 74 vendeurs en prod, corrigé manuellement le 2026-08-26).
+	// Plutôt que d'incrémenter/décrémenter à l'aveugle (fragile — un seul
+	// événement manqué désynchronise à nouveau, sans rattrapage possible),
+	// chaque événement pertinent déclenche un recalcul complet via
+	// countProducts (déjà utilisé par vendorDashboard) — plus coûteux par
+	// événement mais élimine toute dérive.
+	go s.consumeProductEvents(log)
 
 	kit.Run("vendor-svc", kit.Env("PORT_VENDOR", "8082"), log, health, func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /stores", s.listStores)
@@ -639,6 +650,70 @@ func (s *server) countProducts(ctx context.Context, vendorID string) (int64, err
 		return 0, err
 	}
 	return out.Total, nil
+}
+
+/* ---------- vendors.product_count : consumer Kafka ---------- */
+
+// consumeProductEvents — même pattern retry/backoff que
+// loyalty-svc.consumeCustomerEvents. Écoute product.created et
+// product.status_changed (catalog-svc) : les deux payloads portent déjà
+// vendor_id, donc pas besoin de les distinguer, juste de recalculer.
+func (s *server) consumeProductEvents(log *slog.Logger) {
+	brokers := kit.Env("KAFKA_BROKERS", "kafka:9092")
+	if brokers == "" {
+		log.Warn("KAFKA_BROKERS vide — resynchronisation product_count désactivée (mode dev)")
+		return
+	}
+	cfg := sarama.NewConfig()
+	cfg.Consumer.Offsets.Initial = sarama.OffsetOldest
+	cfg.Version = sarama.V2_8_0_0
+
+	for {
+		group, err := sarama.NewConsumerGroup([]string{brokers}, "vendor-svc", cfg)
+		if err != nil {
+			log.Error("kafka injoignable — retry 5 s", "err", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		handler := productCountConsumer{s: s, log: log}
+		_ = group.Consume(context.Background(), []string{"product.created", "product.status_changed"}, handler)
+		group.Close()
+	}
+}
+
+type productCountConsumer struct {
+	s   *server
+	log *slog.Logger
+}
+
+func (c productCountConsumer) Setup(sarama.ConsumerGroupSession) error   { return nil }
+func (c productCountConsumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+func (c productCountConsumer) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for msg := range claim.Messages() {
+		var payload struct {
+			VendorID int64 `json:"vendor_id"`
+		}
+		if err := json.Unmarshal(msg.Value, &payload); err == nil && payload.VendorID > 0 {
+			c.s.resyncProductCount(sess.Context(), c.log, payload.VendorID)
+		}
+		sess.MarkMessage(msg, "")
+	}
+	return nil
+}
+
+// resyncProductCount — recalcul complet (pas d'incrément/décrément) :
+// best-effort, une erreur catalog-svc ne doit jamais faire planter le
+// consumer, juste laisser product_count tel quel jusqu'au prochain
+// événement ou à une resynchronisation manuelle.
+func (s *server) resyncProductCount(ctx context.Context, log *slog.Logger, vendorID int64) {
+	count, err := s.countProducts(ctx, strconv.FormatInt(vendorID, 10))
+	if err != nil {
+		log.Warn("resync product_count échouée", "vendor_id", vendorID, "err", err)
+		return
+	}
+	if _, err := s.db.Exec(ctx, "UPDATE vendors SET product_count = $1 WHERE id = $2", count, vendorID); err != nil {
+		log.Warn("resync product_count : échec UPDATE", "vendor_id", vendorID, "err", err)
+	}
 }
 
 type vendorOrderSummary struct {

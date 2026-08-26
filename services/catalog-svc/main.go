@@ -1612,6 +1612,13 @@ func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
 // avis liés (voir contraintes FK product_variations/reviews).
 func (s *server) deleteProduct(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("id"))
+	// vendor_id lu AVANT le DELETE — sinon plus moyen de savoir quel
+	// vendeur resynchroniser une fois la ligne disparue (voir
+	// vendor-svc.consumeProductEvents, qui écoute product.status_changed
+	// pour recalculer product_count).
+	var vendorID int64
+	_ = s.db.QueryRow(r.Context(), "SELECT vendor_id FROM products WHERE id = $1", id).Scan(&vendorID)
+
 	tag, err := s.db.Exec(r.Context(), "DELETE FROM products WHERE id = $1", id)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -1620,6 +1627,12 @@ func (s *server) deleteProduct(w http.ResponseWriter, r *http.Request) {
 	if tag.RowsAffected() == 0 {
 		kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable", id))
 		return
+	}
+	if vendorID > 0 {
+		kit.Publish(s.kafka, "product.status_changed", fmt.Sprintf("deleted-%d", id), map[string]any{
+			"product_id": id, "vendor_id": vendorID, "status": "deleted",
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
 	}
 	kit.JSON(w, 200, map[string]any{"id": id, "deleted": true})
 }
@@ -1646,6 +1659,24 @@ func (s *server) bulkUpdateProducts(w http.ResponseWriter, r *http.Request) {
 		body.IDs = body.IDs[:500]
 	}
 
+	// vendor_id distincts AVANT l'action — nécessaire pour set_status/delete
+	// (resynchronisation product_count côté vendor-svc, voir deleteProduct
+	// ci-dessus pour la même remarque sur delete). set_category n'affecte
+	// jamais product_count, pas besoin ici.
+	var affectedVendorIDs []int64
+	if body.Action == "set_status" || body.Action == "delete" {
+		rows, _ := s.db.Query(r.Context(), "SELECT DISTINCT vendor_id FROM products WHERE id = ANY($1)", body.IDs)
+		if rows != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var vid int64
+				if rows.Scan(&vid) == nil {
+					affectedVendorIDs = append(affectedVendorIDs, vid)
+				}
+			}
+		}
+	}
+
 	var tag interface{ RowsAffected() int64 }
 	var err error
 	switch body.Action {
@@ -1669,6 +1700,12 @@ func (s *server) bulkUpdateProducts(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
+	}
+	for _, vid := range affectedVendorIDs {
+		kit.Publish(s.kafka, "product.status_changed", fmt.Sprintf("bulk-%s-%d", body.Action, vid), map[string]any{
+			"vendor_id": vid, "bulk_action": body.Action,
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
 	}
 	kit.JSON(w, 200, map[string]any{"action": body.Action, "rows_affected": tag.RowsAffected()})
 }
