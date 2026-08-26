@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -957,7 +958,7 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// signature CALCULÉE à celle REÇUE (au lieu de juste dire "invalide"),
 		// ce qui distingue un vrai mismatch HMAC (body altéré en transit,
 		// ex. par un proxy) d'un problème de timestamp/en-tête.
-		slog.Error("signature Stripe rejetée", "reason", reason, "sig_header", sig, "computed_sig", computed, "received_sig", received, "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body), "body_prefix", string(body[:min(80, len(body))]), "body_suffix", string(body[max(0, len(body)-20):]))
+		slog.Error("signature Stripe rejetée", "reason", reason, "sig_header", sig, "computed_sig", computed, "received_sig", received, "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body), "content_length_header", r.ContentLength, "transfer_encoding", r.TransferEncoding, "body_b64", base64.StdEncoding.EncodeToString(body))
 		kit.Fail(w, 401, "bad_signature", "signature Stripe invalide — événement rejeté")
 		return
 	}
