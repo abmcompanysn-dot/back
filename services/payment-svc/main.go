@@ -511,6 +511,10 @@ func (s *server) createPayoutRequest(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+	kit.Publish(s.producer, "payout_request.created", fmt.Sprint(id), map[string]any{
+		"payout_id": id, "vendor_id": body.VendorID, "amount_usd": body.AmountUSD,
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
 	kit.JSON(w, 201, map[string]any{"id": id})
 }
 
@@ -631,6 +635,10 @@ func (s *server) approvePayout(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+	kit.Publish(s.producer, "payout_request.approved", fmt.Sprint(id), map[string]any{
+		"payout_id": id, "vendor_id": vendorID, "amount_usd": amount,
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
 	kit.JSON(w, 200, map[string]any{"id": id, "status": "paid"})
 }
 
@@ -640,6 +648,13 @@ func (s *server) rejectPayout(w http.ResponseWriter, r *http.Request) {
 		AdminNote string `json:"admin_note"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	var vendorID int64
+	var amount float64
+	_ = s.db.QueryRow(r.Context(),
+		"SELECT vendor_id, amount_usd FROM payout_requests WHERE id = $1", id,
+	).Scan(&vendorID, &amount)
+
 	tag, err := s.db.Exec(r.Context(),
 		"UPDATE payout_requests SET status = 'rejected', admin_note = $2, processed_at = now() WHERE id = $1 AND status = 'pending'",
 		id, body.AdminNote)
@@ -651,6 +666,10 @@ func (s *server) rejectPayout(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 409, "not_pending", fmt.Sprintf("demande %d introuvable ou déjà traitée", id))
 		return
 	}
+	kit.Publish(s.producer, "payout_request.rejected", fmt.Sprint(id), map[string]any{
+		"payout_id": id, "vendor_id": vendorID, "amount_usd": amount, "admin_note": body.AdminNote,
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
 	kit.JSON(w, 200, map[string]any{"id": id, "status": "rejected"})
 }
 

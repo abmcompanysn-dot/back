@@ -78,6 +78,9 @@ var watchedTopics = []string{
 	"payment.failed",
 	"customer.registered",
 	"vendor.registered",
+	"payout_request.created",
+	"payout_request.approved",
+	"payout_request.rejected",
 }
 
 type server struct {
@@ -87,6 +90,7 @@ type server struct {
 	frontendURL string
 	orderURL    string
 	authURL     string
+	vendorURL   string
 	maxAttempts int
 	notifyEmail string
 
@@ -131,6 +135,9 @@ var seedTemplates = []EmailTemplate{
 	{Name: "password_reset", Label: "Réinitialisation de mot de passe", Subject: "Réinitialisation de mot de passe", BodyHTML: passwordResetHTML},
 	{Name: "rep_message_notification", Label: "Nouveau message représentant", Subject: "💬 Nouveau message de {{.client_name}} — MIAD Market", BodyHTML: repMessageNotificationHTML},
 	{Name: "new_vendor_registered", Label: "Nouveau vendeur inscrit (interne)", Subject: "Nouveau vendeur inscrit — {{.name}}", BodyHTML: newVendorRegisteredHTML},
+	{Name: "new_withdrawal_request", Label: "Nouvelle demande de retrait (interne)", Subject: "Nouvelle demande de retrait — #{{.payout_id}}", BodyHTML: newWithdrawalRequestHTML},
+	{Name: "withdrawal_approved", Label: "Retrait approuvé", Subject: "Votre retrait #{{.payout_id}} a été approuvé", BodyHTML: withdrawalApprovedHTML},
+	{Name: "withdrawal_rejected", Label: "Retrait rejeté", Subject: "Votre retrait #{{.payout_id}} a été rejeté", BodyHTML: withdrawalRejectedHTML},
 }
 
 // getSettings/putSettings — Configuration Système (page admin).
@@ -200,6 +207,7 @@ func main() {
 		frontendURL: kit.Env("STOREFRONT_URL", "https://miadmarket.ca"),
 		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		authURL:     kit.Env("AUTH_SVC_URL", "http://auth-svc:8086"),
+		vendorURL:   kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 		maxAttempts: 3,
 		notifyEmail: kit.Env("NOTIFY_EMAIL", "miadmarket25@gmail.com"),
 	}
@@ -289,6 +297,12 @@ func (s *server) handleKafkaEvent(ctx context.Context, log *slog.Logger, msg *sa
 		s.queuePaymentFailed(ctx, log, payload)
 	case "vendor.registered":
 		s.queueNewVendorRegistered(ctx, log, payload)
+	case "payout_request.created":
+		s.queueNewWithdrawalRequest(ctx, log, payload)
+	case "payout_request.approved":
+		s.queueWithdrawalApproved(ctx, log, payload)
+	case "payout_request.rejected":
+		s.queueWithdrawalRejected(ctx, log, payload)
 	case "order.status_changed":
 		status, _ := payload["status"].(string)
 		switch status {
@@ -407,6 +421,24 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 		return "", fmt.Errorf("client %d inscrit par téléphone, sans email", order.CustomerID)
 	}
 	return customer.Email, nil
+}
+
+// resolveVendorEmail — même besoin que resolveOrderContact côté client :
+// payout_request.* ne porte que vendor_id, jamais l'email (payment-svc ne
+// le connaît pas). Un seul appel GET /vendors/{id} suffit (pas de detour
+// order-svc comme pour les commandes).
+func (s *server) resolveVendorEmail(ctx context.Context, vendorID int64) (string, error) {
+	var vendor struct {
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	}
+	if err := fetchJSON(ctx, fmt.Sprintf("%s/vendors/%d", s.vendorURL, vendorID), &vendor); err != nil {
+		return "", fmt.Errorf("vendor-svc: %w", err)
+	}
+	if vendor.Email == "" {
+		return "", fmt.Errorf("vendeur %d sans email", vendorID)
+	}
+	return vendor.Email, nil
 }
 
 func strAt(m map[string]any, key string) string {
@@ -533,6 +565,39 @@ func (s *server) queueNewVendorRegistered(ctx context.Context, log *slog.Logger,
 	name, _ := payload["name"].(string)
 	subject := fmt.Sprintf("Nouveau vendeur inscrit — %s", name)
 	s.queueEmail(ctx, log, s.notifyEmail, "new_vendor_registered", subject, payload)
+}
+
+// queueNewWithdrawalRequest — notification interne (équipe MIAD) : équivalent
+// de "New Withdrawal Request" côté WooCommerce/Dokan.
+func (s *server) queueNewWithdrawalRequest(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	if s.notifyEmail == "" {
+		log.Warn("notify_email non configuré — email nouvelle demande de retrait ignoré")
+		return
+	}
+	subject := fmt.Sprintf("Nouvelle demande de retrait — #%v", payload["payout_id"])
+	s.queueEmail(ctx, log, s.notifyEmail, "new_withdrawal_request", subject, payload)
+}
+
+func (s *server) queueWithdrawalApproved(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	vendorID, _ := payload["vendor_id"].(float64)
+	email, err := s.resolveVendorEmail(ctx, int64(vendorID))
+	if err != nil {
+		log.Warn("email vendeur introuvable pour retrait approuvé", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Votre retrait #%v a été approuvé", payload["payout_id"])
+	s.queueEmail(ctx, log, email, "withdrawal_approved", subject, payload)
+}
+
+func (s *server) queueWithdrawalRejected(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	vendorID, _ := payload["vendor_id"].(float64)
+	email, err := s.resolveVendorEmail(ctx, int64(vendorID))
+	if err != nil {
+		log.Warn("email vendeur introuvable pour retrait rejeté", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Votre retrait #%v a été rejeté", payload["payout_id"])
+	s.queueEmail(ctx, log, email, "withdrawal_rejected", subject, payload)
 }
 
 func (s *server) queueEmail(ctx context.Context, log *slog.Logger, to, templateName, subject string, payload map[string]any) {
@@ -1653,6 +1718,143 @@ const newVendorRegisteredHTML = `
           <tr>
             <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
               <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification interne.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const newWithdrawalRequestHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nouvelle demande de retrait</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Nouvelle demande de retrait</h1>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Un vendeur a demandé un retrait de solde.
+              </p>
+              <div style="background-color:#f9fafb;border-radius:8px;padding:16px 20px;font-size:14px;color:#333333;line-height:1.8;">
+                <strong>Demande :</strong> #{{.payout_id}}<br>
+                <strong>Vendeur :</strong> #{{.vendor_id}}<br>
+                <strong>Montant :</strong> {{.amount_usd}} $
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification interne.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const withdrawalApprovedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retrait approuvé</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Retrait approuvé !</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Demande #{{.payout_id}}</p>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre demande de retrait de <strong>{{.amount_usd}} $</strong> a été approuvée et traitée.
+              </p>
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Le délai de réception dépend de votre mode de retrait.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const withdrawalRejectedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retrait rejeté</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#c0392b;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Retrait rejeté</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Demande #{{.payout_id}}</p>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre demande de retrait de <strong>{{.amount_usd}} $</strong> n'a pas pu être traitée.
+              </p>
+              {{if .admin_note}}
+              <div style="background-color:#fdf2f2;border-radius:8px;padding:16px 20px;margin:20px 0;">
+                <p style="margin:0;color:#c0392b;font-size:14px;"><strong>Motif :</strong> {{.admin_note}}</p>
+              </div>
+              {{end}}
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Contactez-nous si vous avez des questions sur cette décision.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
             </td>
           </tr>
         </table>
