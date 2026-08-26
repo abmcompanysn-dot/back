@@ -99,6 +99,61 @@ function settingsPath(serviceKey: string) {
   return serviceKey === 'system' ? '/admin/api/settings' : `/admin/api/settings/${serviceKey}`
 }
 
+// Webhooks entrants — URLs FIXES (dérivées du domaine passerelle + de la
+// route Caddyfile), pas des valeurs de configuration éditables/persistées.
+// Affichées en lecture seule pour que l'admin puisse les copier-coller
+// directement dans le dashboard Stripe/PayDunya/Resend (demandé le
+// 2026-08-26) sans avoir à les retrouver dans le code. Voir deploy/Caddyfile
+// pour le mapping réel path → service (source de vérité si ça change).
+const WEBHOOK_BASE = 'https://origin.miadmarket.ca'
+const WEBHOOKS_BY_TAB: Record<string, { label: string; url: string; hint?: string }[]> = {
+  payment: [
+    { label: 'Stripe', url: `${WEBHOOK_BASE}/payments/webhook/stripe`, hint: 'Dashboard Stripe → Developers → Webhooks → Add endpoint' },
+    { label: 'PayDunya', url: `${WEBHOOK_BASE}/payments/webhook/paydunya`, hint: 'Dashboard PayDunya → configuration IPN/callback' },
+  ],
+  email: [
+    { label: 'Resend (statuts d’envoi)', url: `${WEBHOOK_BASE}/webhooks/resend`, hint: 'Dashboard Resend → Webhooks' },
+    { label: 'Emails entrants (réponses)', url: `${WEBHOOK_BASE}/webhooks/inbound` },
+  ],
+}
+
+function WebhookUrls({ tab }: { tab: string }) {
+  const hooks = WEBHOOKS_BY_TAB[tab]
+  const [copied, setCopied] = useState<string | null>(null)
+  if (!hooks) return null
+
+  async function copy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(url)
+      setTimeout(() => setCopied(null), 1500)
+    } catch {
+      // Presse-papiers indisponible (contexte non sécurisé, permission refusée) —
+      // l'URL reste sélectionnable/copiable manuellement dans le champ, pas bloquant.
+    }
+  }
+
+  return (
+    <div className="form-card" style={{ marginBottom: 16 }}>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>URLs de webhook</h3>
+      <div className="form-grid">
+        {hooks.map((h) => (
+          <div className="form-field full" key={h.url}>
+            <label>{h.label}</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="text" readOnly value={h.url} style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }} />
+              <button type="button" className="btn-ghost" onClick={() => copy(h.url)}>
+                {copied === h.url ? 'Copié !' : 'Copier'}
+              </button>
+            </div>
+            {h.hint && <span className="hint">{h.hint}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function Configuration() {
   const [tab, setTab] = useState(TABS[0].key)
   const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null)
@@ -180,6 +235,8 @@ export function Configuration() {
 
       {error && <p className="error-text">{error}</p>}
       {notice && <p className="hint" style={{ color: '#1a7f37', fontWeight: 600 }}>{notice}</p>}
+
+      <WebhookUrls tab={tab} />
 
       <div className="form-card">
         {loading && <p>Chargement…</p>}
