@@ -156,8 +156,21 @@ function VendorAvatar({ logo, name }: { logo?: string; name: string }) {
 // ── Boutiques Officielles Strip ───────────────────────────────────────────────
 // export : réutilisé tel quel par MiadMarketClient.tsx pour l'accueil par
 // défaut streamé (cf. server/HomeSections.tsx) — pas de duplication.
+// Position de défilement horizontal du strip, hors du cycle de vie React —
+// le composant est démonté puis remonté au retour arrière depuis une
+// boutique (contrairement au scroll vertical de la page, restauré par
+// MiadMarketClient.tsx via navStack), donc scrollRef.current.scrollLeft
+// repartait toujours à 0 même quand la page, elle, revenait à la bonne
+// hauteur (signalé le 2026-08-26 : "on recommence au début" du strip).
+let topVendorsStripScrollLeft = 0
+
 export function TopVendorsStrip({ stores, onStoreClick, language = 'fr' }: { stores: WooVendor[]; onStoreClick: (v: WooVendor) => void; language?: 'fr' | 'en' }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollLeft = topVendorsStripScrollLeft
+  }, [])
+
   if (stores.length === 0) return null
   const t = translations[language]
 
@@ -197,7 +210,11 @@ export function TopVendorsStrip({ stores, onStoreClick, language = 'fr' }: { sto
             </button>
           </div>
         </div>
-        <div ref={scrollRef} className="flex gap-6 overflow-x-auto scrollbar-hide pb-4">
+        <div
+          ref={scrollRef}
+          onScroll={(e) => { topVendorsStripScrollLeft = e.currentTarget.scrollLeft }}
+          className="flex gap-6 overflow-x-auto scrollbar-hide pb-4"
+        >
           {stores.map(store => (
             <button
               type="button"
