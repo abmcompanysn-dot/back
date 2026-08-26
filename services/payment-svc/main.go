@@ -965,6 +965,14 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orderID, _ := strconv.ParseInt(event.Data.Object.Metadata.OrderID, 10, 64)
+	// Log explicite de CHAQUE webhook reçu (type + order_id résolu) : sans
+	// ça, un événement Stripe qui tombe dans un cas inattendu (metadata
+	// vide, type non géré, orderID=0) échouait silencieusement — kit.Fail
+	// n'écrit jamais dans les logs (juste la réponse JSON), donc un 409/500
+	// ici était invisible même en lisant les logs du pod (bug de prod
+	// trouvé le 2026-08-26 : paiement confirmé côté Stripe, mais order-svc
+	// jamais notifié, sans aucune trace exploitable).
+	slog.Info("webhook Stripe reçu", "type", event.Type, "order_id", orderID, "raw_order_id", event.Data.Object.Metadata.OrderID, "payment_intent_id", event.Data.Object.ID)
 	switch event.Type {
 	case "payment_intent.succeeded":
 		s.confirmPayment(w, r, orderID, "stripe", event.Data.Object.ID)
@@ -1046,10 +1054,12 @@ func (s *server) confirmPayment(w http.ResponseWriter, r *http.Request, orderID 
 		       confirmed_at=now()
 		WHERE order_id=$1 AND status IN ('initiated','failed')`, orderID, ref)
 	if err != nil {
+		slog.Error("confirmPayment: échec UPDATE", "order_id", orderID, "err", err)
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
 	if res.RowsAffected() == 0 {
+		slog.Warn("confirmPayment: aucune ligne payments correspondante (order_id invalide, ou déjà confirmé)", "order_id", orderID)
 		kit.Fail(w, 409, "not_confirmable", "aucun paiement en attente pour cette commande")
 		return
 	}
