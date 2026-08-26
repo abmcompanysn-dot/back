@@ -944,13 +944,20 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sig := r.Header.Get("Stripe-Signature")
-	if !validStripeSignature(body, sig, secret) {
+	ok, reason, computed, received := validStripeSignature(body, sig, secret)
+	if !ok {
 		// Diagnostic temporaire (2026-08-26) : kit.Fail n'écrit jamais dans
 		// les logs, donc ce rejet était totalement invisible même après le
 		// fix du décodage base64 — un webhook rejeté au même endroit pour
 		// une raison DIFFÉRENTE (secret mal configuré, en-tête absent...)
-		// aurait semblé identique de l'extérieur sans ce log.
-		slog.Error("signature Stripe rejetée", "sig_header_present", sig != "", "sig_header_len", len(sig), "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body))
+		// aurait semblé identique de l'extérieur sans ce log. Deuxième round
+		// (toujours le 2026-08-26) : le premier fix base64 était réel mais
+		// insuffisant — un nouveau test (commande #35) échouait encore avec
+		// exactement le même symptôme. Ce log compare maintenant la
+		// signature CALCULÉE à celle REÇUE (au lieu de juste dire "invalide"),
+		// ce qui distingue un vrai mismatch HMAC (body altéré en transit,
+		// ex. par un proxy) d'un problème de timestamp/en-tête.
+		slog.Error("signature Stripe rejetée", "reason", reason, "sig_header", sig, "computed_sig", computed, "received_sig", received, "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body), "body_prefix", string(body[:min(80, len(body))]), "body_suffix", string(body[max(0, len(body)-20):]))
 		kit.Fail(w, 401, "bad_signature", "signature Stripe invalide — événement rejeté")
 		return
 	}
@@ -988,7 +995,10 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func validStripeSignature(body []byte, header, secret string) bool {
+// validStripeSignature renvoie (valide, motif-si-invalide, signature-calculée,
+// signature-reçue) — les deux dernières valeurs sont uniquement pour le log
+// de diagnostic temporaire dans stripeWebhook, jamais exposées au client.
+func validStripeSignature(body []byte, header, secret string) (bool, string, string, string) {
 	var t, v1 string
 	for _, part := range strings.Split(header, ",") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
@@ -1002,12 +1012,18 @@ func validStripeSignature(body []byte, header, secret string) bool {
 			v1 = kv[1]
 		}
 	}
-	if t == "" || v1 == "" || !strings.HasPrefix(secret, "whsec_") {
-		return false
+	if t == "" || v1 == "" {
+		return false, "t_ou_v1_absent", "", v1
+	}
+	if !strings.HasPrefix(secret, "whsec_") {
+		return false, "secret_sans_prefixe_whsec", "", v1
 	}
 	ts, err := strconv.ParseInt(t, 10, 64)
-	if err != nil || time.Now().Unix()-ts > 300 {
-		return false // tolérance 5 minutes
+	if err != nil {
+		return false, "timestamp_illisible", "", v1
+	}
+	if time.Now().Unix()-ts > 300 {
+		return false, "timestamp_trop_vieux", "", v1
 	}
 	// Le "signing secret" Stripe (whsec_...) est TOUJOURS du texte ASCII
 	// brut après le préfixe, jamais du base64 — malgré son apparence qui
@@ -1024,7 +1040,11 @@ func validStripeSignature(body []byte, header, secret string) bool {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(t + "."))
 	mac.Write(body)
-	return hmac.Equal([]byte(hex.EncodeToString(mac.Sum(nil))), []byte(v1))
+	computed := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(computed), []byte(v1)) {
+		return false, "hmac_mismatch", computed, v1
+	}
+	return true, "", computed, v1
 }
 
 // paydunyaCallback — PayDunya notifie avec le token de la facture.
