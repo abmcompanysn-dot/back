@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/miadmarket/miad-backend/internal/kit"
 )
@@ -72,6 +73,7 @@ var webuiStatic, _ = fs.Sub(webuiFS, "webui/dist")
 
 type server struct {
 	db              *pgxpool.Pool
+	redis           *goredis.Client
 	jwtSec          []byte
 	catalogURL      string
 	vendorURL       string
@@ -129,6 +131,7 @@ func main() {
 
 	s := &server{
 		db:              db,
+		redis:           kit.NewRedis(kit.Env("REDIS_ADDR", "redis:6379"), kit.Env("REDIS_PASSWORD", "")),
 		catalogURL:      kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
 		vendorURL:       kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 		orderURL:        kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
@@ -161,6 +164,7 @@ func main() {
 
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
+	health.Add("redis", func(ctx context.Context) error { return s.redis.Ping(ctx).Err() })
 	for name, url := range s.allServiceURLs() {
 		u := url
 		health.Add(name, func(ctx context.Context) error { return ping(ctx, u+"/healthz") })
@@ -334,6 +338,9 @@ func main() {
 		}))
 		// Module Utilisateurs : vue unifiée boutiques/clients/admins.
 		mux.HandleFunc("GET /admin/api/admins", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/admins" })))
+		mux.HandleFunc("POST /admin/api/admins/{id}/revoke-sessions", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.authURL+"/auth/admin/"+r.PathValue("id")+"/revoke-sessions")
+		}))
 		mux.HandleFunc("GET /admin/api/users", s.requireAdmin(s.listUnifiedUsers))
 		mux.HandleFunc("GET /admin/api/representatives", s.requireAdmin(s.proxyAuth(func() string { return s.loyaltyURL + "/representatives" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))
@@ -1383,6 +1390,20 @@ func (s *server) verifyJWT(r *http.Request) (map[string]any, error) {
 	}
 	if exp, ok := claims["exp"].(float64); ok && time.Now().Unix() > int64(exp) {
 		return nil, fmt.Errorf("session expirée")
+	}
+	// Révocation : même mécanisme que auth-svc.claimsFromRequest (clé Redis
+	// admin_sv:<id> partagée, cluster-interne) — un JWT émis avant le
+	// dernier appel à /revoke-sessions est rejeté ici aussi, pas seulement
+	// sur auth-svc, puisque la quasi-totalité des routes admin passe par
+	// admin-svc/requireAdmin plutôt que par auth-svc directement.
+	if sv, ok := claims["sv"].(float64); ok {
+		id, _ := claims["sub"].(float64)
+		val, err := s.redis.Get(r.Context(), fmt.Sprintf("admin_sv:%d", int64(id))).Result()
+		if err == nil {
+			if current, perr := strconv.ParseInt(val, 10, 64); perr == nil && int64(sv) < current {
+				return nil, fmt.Errorf("session révoquée")
+			}
+		}
 	}
 	return claims, nil
 }

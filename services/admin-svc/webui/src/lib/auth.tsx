@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
-import { ApiError, api, clearToken, getToken, setToken } from './api'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { ApiError, SESSION_EXPIRED_EVENT, api, clearToken, getToken, setToken } from './api'
 
 interface LoginResult {
   totpRequired: boolean
@@ -53,6 +53,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsAuthenticated(false)
     setEmail(null)
   }
+
+  // Déconnexion automatique quand une requête API revient 401/403 (token
+  // expiré ou révoqué via /revoke-sessions) — voir SESSION_EXPIRED_EVENT
+  // dans api.ts. Sans ça, isAuthenticated restait bloqué à true jusqu'au
+  // prochain rechargement manuel de page.
+  useEffect(() => {
+    const onSessionExpired = () => logout()
+    window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired)
+  }, [])
 
   return (
     <AuthContext.Provider value={{ isAuthenticated, email, login, logout }}>
