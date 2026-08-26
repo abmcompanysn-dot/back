@@ -92,7 +92,15 @@ export function CartPage({
   const uniqueSenegalVendors = useMemo(() => {
     if (!allSenegalDomestic) return []
     const map = new Map<string, string>()
-    for (const item of cart) map.set(item.product.vendor.id, item.product.vendor.name)
+    // product.vendor peut être null (produit sans boutique résolue côté API
+    // — voir app/api/products/route.ts mapProduct) : crash en prod trouvé
+    // le 2026-08-26 (TypeError: Cannot read properties of undefined
+    // (reading 'name')) une fois le panier persisté côté serveur, un item
+    // avec vendor manquant pouvant désormais plus facilement entrer dans
+    // le panier via la fusion au login que via un ajout manuel classique.
+    for (const item of cart) {
+      if (item.product.vendor) map.set(item.product.vendor.id, item.product.vendor.name)
+    }
     return Array.from(map, ([id, name]) => ({ id, name }))
   }, [cart, allSenegalDomestic])
 
@@ -228,7 +236,7 @@ export function CartPage({
                             </p>
                           )}
                           <p className="text-xs text-muted-foreground mt-0.5">
-                            {item.product.vendor.name}
+                            {item.product.vendor?.name || 'Boutique'}
                             {item.product.country ? ` · ${item.product.country}` : ''}
                           </p>
                           <div className="mt-2 space-y-1">
