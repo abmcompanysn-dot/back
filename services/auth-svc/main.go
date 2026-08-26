@@ -736,6 +736,7 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	val, err := s.redis.Get(r.Context(), "otp:"+body.OtpRef).Result()
 	if err == goredis.Nil {
+		fmt.Printf("[auth-svc] otp/verify: ref %q inconnue ou expirée\n", body.OtpRef)
 		kit.Fail(w, 401, "otp_expired_or_unknown", "OTP expiré ou inconnu — renvoyer via /auth/otp/send")
 		return
 	} else if err != nil {
@@ -744,6 +745,7 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	parts := strings.SplitN(val, "|", 3)
 	if len(parts) != 3 || parts[2] != body.Code {
+		fmt.Printf("[auth-svc] otp/verify: code incorrect pour ref %q (reçu %q)\n", body.OtpRef, body.Code)
 		kit.Fail(w, 401, "invalid_code", "code OTP incorrect")
 		return
 	}

@@ -44,10 +44,19 @@ export async function POST(request: Request) {
     const data: any = await res.json().catch(() => ({}))
 
     if (!res.ok || !data.session?.jwt) {
-      return NextResponse.json(
-        { error: data?.error?.message || 'Code incorrect ou expiré.' },
-        { status: res.status || 400 }
-      )
+      // Distingue explicitement expiré (redemander un code) de code faux
+      // (retaper) — un message générique "incorrect ou expiré" masquait
+      // la vraie cause et empêchait de diagnostiquer les rapports "je
+      // reçois le mail mais ça ne marche pas" (le code était peut-être
+      // bon mais expiré, ou l'inverse).
+      const code = data?.error?.code
+      const message =
+        code === 'otp_expired_or_unknown'
+          ? 'Ce code a expiré ou une nouvelle demande a été faite entre-temps — redemandez un code.'
+          : code === 'invalid_code'
+            ? 'Code incorrect — vérifiez les 6 chiffres reçus par email.'
+            : data?.error?.message || 'Code incorrect ou expiré.'
+      return NextResponse.json({ error: message, error_code: code }, { status: res.status || 400 })
     }
 
     const claims = await verifyJWT(data.session.jwt)
