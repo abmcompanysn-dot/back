@@ -4,15 +4,12 @@ import { AUTH_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
-// ATTENTION (voir CLAUDE.md / suivi migration) : POST /auth/otp/send côté
-// auth-svc ne fait qu'enregistrer le code dans Redis et le logger en
-// mode dev — aucun canal d'envoi réel (email/SMS) n'est câblé, alors
-// qu'un template email otp_email existe déjà côté email-svc (jamais
-// appelé). Le champ dev_mode dans la réponse reflète cet état : tant que
-// SMS_PROVIDER_URL n'est pas configuré côté auth-svc ET qu'un pont vers
-// email-svc n'est pas ajouté, aucun OTP n'atteint réellement l'utilisateur
-// en production. Trou fonctionnel backend, pas quelque chose que cette
-// route frontend peut corriger seule.
+// Canal email réellement câblé depuis le 2026-08-26 : auth-svc appelle
+// email-svc (template otp_email) pour channel=="email" — voir
+// sendOTPEmail dans services/auth-svc/main.go. Le canal SMS reste en
+// mode dev (SMS_PROVIDER_URL configurable mais aucun appel réel
+// implémenté) : dev_mode dans la réponse reflète l'état du canal
+// effectivement demandé ici (email), pas du SMS.
 export async function POST(request: Request) {
   const ip = getIp(request)
   const rl = rateLimit(`otp-send:${ip}`, 3, 10 * 60 * 1000) // 3 / 10 min

@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -73,12 +74,13 @@ ALTER TABLE admins ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAUL
 `
 
 type server struct {
-	db     *pgxpool.Pool
-	redis  *goredis.Client
-	kafka  sarama.SyncProducer
-	jwtSec []byte
-	otpTTL time.Duration
-	jwtTTL time.Duration
+	db       *pgxpool.Pool
+	redis    *goredis.Client
+	kafka    sarama.SyncProducer
+	jwtSec   []byte
+	otpTTL   time.Duration
+	jwtTTL   time.Duration
+	emailURL string // canal réel d'envoi de l'OTP par email (voir sendOTP) — adresse réseau interne, pas un secret, pas dans SettingsStore
 
 	settings *kit.SettingsStore
 	// otpTTLMinutes/jwtTTLHours dupliquent otpTTL/jwtTTL (déjà convertis en
@@ -144,9 +146,10 @@ func main() {
 
 	redisPassword := kit.Env("REDIS_PASSWORD", "")
 	s := &server{
-		db:    db,
-		redis: kit.NewRedis(kit.Env("REDIS_ADDR", "redis:6379"), redisPassword),
-		kafka: kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		db:       db,
+		redis:    kit.NewRedis(kit.Env("REDIS_ADDR", "redis:6379"), redisPassword),
+		kafka:    kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		emailURL: kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
 
 		otpTTLMinutes:        kit.Env("OTP_TTL_MINUTES", "5"),
 		jwtTTLHours:          kit.Env("JWT_TTL_HOURS", "72"),
@@ -652,14 +655,72 @@ func (s *server) sendOTP(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 503, "session_store_down", "Redis indisponible : OTP impossible — erreur explicite")
 		return
 	}
-	if s.smsProviderURL == "" {
+
+	// devMode : reflète le canal RÉELLEMENT demandé, pas toujours SMS —
+	// bug corrigé le 2026-08-26 (dev_mode regardait s.smsProviderURL même
+	// pour channel=="email", donc mentait sur l'état réel de l'envoi email).
+	devMode := true
+	if body.Channel == "sms" {
+		devMode = s.smsProviderURL == ""
+		if !devMode {
+			// TODO : câblage SMS réel non implémenté (voir SMS_PROVIDER_URL
+			// dans Configuration Système) — journalisé en attendant, jamais
+			// silencieusement prétendu envoyé.
+			fmt.Printf("[auth-svc][DEV] OTP %s pour %s (ref %s) — SMS_PROVIDER_URL configuré mais aucun appel réel implémenté\n", code, body.Identifier, ref)
+			devMode = true
+		}
+	} else { // email
+		if err := s.sendOTPEmail(r.Context(), body.Identifier, code); err != nil {
+			// Le code reste valide dans Redis (l'utilisateur peut redemander) —
+			// ne jamais faire échouer /otp/send juste parce que l'email n'est
+			// pas parti, mais ne jamais prétendre un succès non plus.
+			fmt.Printf("[auth-svc] échec envoi OTP par email à %s (ref %s) : %v\n", body.Identifier, ref, err)
+		} else {
+			devMode = false
+		}
+	}
+	if devMode {
 		fmt.Printf("[auth-svc][DEV] OTP %s pour %s (ref %s)\n", code, body.Identifier, ref)
 	}
+
 	kit.JSON(w, 200, map[string]any{
 		"otp_ref":     ref,
 		"ttl_minutes": int(s.otpTTL.Minutes()),
-		"dev_mode":    s.smsProviderURL == "",
+		"dev_mode":    devMode,
 	})
+}
+
+// sendOTPEmail — relaie vers email-svc (template otp_email, déjà prêt
+// mais jamais appelé jusqu'ici — trou documenté dans
+// app/api/auth/otp/send/route.ts, comblé le 2026-08-26). Le template
+// attend {{.Code}} et {{.TTLMinutes}} (PascalCase, voir
+// services/email-svc/main.go otpEmailHTML) — payload construit en
+// conséquence, distinct du snake_case utilisé par d'autres templates.
+func (s *server) sendOTPEmail(ctx context.Context, to, code string) error {
+	payload := map[string]any{
+		"Code":       code,
+		"TTLMinutes": int(s.otpTTL.Minutes()),
+	}
+	body, _ := json.Marshal(map[string]any{
+		"to":       to,
+		"subject":  "Votre code de vérification MIAD Market",
+		"template": "otp_email",
+		"payload":  payload,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.emailURL+"/emails/send", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("email-svc injoignable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("email-svc a répondu %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
