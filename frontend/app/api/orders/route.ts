@@ -108,6 +108,14 @@ export async function POST(request: Request) {
       // Compat immédiate pour le flux mono-vendeur (le cas le plus fréquent) :
       clientSecret: payments[0]?.client_secret,
       redirectUrl: payments[0]?.redirect_url,
+      // CheckoutPage.tsx (paiement PayDunya) lit ces deux noms précis, pas
+      // clientSecret/redirectUrl ci-dessus — décalage jamais remarqué avant
+      // car PayDunya était cassé côté backend (payment_svc renvoyait
+      // toujours une erreur avant d'atteindre ce point). paydunyaToken =
+      // provider_ref (le token de facture PayDunya, pas client_secret qui
+      // est un concept Stripe), paydunyaUrl = redirect_url.
+      paydunyaToken: payments[0]?.payment?.provider_ref,
+      paydunyaUrl: payments[0]?.redirect_url,
     })
   } catch (error: any) {
     return NextResponse.json(
