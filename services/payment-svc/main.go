@@ -945,6 +945,12 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	sig := r.Header.Get("Stripe-Signature")
 	if !validStripeSignature(body, sig, secret) {
+		// Diagnostic temporaire (2026-08-26) : kit.Fail n'écrit jamais dans
+		// les logs, donc ce rejet était totalement invisible même après le
+		// fix du décodage base64 — un webhook rejeté au même endroit pour
+		// une raison DIFFÉRENTE (secret mal configuré, en-tête absent...)
+		// aurait semblé identique de l'extérieur sans ce log.
+		slog.Error("signature Stripe rejetée", "sig_header_present", sig != "", "sig_header_len", len(sig), "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body))
 		kit.Fail(w, 401, "bad_signature", "signature Stripe invalide — événement rejeté")
 		return
 	}
