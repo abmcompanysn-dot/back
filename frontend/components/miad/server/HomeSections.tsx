@@ -1,6 +1,5 @@
 import { Suspense } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
-import { SponsoredStoresServer } from './SponsoredStoresServer'
 import { FoodServer } from './FoodServer'
 import { InfiniteProductFeed } from './InfiniteProductFeed'
 
@@ -37,11 +36,10 @@ export function HomeSections({ lang = 'fr' }: { lang?: 'fr' | 'en' } = {}) {
       {/* Vente Flash / Offres du jour / Bandeau promo / sections "Marché
           [Pays]" retirés de l'accueil (demandé le 2026-07-24) — les promos
           restent visibles sur /promotions, page dédiée déjà existante
-          (app/promotions/page.tsx). Ne reste que boutiques sponsorisées,
+          (app/promotions/page.tsx). Boutiques sponsorisées supprimé
+          (demandé le 2026-08-26 — cette section n'a jamais eu de contenu
+          réel, voir SponsoredStoresCarousel.tsx). Ne reste que
           alimentation et le flux produits infini. */}
-      <Suspense fallback={<SectionSkeleton />}>
-        <SponsoredStoresServer lang={lang} />
-      </Suspense>
       <Suspense fallback={<SectionSkeleton />}>
         <FoodServer lang={lang} />
       </Suspense>

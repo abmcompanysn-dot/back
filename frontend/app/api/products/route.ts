@@ -3,7 +3,7 @@ import { headers } from 'next/headers'
 import { catalogCacheGet, catalogCacheSet } from '@/lib/catalog-cache'
 import { getCloudflareBindings, embedOne } from '@/lib/cloudflare-ai'
 import { fetchWooProductsByIds } from '@/lib/woo-catalog'
-import { CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
+import { CATALOG_SVC_URL, VENDOR_SVC_URL, fetchWpUser } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
@@ -353,6 +353,18 @@ export async function GET(req: Request) {
 
     if (random && seed) {
       products = declusterByVendor(products);
+    } else if (!id && !slug) {
+      // Décluster par défaut sur toute liste paginée normale (pas
+      // seulement le mode aléatoire) — demandé le 2026-08-26 : plusieurs
+      // produits d'une même boutique se suivaient dans la grille de
+      // l'accueil (InfiniteProductFeed.tsx, qui n'envoie jamais
+      // random/seed) car le decluster ne s'appliquait qu'au mode
+      // aléatoire. declusterByVendor ne fait que des échanges locaux
+      // (swap avec le prochain produit d'une AUTRE boutique) — l'ordre
+      // global (tri catalog-svc, pertinence recherche sémantique, etc.)
+      // n'est pas perdu, seuls les doublons consécutifs de boutique sont
+      // séparés.
+      products = declusterByVendor(products);
     }
 
     const responseData = {
@@ -389,17 +401,28 @@ export async function GET(req: Request) {
 }
 
 // POST /api/products — création d'un produit par un vendeur connecté.
-// Migré vers POST {CATALOG_SVC_URL}/vendor/products — l'authentification
-// vendeur (JWT Bearer, vendor_id) est déjà résolue côté appelant
-// (app/api/vendor/products/route.ts fait ce travail), cette route reste
-// pour compatibilité avec d'éventuels appelants directs historiques.
+// Faille corrigée le 2026-08-26 : cette route forwardait le body brut à
+// catalog-svc SANS vérifier le JWT, et surtout sans jamais ignorer un
+// vendor_id fourni par l'appelant — n'importe qui pouvait créer un produit
+// pour n'importe quel vendeur sans être connecté (trouvé en lisant
+// Dashboard.tsx : handleSubmitProduct appelle bien cette route avec un
+// header Authorization, qui était jusqu'ici silencieusement ignoré).
+// Même pattern d'auth que GET /api/vendor/products : fetchWpUser résout
+// vendor_id depuis le JWT, jamais depuis le body.
 export async function POST(req: Request) {
   try {
+    const auth = req.headers.get('Authorization')
+    if (!auth?.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
+    }
+    const user = await fetchWpUser(auth.slice(7))
+    if (!user?.vendor_id) return NextResponse.json({ error: 'Accès réservé aux vendeurs' }, { status: 403 })
+
     const body = await req.json()
     const res = await fetch(`${CATALOG_SVC_URL}/vendor/products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, vendor_id: user.vendor_id }),
     })
     const data = await res.json()
     if (!res.ok) return NextResponse.json({ error: data?.error?.message || 'Erreur catalog-svc' }, { status: res.status })

@@ -4,9 +4,9 @@ import { createContext, useContext, type ReactNode } from 'react'
 import { type WooProduct, type WooVendor } from '@/lib/woocommerce'
 
 // Les cartes produit/boutique rendues à l'intérieur des sections Server
-// Component streamées de l'accueil (HomeSections.tsx, CountrySectionServer.tsx,
-// SponsoredStoresServer.tsx) sont elles-mêmes des composants client
-// (LinkStoreCard, LinkProductCard, SponsoredStoresCarousel) — mais un Server
+// Component streamées de l'accueil (HomeSections.tsx, CountrySectionServer.tsx)
+// sont elles-mêmes des composants client (LinkStoreCard, LinkProductCard) —
+// mais un Server
 // Component parent ne peut pas leur passer directement les callbacks
 // handleVendorClick/handleProductClick de MiadMarketClient.tsx (fonctions non
 // sérialisables à travers la frontière serveur→client). Un Context, lui,
