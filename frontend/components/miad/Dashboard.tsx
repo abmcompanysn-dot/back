@@ -107,6 +107,14 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     '/api/categories', authFetcher, { revalidateOnFocus: false, dedupingInterval: 300000 }
   )
 
+  // Solde + demandes de retrait — le vendeur "réclame son argent" lui-même
+  // (demandé le 2026-08-26), l'admin approuve/rejette ensuite depuis
+  // Finances > Payouts. mutate() après une demande pour refléter le nouveau
+  // statut "en attente" immédiatement.
+  const { data: walletData, mutate: mutateWallet } = useSWR(
+    '/api/vendor/wallet', authFetcher, { revalidateOnFocus: false, dedupingInterval: 15000 }
+  )
+
   // Aliases pratiques depuis dashData
   const effectiveVendorId   = vendorId || dashData?.userId
   const effectiveVendorSlug = vendorSlug || dashData?.seller?.shop_url?.split('/').filter(Boolean).pop()
@@ -361,6 +369,34 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
   const [settingsForm, setSettingsForm] = useState({ storeName, email: '', phone: '', address: '', description: '' })
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [shippingToggles, setShippingToggles] = useState([true, false, false])
+
+  // ── DEMANDE DE RETRAIT ───────────────────────────────────────────────────
+  const [payoutAmount, setPayoutAmount] = useState('')
+  const [payoutMethod, setPayoutMethod] = useState('wave')
+  const [isRequestingPayout, setIsRequestingPayout] = useState(false)
+
+  const handleRequestPayout = async () => {
+    const amount = parseFloat(payoutAmount)
+    if (!amount || amount <= 0) { toast.error('Montant invalide'); return }
+    setIsRequestingPayout(true)
+    try {
+      const token = localStorage.getItem('miad_token')
+      const res = await fetch('/api/vendor/wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ amount_usd: amount, method: payoutMethod }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erreur')
+      toast.success('Demande de retrait envoyée !')
+      setPayoutAmount('')
+      mutateWallet()
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setIsRequestingPayout(false)
+    }
+  }
 
   // ── PHOTOS PROFIL / COUVERTURE ────────────────────────────────────────────
   const [profilePhotoOverride, setProfilePhotoUrl] = useState('')
@@ -1418,6 +1454,50 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
                     <h2 className="font-bold text-lg">Paiements & Retraits</h2>
                   </div>
                   <div className="p-6 space-y-4">
+                    {/* Solde disponible + demande de retrait */}
+                    <div className="bg-slate-900 text-white rounded-xl p-5 flex items-center justify-between flex-wrap gap-4">
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-400">Solde disponible</p>
+                        <p className="text-2xl font-black">{fp(walletData?.balance_usd || 0)}</p>
+                      </div>
+                      <div className="flex items-end gap-2 flex-wrap">
+                        <div>
+                          <label htmlFor="payout-amount" className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Montant ($)</label>
+                          <Input id="payout-amount" type="number" step="0.01" placeholder="0.00" value={payoutAmount}
+                            onChange={e => setPayoutAmount(e.target.value)} className="w-28 h-9 text-sm" />
+                        </div>
+                        <div>
+                          <label htmlFor="payout-method" className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Mode</label>
+                          <select id="payout-method" value={payoutMethod} onChange={e => setPayoutMethod(e.target.value)}
+                            className="h-9 px-2 rounded-md border border-input bg-background text-sm text-foreground">
+                            <option value="wave">Wave</option>
+                            <option value="orange_money">Orange Money</option>
+                            <option value="bank_transfer">Virement bancaire</option>
+                          </select>
+                        </div>
+                        <Button onClick={handleRequestPayout} disabled={isRequestingPayout} className="bg-accent text-white h-9 font-bold text-xs">
+                          {isRequestingPayout ? <Loader2 className="animate-spin" size={14} /> : 'Demander un retrait'}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {(walletData?.payout_requests || []).length > 0 && (
+                      <div className="border border-border rounded-xl overflow-hidden">
+                        <div className="px-4 py-2 bg-slate-50 text-[10px] font-black uppercase text-slate-400">Historique des demandes</div>
+                        <div className="divide-y divide-border">
+                          {walletData.payout_requests.slice(0, 5).map((p: any) => (
+                            <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                              <span>{fp(p.amount_usd)} — {p.method}</span>
+                              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                p.status === 'paid' ? 'bg-green-50 text-green-700' :
+                                p.status === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-yellow-50 text-yellow-700'
+                              }`}>{p.status === 'paid' ? 'Payé' : p.status === 'rejected' ? 'Rejeté' : 'En attente'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex items-start gap-3 p-4 bg-blue-50 rounded-xl">
                       <AlertCircle size={18} className="text-blue-500 mt-0.5 shrink-0" />
                       <p className="text-sm text-blue-700">Configurez vos coordonnées de retrait. Modes supportés : Wave, Orange Money, virement bancaire.</p>
