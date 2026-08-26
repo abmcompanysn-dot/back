@@ -35,3 +35,4 @@ services/admin-svc/webui/dist/
 .env
 .env.local
 *.env.*
+.gstack/
