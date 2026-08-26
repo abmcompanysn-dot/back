@@ -37,10 +37,14 @@ export async function GET(request: Request) {
     }
 
     // 2. Profil + commandes en parallèle (auth-svc / order-svc)
+    // X-Customer-JWT transmet le token d'origine à auth-svc (2026-08-26) :
+    // le secret interne prouve que l'appel vient bien de ce serveur, mais
+    // ne dit rien sur la révocation du token client lui-même (changement
+    // de mot de passe, déconnexion forcée) — voir checkCustomerSessionHeader.
     const [customerRes, ordersRes] = await Promise.all([
       fetch(`${AUTH_SVC_URL}/customer/${targetCustomerId}`, {
         cache: 'no-store',
-        headers: { 'X-Internal-Secret': INTERNAL_SECRET },
+        headers: { 'X-Internal-Secret': INTERNAL_SECRET, 'X-Customer-JWT': token },
       }),
       fetch(`${ORDER_SVC_URL}/orders?customer_id=${targetCustomerId}&page_size=20`, { cache: 'no-store' }),
     ]);
@@ -149,7 +153,7 @@ export async function PATCH(request: Request) {
 
     const res = await fetch(`${AUTH_SVC_URL}/customer/${targetCustomerId}/address`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': INTERNAL_SECRET },
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': INTERNAL_SECRET, 'X-Customer-JWT': auth.slice(7) },
       body: JSON.stringify({ type, address }),
     });
 

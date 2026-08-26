@@ -474,6 +474,7 @@ func (s *server) firebaseCustomerLogin(w http.ResponseWriter, r *http.Request) {
 	jwt, expires := s.signJWT(map[string]any{
 		"sub": id, "iss": "miad-auth", "role": "customer", "email": info.Email,
 		"vendor_id": s.customerVendorID(r.Context(), id),
+		"sv":        s.customerSessionVersion(r.Context(), id),
 		"provider":  "firebase", "exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
 	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
@@ -831,6 +832,7 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	claims := map[string]any{
 		"sub": id, "iss": "miad-auth", "role": "customer",
 		"vendor_id": s.customerVendorID(r.Context(), id),
+		"sv":        s.customerSessionVersion(r.Context(), id),
 		"exp":       time.Now().Add(s.jwtTTL).Unix(),
 	}
 	// email dans les claims seulement si c'est vraiment un email (pas un
@@ -948,6 +950,7 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 	jwt, expires := s.signJWT(map[string]any{
 		"sub": id, "iss": "miad-auth", "role": "customer", "email": body.Email,
 		"vendor_id": s.customerVendorID(r.Context(), id),
+		"sv":        s.customerSessionVersion(r.Context(), id),
 		"exp":       time.Now().Add(s.jwtTTL).Unix(),
 	})
 	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
@@ -982,17 +985,22 @@ func (s *server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	salt := randomToken(12)
-	tag, err := s.db.Exec(r.Context(),
-		"UPDATE customers SET password_hash = $1, salt = $2, must_reset_password = FALSE WHERE lower(email) = lower($3)",
-		hashPassword(salt, body.NewPassword), salt, body.Email)
-	if err != nil {
+	var customerID int64
+	err := s.db.QueryRow(r.Context(),
+		"UPDATE customers SET password_hash = $1, salt = $2, must_reset_password = FALSE WHERE lower(email) = lower($3) RETURNING id",
+		hashPassword(salt, body.NewPassword), salt, body.Email).Scan(&customerID)
+	if err == pgx.ErrNoRows {
+		kit.Fail(w, 404, "customer_not_found", "aucun compte avec cet email")
+		return
+	} else if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		kit.Fail(w, 404, "customer_not_found", "aucun compte avec cet email")
-		return
-	}
+	// Un mot de passe changé doit invalider les sessions déjà ouvertes
+	// ailleurs (autre appareil, session volée) — sinon un JWT émis avant
+	// ce changement resterait utilisable jusqu'à son expiration naturelle
+	// malgré le nouveau mot de passe (même trou que découvert côté admin).
+	s.revokeCustomerSessions(r.Context(), customerID)
 	kit.JSON(w, 200, map[string]any{"success": true})
 }
 
@@ -1082,6 +1090,9 @@ func (s *server) getCustomer(w http.ResponseWriter, r *http.Request) {
 			kit.Fail(w, 403, "admin_required", err.Error())
 			return
 		}
+	} else if err := s.checkCustomerSessionHeader(r); err != nil {
+		kit.Fail(w, 401, "session_revoked", err.Error())
+		return
 	}
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	row := s.db.QueryRow(r.Context(), `
@@ -1138,6 +1149,10 @@ func (s *server) updateCustomerAddress(w http.ResponseWriter, r *http.Request) {
 	secret := s.internalAPISecretStr
 	if secret == "" || r.Header.Get("X-Internal-Secret") != secret {
 		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
+		return
+	}
+	if err := s.checkCustomerSessionHeader(r); err != nil {
+		kit.Fail(w, 401, "session_revoked", err.Error())
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -1520,16 +1535,22 @@ func (s *server) claimsFromRequest(r *http.Request) (map[string]any, error) {
 	if exp, ok := claims["exp"].(float64); ok && time.Now().Unix() > int64(exp) {
 		return nil, fmt.Errorf("session expirée")
 	}
-	// Révocation : un JWT admin porte le numéro de version de session
-	// (claim "sv") en vigueur au moment de sa signature. Si l'admin a
-	// depuis appelé /revoke-sessions (déconnexion forcée, changement de
-	// mot de passe, désactivation 2FA...), le compteur Redis a avancé —
-	// tout JWT émis avant devient invalide immédiatement, sans attendre
-	// son expiration naturelle. Absent pour les JWT customer (pas de
-	// claim "sv"), donc ce contrôle ne s'applique qu'aux admins.
+	// Révocation : un JWT (admin OU customer, depuis le 2026-08-26) porte
+	// le numéro de version de session (claim "sv") en vigueur au moment de
+	// sa signature. Si le compte a depuis appelé /revoke-sessions ou
+	// changé de mot de passe, le compteur Redis a avancé — tout JWT émis
+	// avant devient invalide immédiatement, sans attendre son expiration
+	// naturelle. Le compteur consulté dépend du rôle : admin_sv:<id> pour
+	// un admin, customer_sv:<id> pour un client — deux espaces de clés
+	// distincts, jamais confondus même si les ids se recoupent entre les
+	// deux tables.
 	if sv, ok := claims["sv"].(float64); ok {
 		id, _ := claims["sub"].(float64)
-		if int64(sv) < s.adminSessionVersion(context.Background(), int64(id)) {
+		current := s.adminSessionVersion(context.Background(), int64(id))
+		if claims["role"] == "customer" {
+			current = s.customerSessionVersion(context.Background(), int64(id))
+		}
+		if int64(sv) < current {
 			return nil, fmt.Errorf("session révoquée")
 		}
 	}
@@ -1553,6 +1574,79 @@ func (s *server) adminSessionVersion(ctx context.Context, adminID int64) int64 {
 		return 0
 	}
 	return n
+}
+
+// customerSessionVersion — même mécanisme que adminSessionVersion (clé
+// Redis distincte, customer_sv:<id>), pour la même raison : jusqu'ici un
+// JWT client n'était vérifié QUE localement (signature HS256 + exp) côté
+// edge Next.js (lib/miad-server-auth.ts verifyJWT), donc un changement
+// d'état serveur (mot de passe changé, compte désactivé, déconnexion
+// forcée) ne se reflétait jamais avant expiration naturelle du token
+// (jusqu'à 72h). La vérification "sv" côté edge resterait purement locale
+// (donc invisible pour ce contrôle) — décision explicite de ne vérifier sv
+// que côté Go, sur les endpoints sensibles (customer, changement de mot de
+// passe...), pas sur le hot path public (catalogue, panier local).
+func (s *server) customerSessionVersion(ctx context.Context, customerID int64) int64 {
+	val, err := s.redis.Get(ctx, fmt.Sprintf("customer_sv:%d", customerID)).Result()
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// revokeCustomerSessions — incrémente le compteur : appelé quand un client
+// change de mot de passe (resetPassword) — les anciennes sessions sur
+// d'autres appareils/onglets ne doivent pas rester valides après un
+// changement de mot de passe, cas de sécurité standard.
+func (s *server) revokeCustomerSessions(ctx context.Context, customerID int64) {
+	_, _ = s.redis.Incr(ctx, fmt.Sprintf("customer_sv:%d", customerID)).Result()
+}
+
+// checkCustomerSessionHeader — vérifie le claim "sv" du JWT client
+// d'origine sur les endpoints appelés via le secret interne (Next.js a
+// déjà vérifié la signature/expiration côté edge, mais PAS la révocation
+// — verifyJWT edge est purement local, voir lib/miad-server-auth.ts). Le
+// frontend transmet ce même JWT en clair dans X-Customer-JWT ; ici on
+// revérifie juste sa signature (au cas où) et son "sv" contre Redis.
+// Header absent = requête interne sans client identifié (ex: un futur
+// appel serveur-à-serveur sans utilisateur) : pas bloquant, seulement les
+// JWT qui PORTENT un "sv" sont soumis à ce contrôle.
+func (s *server) checkCustomerSessionHeader(r *http.Request) error {
+	jwt := r.Header.Get("X-Customer-JWT")
+	if jwt == "" {
+		return nil
+	}
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("JWT malformé")
+	}
+	mac := hmac.New(sha256.New, s.jwtSec)
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	wantSig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(mac.Sum(nil), wantSig) {
+		return fmt.Errorf("signature invalide")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fmt.Errorf("payload illisible")
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return fmt.Errorf("payload JSON invalide")
+	}
+	sv, ok := claims["sv"].(float64)
+	if !ok {
+		return nil
+	}
+	id, _ := claims["sub"].(float64)
+	if int64(sv) < s.customerSessionVersion(r.Context(), int64(id)) {
+		return fmt.Errorf("session révoquée — reconnectez-vous")
+	}
+	return nil
 }
 
 // revokeAdminSessions — POST /auth/admin/{id}/revoke-sessions. Incrémente
