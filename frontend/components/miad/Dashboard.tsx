@@ -92,6 +92,16 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     ordersKey, authFetcher, { revalidateOnFocus: false, dedupingInterval: 30000, shouldRetryOnError: false }
   )
 
+  // Catalogue du vendeur — /api/vendor/dashboard ne renvoie JAMAIS de champ
+  // "products" (seulement des compteurs), contrairement à ce que ce fichier
+  // supposait jusqu'ici : l'onglet "Mon Catalogue" affichait donc toujours
+  // "Aucun produit publié", quel que soit le nombre réel de produits du
+  // vendeur (bug trouvé en audit le 2026-08-26). /api/vendor/products
+  // existe déjà et fonctionne, juste jamais appelé depuis ce composant.
+  const { data: productsData, error: productsError, isLoading: productsFetchLoading, mutate: mutateProductsList } = useSWR(
+    '/api/vendor/products?per_page=100', authFetcher, { revalidateOnFocus: false, dedupingInterval: 30000, shouldRetryOnError: false }
+  )
+
   // Déconnexion uniquement si le serveur confirme explicitement un token
   // invalide (même pattern que ClientDashboard.tsx) — authFetcher ignorait
   // jusqu'ici le statut HTTP, donc une session expirée ne redirigeait
@@ -115,33 +125,42 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     '/api/vendor/wallet', authFetcher, { revalidateOnFocus: false, dedupingInterval: 15000 }
   )
 
-  // Aliases pratiques depuis dashData
-  const effectiveVendorId   = vendorId || dashData?.userId
-  const effectiveVendorSlug = vendorSlug || dashData?.seller?.shop_url?.split('/').filter(Boolean).pop()
-  const publishedProducts: WooProduct[] = dashData?.products || []
-  const orders: any[]        = ordersData?.orders || dashData?.recentOrders || []
+  // Aliases pratiques depuis dashData — GET /vendor/{id}/dashboard
+  // (vendor-svc) ne renvoie QUE vendor_id, products_total, orders_total,
+  // revenue_usd, orders_by_status (vérifié dans services/vendor-svc/main.go
+  // vendorDashboard, 2026-08-26) : tous les autres champs lus ici avant ce
+  // correctif (userId, seller.*, revenue, products, products_published,
+  // orders_pending, orders_completed, recentOrders) n'ont jamais existé
+  // côté backend — toujours undefined, silencieusement.
+  const effectiveVendorId   = vendorId || dashData?.vendor_id
+  const effectiveVendorSlug = vendorSlug
+  const publishedProducts: WooProduct[] = productsData?.products || []
+  const orders: any[]        = ordersData?.orders || []
   const siteCategories: { id: string; name: string; slug: string; parent: string; isRoot: boolean }[] = categoriesData?.categories || []
 
   const statsLoading   = meLoading
-  const productsLoading = meLoading
+  const productsLoading = productsFetchLoading
   const mutateStats    = mutateDash
-  const mutateProducts = mutateDash
+  const mutateProducts = mutateProductsList
 
   // ── STATS ─────────────────────────────────────────────────────────────────
-  const dokanRevenue  = parseFloat(dashData?.revenue || '0')
+  // revenue_usd (vendor-svc, agrégé depuis order-svc) est la source de
+  // vérité — le calcul local sur `orders` reste un repli si dashData
+  // n'a pas encore chargé, pour ne pas afficher 0 pendant le premier rendu.
   const localRevenue  = orders
     .filter((o: any) => ['completed', 'processing', 'on-hold'].includes(o.status))
     .reduce((sum: number, o: any) => sum + (o.total || 0), 0)
-  const displayRevenue = dokanRevenue > 0 ? dokanRevenue : localRevenue
+  const displayRevenue = typeof dashData?.revenue_usd === 'number' ? dashData.revenue_usd : localRevenue
 
   const totalOrders   = ordersData?.total || dashData?.orders_total || 0
-  const pendingOrders = orders.filter((o: any) => o.status === 'pending').length || dashData?.orders_pending || 0
-  const totalProducts = dashData?.products_published || publishedProducts.length
+  const pendingOrders = orders.filter((o: any) => o.status === 'pending').length || dashData?.orders_by_status?.pending || 0
+  const completedOrdersCount = orders.filter((o: any) => o.status === 'completed').length || dashData?.orders_by_status?.completed || 0
+  const totalProducts = dashData?.products_total ?? publishedProducts.length
 
   const stats = [
-    { label: 'Revenus (total)', value: meLoading ? '...' : fp(displayRevenue), sub: `${dashData?.orders_completed || orders.filter((o: any) => o.status === 'completed').length} commandes complétées`, icon: DollarSign, color: 'bg-green-50 text-green-600' },
+    { label: 'Revenus (total)', value: meLoading ? '...' : fp(displayRevenue), sub: `${completedOrdersCount} commandes complétées`, icon: DollarSign, color: 'bg-green-50 text-green-600' },
     { label: 'Commandes',       value: meLoading ? '...' : String(totalOrders), sub: `${pendingOrders} en attente`, icon: ShoppingCart, color: 'bg-blue-50 text-blue-600' },
-    { label: 'Produits actifs', value: meLoading ? '...' : String(totalProducts), sub: `${dashData?.products_total || publishedProducts.length} au total`, icon: Package, color: 'bg-purple-50 text-purple-600' },
+    { label: 'Produits actifs', value: meLoading ? '...' : String(totalProducts), sub: `${totalProducts} au total`, icon: Package, color: 'bg-purple-50 text-purple-600' },
     { label: 'Avis reçus',      value: meLoading ? '...' : String(dashData?.reviews_count || 0), sub: 'Évaluation globale', icon: Star, color: 'bg-orange-50 text-orange-600' },
   ]
 
@@ -1364,11 +1383,10 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   {[
-                    { label: 'Revenus ce mois', value: `${dashData?.revenue || '0'} $`, icon: DollarSign, color: 'bg-green-50 text-green-700' },
-                    { label: 'Mois précédent', value: `${dashData?.revenue_last_month || '0'} $`, icon: TrendingUp, color: 'bg-blue-50 text-blue-700' },
+                    { label: 'Revenus (total)', value: `${fp(displayRevenue)}`, icon: DollarSign, color: 'bg-green-50 text-green-700' },
                     { label: 'Commandes totales', value: dashData?.orders_total || 0, icon: ShoppingCart, color: 'bg-purple-50 text-purple-700' },
-                    { label: 'Commandes livrées', value: dashData?.orders_completed || 0, icon: CheckCircle, color: 'bg-emerald-50 text-emerald-700' },
-                    { label: 'Produits publiés', value: dashData?.products_published || publishedProducts.length, icon: Package, color: 'bg-orange-50 text-orange-700' },
+                    { label: 'Commandes livrées', value: completedOrdersCount, icon: CheckCircle, color: 'bg-emerald-50 text-emerald-700' },
+                    { label: 'Produits publiés', value: totalProducts, icon: Package, color: 'bg-orange-50 text-orange-700' },
                     { label: 'Avis clients', value: dashData?.reviews_count || 0, icon: Star, color: 'bg-yellow-50 text-yellow-700' },
                   ].map(item => (
                     <div key={item.label} className="bg-white rounded-2xl border border-border p-5 shadow-sm">
