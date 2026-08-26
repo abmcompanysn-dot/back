@@ -56,10 +56,16 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   const [step, setStep] = useState<'form' | 'payment' | 'confirm'>('form')
   const [isProcessing, setIsProcessing] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'paydunya'>('paydunya')
-  const [shippingMethod, setShippingMethod] = useState<'standard' | 'express'>(() => {
-    if (typeof window === 'undefined') return 'standard'
-    return (sessionStorage.getItem('miad_shipping_method') as 'standard' | 'express') || 'standard'
-  })
+  // Lire sessionStorage dans l'initialiseur useState produisait un mismatch
+  // d'hydratation (Next.js error #418, même cause que WishlistContext.tsx
+  // corrigé le 2026-08-26) : le SSR n'a jamais accès à window (toujours
+  // 'standard'), tandis qu'un visiteur revenant avec 'express' déjà en
+  // session obtenait une valeur différente dès le premier rendu client.
+  const [shippingMethod, setShippingMethod] = useState<'standard' | 'express'>('standard')
+  useEffect(() => {
+    const saved = sessionStorage.getItem('miad_shipping_method') as 'standard' | 'express' | null
+    if (saved) setShippingMethod(saved)
+  }, [])
   const [isLoadingShipping, setIsLoadingShipping] = useState(false)
   const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null)
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null)
@@ -305,17 +311,22 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
     }
 
     try {
-      // Enrichissement des métadonnées pour que WordPress/Dokan reçoive bien les infos
-      const line_items = cart.map(item => ({
-        product_id: item.product.id,
+      // app/api/orders/route.ts (POST) attend un champ `lines` au format
+      // order-svc (product_id/variation_id/vendor_id/name/quantity/
+      // unit_price_usd) — ce code envoyait encore `line_items` au format
+      // WooCommerce/Dokan (meta_data), un champ que la route ignore
+      // totalement. Résultat : `lines` était toujours undefined côté
+      // serveur, donc "Le panier est vide" (400) à chaque tentative de
+      // paiement, peu importe le vrai contenu du panier (bug de prod
+      // trouvé le 2026-08-26, sans lien avec Stripe — le message d'erreur
+      // trompeur laissait croire à un problème de configuration paiement).
+      const lines = cart.map(item => ({
+        product_id: Number(item.product.id),
         variation_id: item.variation?.id ? parseInt(item.variation.id) : 0,
+        vendor_id: item.product.vendor?.id ? Number(item.product.vendor.id) : 0,
+        name: item.product.name,
         quantity: item.quantity,
-        meta_data: [
-          { key: "_variation_desc", value: item.variation?.attributes?.map((a: any) => `${a.name}: ${a.option}`).join(' / ') || "Unique" },
-          { key: "_vendor_id", value: item.product.vendor?.id || "" },
-          { key: "_shipping_weight", value: item.product.weight || "0.5" },
-          { key: "_miad_source", value: "MIAD-Mobile-App" }
-        ]
+        unit_price_usd: Number(item.variation?.price ?? item.product.price ?? 0),
       }))
 
       const fullPhone = buildFullPhone(formData.country, formData.phone)
@@ -339,7 +350,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
           shipping_method_id: domesticReady ? 'miad_domestic' : (shippingMethod === 'express' ? 'miad_express' : 'miad_standard'),
           savePaymentMethod: paymentMethod === 'stripe' && selectedPaymentMethodId === 'new' ? saveNewCard : false,
           paymentMethodId: paymentMethod === 'stripe' && selectedPaymentMethodId !== 'new' ? selectedPaymentMethodId : undefined,
-          line_items,
+          lines,
           save_address: true, // Enregistre l'adresse sur le profil pour le pré-remplissage des prochaines commandes
           shipping: {
             first_name: formData.first_name,
