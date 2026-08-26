@@ -38,6 +38,9 @@
 	handle /search/* {
 		reverse_proxy catalog-svc:8081
 	}
+	handle /wishlist* {
+		reverse_proxy catalog-svc:8081
+	}
 
 	# Boutiques & vendeurs — vendor-svc
 	handle /stores* {
