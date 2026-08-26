@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useCallback, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 
@@ -26,7 +26,20 @@ const fetcher = (url: string) => {
 }
 
 export function WishlistProvider({ children }: { children: ReactNode }) {
-  const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('miad_token')
+  // hasToken lu depuis localStorage pendant le rendu produisait un
+  // mismatch d'hydratation (Next.js error #418) : le SSR n'a jamais accès
+  // à window (donc toujours false côté serveur), tandis que le premier
+  // rendu client valait déjà true pour un visiteur connecté — React
+  // détectait deux arbres différents entre le HTML serveur et le premier
+  // rendu client. En le lisant après montage (useEffect), le SSR et le
+  // premier rendu client produisent tous deux false, le vrai état
+  // n'arrivant qu'au rendu suivant (comportement standard pour tout état
+  // qui dépend de localStorage/window).
+  const [hasToken, setHasToken] = useState(false)
+  useEffect(() => {
+    setHasToken(!!localStorage.getItem('miad_token'))
+  }, [])
+
   const { data, mutate, isLoading } = useSWR(hasToken ? '/api/wishlist' : null, fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 30000,
