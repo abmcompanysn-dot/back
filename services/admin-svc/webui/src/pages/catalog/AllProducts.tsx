@@ -57,6 +57,22 @@ export function AllProducts() {
   const [openMenuId, setOpenMenuId] = useState<number | null>(null)
   const [bulkAction, setBulkAction] = useState('')
   const [busy, setBusy] = useState(false)
+  // Nom de boutique par vendor_id — le tableau produits affichait juste
+  // "#12" jusqu'ici (vendor_id brut, illisible pour un admin sans le
+  // connaître par cœur). Chargé une seule fois (~75 vendeurs, pas de
+  // pagination nécessaire pour ce lookup).
+  const [vendorNames, setVendorNames] = useState<Record<number, string>>({})
+
+  useEffect(() => {
+    api
+      .get<{ items: { id: number; name: string }[] }>('/admin/api/vendors?page_size=500')
+      .then((b) => {
+        const map: Record<number, string> = {}
+        for (const v of b.items || []) map[v.id] = v.name
+        setVendorNames(map)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     load()
@@ -262,8 +278,8 @@ export function AllProducts() {
                         <div className="cell-secondary">{p.sku || '—'}</div>
                       </td>
                       <td>
-                        <a href={`/admin/vendors`} style={{ color: '#005826' }}>
-                          #{p.vendor_id}
+                        <a href={`/admin/vendors/${p.vendor_id}`} style={{ color: 'var(--miad-green)' }}>
+                          {vendorNames[p.vendor_id] || `#${p.vendor_id}`}
                         </a>
                       </td>
                       <td>
