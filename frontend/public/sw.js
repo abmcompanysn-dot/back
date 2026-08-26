@@ -3,7 +3,7 @@
  * Author: Brunel A. Mahuzonsou
  * Purpose: style caching for African Artisans
  */
-const CACHE_NAME = 'miad-market-v9';
+const CACHE_NAME = 'miad-market-v10';
 const STATIC_ASSETS = ['/', '/offline.html', '/logo/logo.png', '/manifest.json'];
 
 // IndexedDB constants
@@ -110,8 +110,14 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Ne pas intercepter les requêtes sensibles ou non-GET
-  if (url.pathname.includes('/api/orders') || url.pathname.includes('/checkout') || request.method !== 'GET') return;
+  // Ne pas intercepter les requêtes sensibles ou non-GET. /api/cart et
+  // /api/wishlist ajoutés le 2026-08-26 : le stale-while-revalidate
+  // ci-dessous rend le cache AVANT de revalider, donc un client gardait un
+  // panier périmé après un déploiement (nouvelle version de l'API) ou
+  // après une suppression d'article (le prochain GET /api/cart renvoyait
+  // encore l'ancien contenu en cache le temps que la revalidation arrive).
+  // Ces deux endpoints doivent toujours refléter l'état serveur réel.
+  if (url.pathname.includes('/api/orders') || url.pathname.includes('/api/cart') || url.pathname.includes('/api/wishlist') || url.pathname.includes('/checkout') || request.method !== 'GET') return;
 
   // Ne pas intercepter les domaines externes (Stripe, Firebase, flagcdn, etc.)
   const isSameOrigin = url.origin === self.location.origin;
