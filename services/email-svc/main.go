@@ -77,6 +77,7 @@ var watchedTopics = []string{
 	"payment.confirmed",
 	"payment.failed",
 	"customer.registered",
+	"vendor.registered",
 }
 
 type server struct {
@@ -87,6 +88,7 @@ type server struct {
 	orderURL    string
 	authURL     string
 	maxAttempts int
+	notifyEmail string
 
 	settings *kit.SettingsStore
 }
@@ -96,6 +98,7 @@ func (s *server) settingsFields() []kit.SettingsField {
 		{Key: "resend_api_key", Ptr: &s.resendAPI, Secret: true, Description: "Clé API du service d'envoi d'emails Resend — vide = mode simulation (email journalisé, jamais envoyé)"},
 		{Key: "from_email", Ptr: &s.fromEmail, Description: "Adresse email expéditeur pour tous les emails transactionnels"},
 		{Key: "storefront_url", Ptr: &s.frontendURL, Description: "URL du site public, utilisée dans le contenu des emails (liens)"},
+		{Key: "notify_email", Ptr: &s.notifyEmail, Description: "Adresse email de l'équipe MIAD — reçoit les notifications internes (nouveau vendeur, retrait demandé, etc.), équivalent de l'admin email WooCommerce"},
 	}
 }
 
@@ -127,6 +130,7 @@ var seedTemplates = []EmailTemplate{
 	{Name: "otp_email", Label: "Code de vérification (OTP)", Subject: "Votre code de vérification MIAD Market", BodyHTML: otpEmailHTML},
 	{Name: "password_reset", Label: "Réinitialisation de mot de passe", Subject: "Réinitialisation de mot de passe", BodyHTML: passwordResetHTML},
 	{Name: "rep_message_notification", Label: "Nouveau message représentant", Subject: "💬 Nouveau message de {{.client_name}} — MIAD Market", BodyHTML: repMessageNotificationHTML},
+	{Name: "new_vendor_registered", Label: "Nouveau vendeur inscrit (interne)", Subject: "Nouveau vendeur inscrit — {{.name}}", BodyHTML: newVendorRegisteredHTML},
 }
 
 // getSettings/putSettings — Configuration Système (page admin).
@@ -197,6 +201,7 @@ func main() {
 		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		authURL:     kit.Env("AUTH_SVC_URL", "http://auth-svc:8086"),
 		maxAttempts: 3,
+		notifyEmail: kit.Env("NOTIFY_EMAIL", "miadmarket25@gmail.com"),
 	}
 	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
 	if err := s.settings.Load(ctx); err != nil {
@@ -282,6 +287,8 @@ func (s *server) handleKafkaEvent(ctx context.Context, log *slog.Logger, msg *sa
 		s.queuePaymentConfirmed(ctx, log, payload)
 	case "payment.failed":
 		s.queuePaymentFailed(ctx, log, payload)
+	case "vendor.registered":
+		s.queueNewVendorRegistered(ctx, log, payload)
 	case "order.status_changed":
 		status, _ := payload["status"].(string)
 		switch status {
@@ -514,6 +521,18 @@ func (s *server) queueOrderRefunded(ctx context.Context, log *slog.Logger, paylo
 	}
 	subject := fmt.Sprintf("Commande #%v remboursée", payload["order_id"])
 	s.queueEmail(ctx, log, email, "order_refunded", subject, payload)
+}
+
+// queueNewVendorRegistered — notification interne (équipe MIAD, pas le
+// vendeur) : équivalent de "New Seller Registered" côté WooCommerce/Dokan.
+func (s *server) queueNewVendorRegistered(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	if s.notifyEmail == "" {
+		log.Warn("notify_email non configuré — email nouveau vendeur ignoré")
+		return
+	}
+	name, _ := payload["name"].(string)
+	subject := fmt.Sprintf("Nouveau vendeur inscrit — %s", name)
+	s.queueEmail(ctx, log, s.notifyEmail, "new_vendor_registered", subject, payload)
 }
 
 func (s *server) queueEmail(ctx context.Context, log *slog.Logger, to, templateName, subject string, payload map[string]any) {
@@ -1590,6 +1609,50 @@ const orderRefundedHTML = `
             <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
               <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
               <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const newVendorRegisteredHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nouveau vendeur inscrit</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Nouveau vendeur inscrit</h1>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Un nouveau vendeur vient de s'inscrire sur MIAD Market.
+              </p>
+              <div style="background-color:#f9fafb;border-radius:8px;padding:16px 20px;font-size:14px;color:#333333;line-height:1.8;">
+                <strong>Boutique :</strong> {{.name}}<br>
+                {{if .email}}<strong>Email :</strong> {{.email}}<br>{{end}}
+                <strong>ID vendeur :</strong> #{{.vendor_id}}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification interne.</p>
             </td>
           </tr>
         </table>

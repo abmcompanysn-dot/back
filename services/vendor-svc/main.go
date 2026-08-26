@@ -330,7 +330,7 @@ func (s *server) createVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kit.Publish(s.kafka, "vendor.registered", fmt.Sprint(id), map[string]any{
-		"vendor_id": id, "at": time.Now().UTC().Format(time.RFC3339),
+		"vendor_id": id, "email": body.Email, "name": body.Name, "at": time.Now().UTC().Format(time.RFC3339),
 	})
 	kit.JSON(w, 201, map[string]any{"id": id})
 }
