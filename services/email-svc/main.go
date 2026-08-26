@@ -119,6 +119,11 @@ var seedTemplates = []EmailTemplate{
 	{Name: "payment_confirmed", Label: "Paiement confirmé", Subject: "Paiement confirmé - Commande #{{.order_id}}", BodyHTML: paymentConfirmedHTML},
 	{Name: "payment_failed", Label: "Paiement échoué", Subject: "Échec du paiement - Commande #{{.order_id}}", BodyHTML: paymentFailedHTML},
 	{Name: "order_shipped", Label: "Commande expédiée", Subject: "Votre commande #{{.order_id}} a été expédiée !", BodyHTML: orderShippedHTML},
+	{Name: "order_completed", Label: "Commande livrée", Subject: "Votre commande #{{.order_id}} est arrivée !", BodyHTML: orderCompletedHTML},
+	{Name: "order_cancelled", Label: "Commande annulée", Subject: "Commande #{{.order_id}} annulée", BodyHTML: orderCancelledHTML},
+	{Name: "order_failed", Label: "Commande échouée (paiement)", Subject: "Problème avec votre commande #{{.order_id}}", BodyHTML: orderFailedHTML},
+	{Name: "order_pending", Label: "Commande en attente de paiement", Subject: "Commande #{{.order_id}} en attente de paiement", BodyHTML: orderPendingHTML},
+	{Name: "order_refunded", Label: "Commande remboursée", Subject: "Commande #{{.order_id}} remboursée", BodyHTML: orderRefundedHTML},
 	{Name: "otp_email", Label: "Code de vérification (OTP)", Subject: "Votre code de vérification MIAD Market", BodyHTML: otpEmailHTML},
 	{Name: "password_reset", Label: "Réinitialisation de mot de passe", Subject: "Réinitialisation de mot de passe", BodyHTML: passwordResetHTML},
 	{Name: "rep_message_notification", Label: "Nouveau message représentant", Subject: "💬 Nouveau message de {{.client_name}} — MIAD Market", BodyHTML: repMessageNotificationHTML},
@@ -278,8 +283,20 @@ func (s *server) handleKafkaEvent(ctx context.Context, log *slog.Logger, msg *sa
 	case "payment.failed":
 		s.queuePaymentFailed(ctx, log, payload)
 	case "order.status_changed":
-		if status, ok := payload["status"].(string); ok && status == "shipped" {
+		status, _ := payload["status"].(string)
+		switch status {
+		case "shipped":
 			s.queueOrderShipped(ctx, log, payload)
+		case "delivered":
+			s.queueOrderCompleted(ctx, log, payload)
+		case "cancelled":
+			s.queueOrderCancelled(ctx, log, payload)
+		case "payment_expired":
+			s.queueOrderFailed(ctx, log, payload)
+		case "pending_payment":
+			s.queueOrderPending(ctx, log, payload)
+		case "refunded":
+			s.queueOrderRefunded(ctx, log, payload)
 		}
 	}
 }
@@ -447,6 +464,56 @@ func (s *server) queueOrderShipped(ctx context.Context, log *slog.Logger, payloa
 	}
 	subject := fmt.Sprintf("Votre commande #%v a été expédiée !", payload["order_id"])
 	s.queueEmail(ctx, log, email, "order_shipped", subject, payload)
+}
+
+func (s *server) queueOrderCompleted(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour commande terminée", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Votre commande #%v est arrivée !", payload["order_id"])
+	s.queueEmail(ctx, log, email, "order_completed", subject, payload)
+}
+
+func (s *server) queueOrderCancelled(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour commande annulée", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Commande #%v annulée", payload["order_id"])
+	s.queueEmail(ctx, log, email, "order_cancelled", subject, payload)
+}
+
+func (s *server) queueOrderFailed(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour commande échouée", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Problème avec votre commande #%v", payload["order_id"])
+	s.queueEmail(ctx, log, email, "order_failed", subject, payload)
+}
+
+func (s *server) queueOrderPending(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour commande en attente", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Commande #%v en attente de paiement", payload["order_id"])
+	s.queueEmail(ctx, log, email, "order_pending", subject, payload)
+}
+
+func (s *server) queueOrderRefunded(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	email, err := s.resolveOrderContact(ctx, payload)
+	if err != nil {
+		log.Warn("email client introuvable pour commande remboursée", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Commande #%v remboursée", payload["order_id"])
+	s.queueEmail(ctx, log, email, "order_refunded", subject, payload)
 }
 
 func (s *server) queueEmail(ctx context.Context, log *slog.Logger, to, templateName, subject string, payload map[string]any) {
@@ -1231,6 +1298,291 @@ const orderShippedHTML = `
 
               <p style="font-size:13px;color:#888888;margin-top:24px;">
                 Livraison estimée : {{if .EstimatedDelivery}}{{.EstimatedDelivery}}{{else}}2-5 jours ouvrés{{end}}
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const orderCompletedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commande livrée</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Commande livrée !</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}}</p>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre commande est arrivée. Merci d'avoir choisi MIAD Market !
+              </p>
+
+              {{if .Items}}
+              <h3 style="color:#005826;font-size:14px;margin:24px 0 12px;">Articles livrés :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+                {{range .Items}}
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
+                  <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
+                </tr>
+                {{end}}
+              </table>
+              {{end}}
+
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Une question sur votre commande ? Contactez-nous, on est là pour vous.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const orderCancelledHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commande annulée</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#c0392b;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Commande annulée</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}}</p>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre commande a été annulée. Si vous n'êtes pas à l'origine de cette annulation, contactez-nous.
+              </p>
+
+              {{if .Items}}
+              <h3 style="color:#005826;font-size:14px;margin:24px 0 12px;">Articles concernés :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+                {{range .Items}}
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
+                  <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
+                </tr>
+                {{end}}
+              </table>
+              {{end}}
+
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Si un paiement avait déjà été effectué, il sera remboursé selon nos délais habituels.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const orderFailedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Problème avec votre commande</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#c0392b;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Le paiement n'a pas abouti</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}}</p>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Nous n'avons pas pu confirmer le paiement de votre commande dans le délai imparti. Elle n'a pas été traitée.
+              </p>
+
+              {{if .Items}}
+              <h3 style="color:#005826;font-size:14px;margin:24px 0 12px;">Articles concernés :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+                {{range .Items}}
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
+                  <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
+                </tr>
+                {{end}}
+              </table>
+              {{end}}
+
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Vous pouvez repasser commande à tout moment depuis le site.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const orderPendingHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commande en attente de paiement</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#F5A623;font-size:1.3rem;font-weight:800;margin:0 0 6px;">En attente de paiement</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}}</p>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre commande a bien été enregistrée et attend la confirmation du paiement.
+              </p>
+
+              {{if .Items}}
+              <h3 style="color:#005826;font-size:14px;margin:24px 0 12px;">Articles :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+                {{range .Items}}
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
+                  <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
+                </tr>
+                {{end}}
+              </table>
+              {{end}}
+
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Dès le paiement confirmé, vous recevrez un email de confirmation.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const orderRefundedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commande remboursée</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Commande remboursée</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}}</p>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Le remboursement de votre commande a été traité. Le délai de réception dépend de votre méthode de paiement.
+              </p>
+
+              {{if .Items}}
+              <h3 style="color:#005826;font-size:14px;margin:24px 0 12px;">Articles concernés :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+                {{range .Items}}
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
+                  <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
+                </tr>
+                {{end}}
+              </table>
+              {{end}}
+
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Une question sur ce remboursement ? Contactez-nous, on est là pour vous.
               </p>
             </td>
           </tr>
