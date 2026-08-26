@@ -17,7 +17,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -1004,10 +1003,18 @@ func validStripeSignature(body []byte, header, secret string) bool {
 	if err != nil || time.Now().Unix()-ts > 300 {
 		return false // tolérance 5 minutes
 	}
-	key, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(secret, "whsec_"))
-	if err != nil {
-		key = []byte(strings.TrimPrefix(secret, "whsec_"))
-	}
+	// Le "signing secret" Stripe (whsec_...) est TOUJOURS du texte ASCII
+	// brut après le préfixe, jamais du base64 — malgré son apparence qui
+	// peut y ressembler (lettres/chiffres). Le code décodait AVANT en
+	// base64 en priorité, et comme certains secrets (dont celui de test
+	// utilisé ici, whsec_uvvxxyjVzbxpZw6nPfqsrS34HOeMPaeu) forment par
+	// coïncidence une chaîne base64 valide, le décodage réussissait à
+	// tort et produisait une clé HMAC corrompue au lieu du vrai secret —
+	// donc TOUTE signature Stripe échouait silencieusement (401 avant même
+	// le parsing de l'événement, kit.Fail ne logue rien). Bug de prod
+	// trouvé le 2026-08-26 : paiement réussi côté Stripe, webhook livré,
+	// mais commande jamais confirmée.
+	key := []byte(strings.TrimPrefix(secret, "whsec_"))
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(t + "."))
 	mac.Write(body)
