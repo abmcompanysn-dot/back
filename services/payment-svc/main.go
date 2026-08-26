@@ -961,20 +961,24 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 401, "bad_signature", "signature Stripe invalide — événement rejeté")
 		return
 	}
+	// stripeEvent.Data.Raw est déjà event.data.object lui-même (le SDK a
+	// retiré un niveau d'imbrication par rapport à l'ancien code manuel qui
+	// décodait le body entier) — PAS besoin (et ça casse le parsing) d'un
+	// wrapper "Object" ici : le charge/payment_intent a lui-même un champ
+	// JSON "object" qui est une STRING (ex: "object":"charge"), qui rentre
+	// en collision avec un champ Go nommé Object.
 	var eventData struct {
-		Object struct {
-			ID       string `json:"id"`
-			Metadata struct {
-				OrderID string `json:"order_id"`
-			} `json:"metadata"`
-		} `json:"object"`
+		ID       string `json:"id"`
+		Metadata struct {
+			OrderID string `json:"order_id"`
+		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(stripeEvent.Data.Raw, &eventData); err != nil {
 		slog.Error("échec parsing event.data.object", "err", err, "type", stripeEvent.Type, "raw_len", len(stripeEvent.Data.Raw), "raw_prefix", string(stripeEvent.Data.Raw[:min(200, len(stripeEvent.Data.Raw))]))
 		kit.Fail(w, 400, "invalid_event", err.Error())
 		return
 	}
-	orderID, _ := strconv.ParseInt(eventData.Object.Metadata.OrderID, 10, 64)
+	orderID, _ := strconv.ParseInt(eventData.Metadata.OrderID, 10, 64)
 	// Log explicite de CHAQUE webhook reçu (type + order_id résolu) : sans
 	// ça, un événement Stripe qui tombe dans un cas inattendu (metadata
 	// vide, type non géré, orderID=0) échouait silencieusement — kit.Fail
@@ -982,10 +986,10 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	// ici était invisible même en lisant les logs du pod (bug de prod
 	// trouvé le 2026-08-26 : paiement confirmé côté Stripe, mais order-svc
 	// jamais notifié, sans aucune trace exploitable).
-	slog.Info("webhook Stripe reçu", "type", stripeEvent.Type, "order_id", orderID, "raw_order_id", eventData.Object.Metadata.OrderID, "payment_intent_id", eventData.Object.ID)
+	slog.Info("webhook Stripe reçu", "type", stripeEvent.Type, "order_id", orderID, "raw_order_id", eventData.Metadata.OrderID, "payment_intent_id", eventData.ID)
 	switch stripeEvent.Type {
 	case "payment_intent.succeeded":
-		s.confirmPayment(w, r, orderID, "stripe", eventData.Object.ID)
+		s.confirmPayment(w, r, orderID, "stripe", eventData.ID)
 	case "payment_intent.payment_failed", "payment_intent.canceled":
 		s.markFailed(w, r, orderID, "stripe")
 	default:
