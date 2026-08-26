@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS representatives (
 -- création du représentant — évite de générer un code jamais utilisé
 -- pour un représentant créé manuellement sans jamais se connecter).
 ALTER TABLE representatives ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;
+-- Import depuis WordPress (2026-08-26, miad_representative/miad_super_rep) :
+-- wp_user_id sert à éviter les doublons si le même compte est ré-importé,
+-- whatsapp vient de la meta miad_rep_whatsapp (miad-representative.php).
+ALTER TABLE representatives ADD COLUMN IF NOT EXISTS wp_user_id BIGINT UNIQUE;
+ALTER TABLE representatives ADD COLUMN IF NOT EXISTS whatsapp TEXT;
 
 -- Un client parrainé (via ?ref=<code> au moment de l'inscription, câblé
 -- côté auth-svc/registerCustomer) est enregistré UNE fois — pas de
@@ -590,10 +595,10 @@ func (s *server) repDashboard(w http.ResponseWriter, r *http.Request) {
 	var name, email, country string
 	var isSuper bool
 	var commissionPct float32
-	var referralCode *string
+	var referralCode, whatsapp *string
 	if err := s.db.QueryRow(ctx,
-		"SELECT name, email, country, is_super_rep, commission_pct, referral_code FROM representatives WHERE id = $1", id,
-	).Scan(&name, &email, &country, &isSuper, &commissionPct, &referralCode); err != nil {
+		"SELECT name, email, country, is_super_rep, commission_pct, referral_code, whatsapp FROM representatives WHERE id = $1", id,
+	).Scan(&name, &email, &country, &isSuper, &commissionPct, &referralCode, &whatsapp); err != nil {
 		kit.Fail(w, 404, "representative_not_found", "représentant introuvable")
 		return
 	}
@@ -741,7 +746,7 @@ func (s *server) repDashboard(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{
 		"success": true, "id": id, "name": name, "email": email, "avatar": "",
 		"country_code": country, "country_name": countryNameOrAll(country, isSuper),
-		"whatsapp": "", "referral_code": *referralCode, "commission_rate": commissionPct,
+		"whatsapp": stringOrEmpty(whatsapp), "referral_code": *referralCode, "commission_rate": commissionPct,
 		"referral_earned": round2(referralEarned), "referral_clients": referralClients, "referral_orders": referralOrders,
 		"vendors": repVendors, "vendors_count": len(repVendors),
 		"recent_orders": recentOrders,
@@ -758,6 +763,13 @@ func countryNameOrAll(code string, isSuper bool) string {
 }
 
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
+
+func stringOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
 
 func proxyGetJSON(ctx context.Context, url string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
