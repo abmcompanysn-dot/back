@@ -196,6 +196,7 @@ func main() {
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)                              // role admin exigé
 		mux.HandleFunc("PATCH /customer/{id}/address", s.updateCustomerAddress)          // secret interne exigé
 		mux.HandleFunc("GET /admins", s.listAdmins)                                      // role admin exigé
+		mux.HandleFunc("POST /auth/admin/{id}/revoke-sessions", s.revokeAdminSessions)   // role admin exigé
 		mux.HandleFunc("POST /auth/impersonate-vendor/{vendor_id}", s.impersonateVendor) // role admin exigé
 	})
 }
@@ -326,8 +327,9 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	sv := s.adminSessionVersion(r.Context(), id)
 	jwt, expires := s.signJWT(map[string]any{
-		"sub": id, "iss": "miad-auth", "role": role, "email": body.Email,
+		"sub": id, "iss": "miad-auth", "role": role, "email": body.Email, "sv": sv,
 		"exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
 	kit.JSON(w, 200, map[string]any{
@@ -367,8 +369,9 @@ func (s *server) firebaseAdminLogin(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+	sv := s.adminSessionVersion(r.Context(), id)
 	jwt, expires := s.signJWT(map[string]any{
-		"sub": id, "iss": "miad-auth", "role": role, "email": info.Email,
+		"sub": id, "iss": "miad-auth", "role": role, "email": info.Email, "sv": sv,
 		"provider": "firebase", "exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
 	kit.JSON(w, 200, map[string]any{
@@ -419,7 +422,7 @@ func (s *server) firebaseCustomerLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jwt, expires := s.signJWT(map[string]any{
-		"sub": id, "iss": "miad-auth", "role": "customer",
+		"sub": id, "iss": "miad-auth", "role": "customer", "email": info.Email,
 		"vendor_id": s.customerVendorID(r.Context(), id),
 		"provider":  "firebase", "exp": time.Now().Add(s.jwtTTL).Unix(),
 	})
@@ -775,11 +778,20 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	jwt, expires := s.signJWT(map[string]any{
+	claims := map[string]any{
 		"sub": id, "iss": "miad-auth", "role": "customer",
 		"vendor_id": s.customerVendorID(r.Context(), id),
 		"exp":       time.Now().Add(s.jwtTTL).Unix(),
-	})
+	}
+	// email dans les claims seulement si c'est vraiment un email (pas un
+	// numéro de téléphone si channel=="sms") — bug corrigé le 2026-08-26 :
+	// aucun JWT customer n'incluait jamais email, donc fetchRepresentative
+	// (frontend, if (!user?.email) return null) rejetait TOUJOURS les
+	// représentants connectés par OTP avec un 403, même légitimes.
+	if channel == "email" {
+		claims["email"] = identifier
+	}
+	jwt, expires := s.signJWT(claims)
 	_ = s.redis.Set(r.Context(), "session:"+jwt, fmt.Sprint(id), s.jwtTTL).Err()
 	kit.JSON(w, 200, map[string]any{
 		"session":         map[string]string{"jwt": jwt, "expires_at": expires},
@@ -837,7 +849,7 @@ func (s *server) registerCustomer(w http.ResponseWriter, r *http.Request) {
 	})
 
 	jwt, expires := s.signJWT(map[string]any{
-		"sub": id, "iss": "miad-auth", "role": "customer",
+		"sub": id, "iss": "miad-auth", "role": "customer", "email": body.Email,
 		"vendor_id": s.customerVendorID(r.Context(), id),
 		"exp":       time.Now().Add(s.jwtTTL).Unix(),
 	})
@@ -884,7 +896,7 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jwt, expires := s.signJWT(map[string]any{
-		"sub": id, "iss": "miad-auth", "role": "customer",
+		"sub": id, "iss": "miad-auth", "role": "customer", "email": body.Email,
 		"vendor_id": s.customerVendorID(r.Context(), id),
 		"exp":       time.Now().Add(s.jwtTTL).Unix(),
 	})
@@ -1243,7 +1255,62 @@ func (s *server) claimsFromRequest(r *http.Request) (map[string]any, error) {
 	if exp, ok := claims["exp"].(float64); ok && time.Now().Unix() > int64(exp) {
 		return nil, fmt.Errorf("session expirée")
 	}
+	// Révocation : un JWT admin porte le numéro de version de session
+	// (claim "sv") en vigueur au moment de sa signature. Si l'admin a
+	// depuis appelé /revoke-sessions (déconnexion forcée, changement de
+	// mot de passe, désactivation 2FA...), le compteur Redis a avancé —
+	// tout JWT émis avant devient invalide immédiatement, sans attendre
+	// son expiration naturelle. Absent pour les JWT customer (pas de
+	// claim "sv"), donc ce contrôle ne s'applique qu'aux admins.
+	if sv, ok := claims["sv"].(float64); ok {
+		id, _ := claims["sub"].(float64)
+		if int64(sv) < s.adminSessionVersion(context.Background(), int64(id)) {
+			return nil, fmt.Errorf("session révoquée")
+		}
+	}
 	return claims, nil
+}
+
+// adminSessionVersion — compteur Redis par admin (clé
+// admin_sv:<id>), incrémenté par revokeAdminSessions. Absent en Redis =
+// version 0 (comportement par défaut pour tout admin n'ayant jamais été
+// révoqué). Ne fait jamais échouer l'appelant : une panne Redis ne doit
+// pas bloquer tous les logins admin, juste désactiver la révocation
+// jusqu'à ce que Redis revienne (dégradation silencieuse acceptée ici,
+// contrairement à un vrai souci de sécurité comme une signature invalide).
+func (s *server) adminSessionVersion(ctx context.Context, adminID int64) int64 {
+	val, err := s.redis.Get(ctx, fmt.Sprintf("admin_sv:%d", adminID)).Result()
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// revokeAdminSessions — POST /auth/admin/{id}/revoke-sessions. Incrémente
+// le compteur de version : toutes les sessions déjà émises pour cet admin
+// deviennent invalides au prochain appel vérifié (claimsFromRequest côté
+// auth-svc, verifyJWT côté admin-svc — même clé Redis, cluster partagé).
+func (s *server) revokeAdminSessions(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_id", "id invalide")
+		return
+	}
+	newVersion, err := s.redis.Incr(r.Context(), fmt.Sprintf("admin_sv:%d", id)).Result()
+	if err != nil {
+		kit.Fail(w, 500, "redis_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"success": true, "admin_id": id, "session_version": newVersion})
 }
 
 /* ---------- JWT ---------- */
