@@ -883,8 +883,18 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 			// Configuration (Stripe/Resend), pas de nouveau champ settings
 			// pour une valeur qui ne change jamais en pratique.
 			"callback_url": "https://origin.miadmarket.ca/payments/webhook/paydunya",
-			"return_url":   front + "/checkout/success?order=" + strconv.FormatInt(ev.OrderID, 10),
-			"cancel_url":   front + "/checkout/cancel?order=" + strconv.FormatInt(ev.OrderID, 10),
+			// /checkout/success et /checkout/cancel n'ont jamais existé côté
+			// frontend (404 confirmé en prod le 2026-08-26, commande 145 —
+			// paiement bien confirmé côté backend malgré la 404, donc pas
+			// bloquant pour la commande elle-même, juste une mauvaise UX de
+			// retour). order-received est la vraie page de confirmation,
+			// déjà utilisée par Stripe et déjà écrite pour PayDunya
+			// spécifiquement ("PayDunya redirige ici (actions.return_url)
+			// avec order_id + token", voir app/order-received/page.tsx) —
+			// jamais branchée côté payment-svc jusqu'ici. Pas de page
+			// "cancel" dédiée : /checkout est le seul repli existant.
+			"return_url":   front + "/order-received?order_id=" + strconv.FormatInt(ev.OrderID, 10),
+			"cancel_url":   front + "/checkout",
 		},
 		"custom_data": map[string]any{"order_id": ev.OrderID},
 	}
