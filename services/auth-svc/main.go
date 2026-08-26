@@ -71,6 +71,29 @@ CREATE TABLE IF NOT EXISTS admins (
 );
 ALTER TABLE admins ADD COLUMN IF NOT EXISTS totp_secret TEXT DEFAULT '';
 ALTER TABLE admins ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- RBAC (2026-08-26) : permissions = liste de modules autorisés (tout ou
+-- rien par module, pas de granularité lecture/écriture pour l'instant —
+-- ex. {"modules": ["orders", "shipping"]}). admins.role_id est NULLABLE
+-- et n'affecte PAS le contrôle d'accès existant (claims["role"]=="admin"
+-- dans requireAdmin, partout dans les 11 services) : un admin sans
+-- role_id garde l'accès total via l'ancienne colonne admins.role='admin'
+-- (compte historique unique à ce jour) — role_id ne fait qu'AJOUTER une
+-- restriction optionnelle, vérifiée côté frontend (menu filtré) et sur
+-- les endpoints qui choisissent de l'exiger, migration douce sans rien
+-- casser sur le système déjà en place.
+CREATE TABLE IF NOT EXISTS admin_roles (
+  id          BIGSERIAL PRIMARY KEY,
+  name        TEXT UNIQUE NOT NULL,
+  permissions JSONB NOT NULL DEFAULT '{"modules":[]}',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS role_id BIGINT REFERENCES admin_roles(id);
+-- Désactivation plutôt que suppression définitive : admin_action_log
+-- garde actor_id en historique (pas de FK stricte, mais autant éviter un
+-- id orphelin sans explication) et une désactivation est réversible (une
+-- suppression accidentelle ne l'est pas).
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 `
 
 type server struct {
@@ -196,6 +219,13 @@ func main() {
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)                              // role admin exigé
 		mux.HandleFunc("PATCH /customer/{id}/address", s.updateCustomerAddress)          // secret interne exigé
 		mux.HandleFunc("GET /admins", s.listAdmins)                                      // role admin exigé
+		mux.HandleFunc("POST /admins", s.createAdmin)                                    // role admin exigé
+		mux.HandleFunc("PATCH /admins/{id}/active", s.setAdminActive)                    // role admin exigé
+		mux.HandleFunc("PATCH /admins/{id}/role", s.setAdminRole)                        // role admin exigé
+		mux.HandleFunc("GET /admin-roles", s.listAdminRoles)                             // role admin exigé
+		mux.HandleFunc("POST /admin-roles", s.createAdminRole)                           // role admin exigé
+		mux.HandleFunc("PATCH /admin-roles/{id}", s.updateAdminRole)                     // role admin exigé
+		mux.HandleFunc("DELETE /admin-roles/{id}", s.deleteAdminRole)                    // role admin exigé
 		mux.HandleFunc("POST /auth/admin/{id}/revoke-sessions", s.revokeAdminSessions)   // role admin exigé
 		mux.HandleFunc("POST /auth/impersonate-vendor/{vendor_id}", s.impersonateVendor) // role admin exigé
 	})
@@ -304,15 +334,19 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var id int64
 	var hash, salt, role, totpSecret string
-	var totpEnabled bool
+	var totpEnabled, isActive bool
 	err := s.db.QueryRow(r.Context(),
-		"SELECT id, password_hash, salt, role, totp_secret, totp_enabled FROM admins WHERE lower(email) = lower($1)", body.Email,
-	).Scan(&id, &hash, &salt, &role, &totpSecret, &totpEnabled)
+		"SELECT id, password_hash, salt, role, totp_secret, totp_enabled, is_active FROM admins WHERE lower(email) = lower($1)", body.Email,
+	).Scan(&id, &hash, &salt, &role, &totpSecret, &totpEnabled, &isActive)
 	if err == pgx.ErrNoRows || hashPassword(salt, body.Password) != hash {
 		kit.Fail(w, 401, "invalid_credentials", "email ou mot de passe incorrect")
 		return
 	} else if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if !isActive {
+		kit.Fail(w, 403, "account_disabled", "ce compte administrateur a été désactivé")
 		return
 	}
 
@@ -359,14 +393,19 @@ func (s *server) firebaseAdminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var id int64
 	var role string
+	var isActive bool
 	err = s.db.QueryRow(r.Context(),
-		"SELECT id, role FROM admins WHERE lower(email) = lower($1)", info.Email,
-	).Scan(&id, &role)
+		"SELECT id, role, is_active FROM admins WHERE lower(email) = lower($1)", info.Email,
+	).Scan(&id, &role, &isActive)
 	if err == pgx.ErrNoRows {
 		kit.Fail(w, 403, "not_admin", fmt.Sprintf("%s est authentifié Firebase mais n'a pas le rôle admin", info.Email))
 		return
 	} else if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if !isActive {
+		kit.Fail(w, 403, "account_disabled", "ce compte administrateur a été désactivé")
 		return
 	}
 	sv := s.adminSessionVersion(r.Context(), id)
@@ -1153,8 +1192,11 @@ func (s *server) listAdmins(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 403, "admin_required", err.Error())
 		return
 	}
-	rows, err := s.db.Query(r.Context(),
-		"SELECT id, email, role, totp_enabled, created_at FROM admins ORDER BY id")
+	rows, err := s.db.Query(r.Context(), `
+		SELECT a.id, a.email, a.role, a.totp_enabled, a.is_active, a.created_at,
+		       a.role_id, COALESCE(r.name, '')
+		FROM admins a LEFT JOIN admin_roles r ON r.id = a.role_id
+		ORDER BY a.id`)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -1163,19 +1205,222 @@ func (s *server) listAdmins(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var email, role string
-		var totpEnabled bool
+		var email, role, roleName string
+		var totpEnabled, isActive bool
 		var at time.Time
-		if err := rows.Scan(&id, &email, &role, &totpEnabled, &at); err != nil {
+		var roleID *int64
+		if err := rows.Scan(&id, &email, &role, &totpEnabled, &isActive, &at, &roleID, &roleName); err != nil {
 			kit.Fail(w, 500, "db_error", "lecture admin échouée : "+err.Error())
 			return
 		}
 		items = append(items, map[string]any{
 			"id": id, "email": email, "role": role, "totp_enabled": totpEnabled,
-			"created_at": at.UTC().Format(time.RFC3339),
+			"is_active": isActive, "created_at": at.UTC().Format(time.RFC3339),
+			"role_id": roleID, "role_name": roleName,
 		})
 	}
 	kit.JSON(w, 200, map[string]any{"items": items, "total": len(items)})
+}
+
+// createAdmin — POST /admins. Nouveau compte, mot de passe temporaire
+// généré côté serveur (jamais choisi par l'appelant, jamais renvoyé en
+// clair au-delà de cette réponse unique) — l'admin créé devra le changer.
+// 2FA non configurée à la création (totp_enabled=false) : elle se
+// configure au premier login via /auth/admin/2fa/setup, pas ici.
+func (s *server) createAdmin(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	var body struct {
+		Email  string `json:"email"`
+		RoleID *int64 `json:"role_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" {
+		kit.Fail(w, 400, "invalid_body", "email obligatoire")
+		return
+	}
+	tempPassword := randomToken(9)
+	salt := randomToken(12)
+	var id int64
+	err := s.db.QueryRow(r.Context(),
+		"INSERT INTO admins (email, password_hash, salt, role, role_id) VALUES ($1,$2,$3,'admin',$4) RETURNING id",
+		body.Email, hashPassword(salt, tempPassword), salt, body.RoleID,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{
+		"id": id, "email": body.Email, "temp_password": tempPassword,
+	})
+}
+
+// setAdminActive — PATCH /admins/{id}/active {"is_active": bool}.
+// Désactiver révoque aussi immédiatement toutes les sessions déjà émises
+// (sinon un JWT encore valide resterait utilisable jusqu'à expiration
+// malgré le compte désactivé — même raisonnement que revokeAdminSessions).
+func (s *server) setAdminActive(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_id", "id invalide")
+		return
+	}
+	var body struct {
+		IsActive bool `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), "UPDATE admins SET is_active = $1 WHERE id = $2", body.IsActive, id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if !body.IsActive {
+		_, _ = s.redis.Incr(r.Context(), fmt.Sprintf("admin_sv:%d", id)).Result()
+	}
+	kit.JSON(w, 200, map[string]any{"success": true, "id": id, "is_active": body.IsActive})
+}
+
+// setAdminRole — PATCH /admins/{id}/role {"role_id": int|null}.
+func (s *server) setAdminRole(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_id", "id invalide")
+		return
+	}
+	var body struct {
+		RoleID *int64 `json:"role_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), "UPDATE admins SET role_id = $1 WHERE id = $2", body.RoleID, id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"success": true, "id": id, "role_id": body.RoleID})
+}
+
+/* ---------- Rôles admin (RBAC par module) ---------- */
+
+func (s *server) listAdminRoles(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	rows, err := s.db.Query(r.Context(), "SELECT id, name, permissions, created_at FROM admin_roles ORDER BY id")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var name string
+		var permissions []byte
+		var at time.Time
+		if err := rows.Scan(&id, &name, &permissions, &at); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		var parsed map[string]any
+		_ = json.Unmarshal(permissions, &parsed)
+		items = append(items, map[string]any{
+			"id": id, "name": name, "permissions": parsed, "created_at": at.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items, "total": len(items)})
+}
+
+func (s *server) createAdminRole(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	var body struct {
+		Name    string   `json:"name"`
+		Modules []string `json:"modules"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+		kit.Fail(w, 400, "invalid_body", "name obligatoire")
+		return
+	}
+	permissions, _ := json.Marshal(map[string]any{"modules": body.Modules})
+	var id int64
+	if err := s.db.QueryRow(r.Context(),
+		"INSERT INTO admin_roles (name, permissions) VALUES ($1,$2) RETURNING id",
+		body.Name, permissions,
+	).Scan(&id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": id, "name": body.Name, "modules": body.Modules})
+}
+
+func (s *server) updateAdminRole(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_id", "id invalide")
+		return
+	}
+	var body struct {
+		Name    string   `json:"name"`
+		Modules []string `json:"modules"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+		kit.Fail(w, 400, "invalid_body", "name obligatoire")
+		return
+	}
+	permissions, _ := json.Marshal(map[string]any{"modules": body.Modules})
+	if _, err := s.db.Exec(r.Context(),
+		"UPDATE admin_roles SET name = $1, permissions = $2 WHERE id = $3",
+		body.Name, permissions, id,
+	); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"success": true, "id": id})
+}
+
+// deleteAdminRole — les admins qui avaient ce role_id repassent à NULL
+// (accès total par défaut, comme avant l'existence des rôles — jamais
+// un admin qui perd silencieusement tout accès suite à la suppression
+// d'un rôle par un autre admin).
+func (s *server) deleteAdminRole(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_id", "id invalide")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), "UPDATE admins SET role_id = NULL WHERE role_id = $1", id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), "DELETE FROM admin_roles WHERE id = $1", id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"success": true, "id": id})
 }
 
 // impersonateVendor — "se connecter en tant que" (module Vendeurs) :

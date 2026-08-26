@@ -70,7 +70,15 @@ interface Admin {
   email: string
   role: string
   totp_enabled: boolean
+  is_active: boolean
+  role_id: number | null
+  role_name: string
   created_at: string
+}
+
+interface AdminRoleOption {
+  id: number
+  name: string
 }
 
 interface Representative {
@@ -105,10 +113,14 @@ export function AllUsers() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [admins, setAdmins] = useState<Admin[]>([])
+  const [adminRoles, setAdminRoles] = useState<AdminRoleOption[]>([])
   const [representatives, setRepresentatives] = useState<Representative[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [newAdminEmail, setNewAdminEmail] = useState('')
+  const [creatingAdmin, setCreatingAdmin] = useState(false)
+  const [createdCreds, setCreatedCreds] = useState<{ email: string; temp_password: string } | null>(null)
 
   useEffect(() => {
     setPage(1)
@@ -141,9 +153,13 @@ export function AllUsers() {
         setVendors(body.items || [])
         setTotal(body.total || 0)
       } else if (tab === 'admins') {
-        const body = await api.get<{ items: Admin[]; total: number }>('/admin/api/admins')
-        setAdmins(body.items || [])
-        setTotal(body.total || 0)
+        const [adminsBody, rolesBody] = await Promise.all([
+          api.get<{ items: Admin[]; total: number }>('/admin/api/admins'),
+          api.get<{ items: AdminRoleOption[] }>('/admin/api/admin-roles'),
+        ])
+        setAdmins(adminsBody.items || [])
+        setTotal(adminsBody.total || 0)
+        setAdminRoles(rolesBody.items || [])
       } else {
         const body = await api.get<{ items: Representative[]; total: number }>('/admin/api/representatives')
         setRepresentatives(body.items || [])
@@ -153,6 +169,53 @@ export function AllUsers() {
       setError(err instanceof ApiError ? err.message : 'erreur inattendue')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function createAdmin() {
+    if (!newAdminEmail.trim()) return
+    setCreatingAdmin(true)
+    setError(null)
+    try {
+      const body = await api.post<{ email: string; temp_password: string }>('/admin/api/admins', {
+        email: newAdminEmail.trim(),
+      })
+      setCreatedCreds(body)
+      setNewAdminEmail('')
+      await load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'échec de la création')
+    } finally {
+      setCreatingAdmin(false)
+    }
+  }
+
+  async function toggleAdminActive(admin: Admin) {
+    const next = !admin.is_active
+    if (next === false && !window.confirm(`Désactiver ${admin.email} ? Ses sessions actives seront immédiatement révoquées.`)) return
+    try {
+      await api.patch(`/admin/api/admins/${admin.id}/active`, { is_active: next })
+      await load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'échec de la mise à jour')
+    }
+  }
+
+  async function changeAdminRole(admin: Admin, roleID: string) {
+    try {
+      await api.patch(`/admin/api/admins/${admin.id}/role`, { role_id: roleID ? Number(roleID) : null })
+      await load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'échec de la mise à jour')
+    }
+  }
+
+  async function revokeSessions(admin: Admin) {
+    if (!window.confirm(`Déconnecter ${admin.email} de toutes ses sessions actives ?`)) return
+    try {
+      await api.post(`/admin/api/admins/${admin.id}/revoke-sessions`)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'échec de la révocation')
     }
   }
 
@@ -200,6 +263,11 @@ export function AllUsers() {
         <button className={tab === 'admins' ? 'active' : ''} onClick={() => setTab('admins')} type="button">
           <IconSecurity width={16} height={16} /> Admins
         </button>
+        {tab === 'admins' && (
+          <button className="btn-ghost" onClick={() => navigate('/admin/users/roles')} type="button">
+            Rôles &amp; Permissions
+          </button>
+        )}
         <button className={tab === 'representatives' ? 'active' : ''} onClick={() => setTab('representatives')} type="button">
           <IconSecurity width={16} height={16} /> Représentants
         </button>
@@ -226,7 +294,38 @@ export function AllUsers() {
       {!loading && !error && tab === 'vendors' && (
         <VendorsTable items={vendors} onOpen={(id) => navigate(`/admin/vendors/${id}`)} />
       )}
-      {!loading && !error && tab === 'admins' && <AdminsTable items={admins} />}
+      {!loading && !error && tab === 'admins' && (
+        <>
+          <div className="form-card" style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <div className="form-field" style={{ flex: 1 }}>
+                <label>Nouvel administrateur — email</label>
+                <input
+                  value={newAdminEmail}
+                  onChange={(e) => setNewAdminEmail(e.target.value)}
+                  placeholder="prenom.nom@miadmarket.ca"
+                />
+              </div>
+              <button className="btn-primary" disabled={creatingAdmin || !newAdminEmail.trim()} onClick={createAdmin} type="button">
+                {creatingAdmin ? 'Création…' : '+ Créer'}
+              </button>
+            </div>
+            {createdCreds && (
+              <p className="hint" style={{ marginTop: 12 }}>
+                Compte créé pour <strong>{createdCreds.email}</strong> — mot de passe temporaire :{' '}
+                <code>{createdCreds.temp_password}</code> (affiché une seule fois, à transmettre de façon sécurisée).
+              </p>
+            )}
+          </div>
+          <AdminsTable
+            items={admins}
+            roles={adminRoles}
+            onToggleActive={toggleAdminActive}
+            onChangeRole={changeAdminRole}
+            onRevokeSessions={revokeSessions}
+          />
+        </>
+      )}
       {!loading && !error && tab === 'representatives' && <RepresentativesTable items={representatives} />}
 
       {!loading && !error && tab !== 'admins' && tab !== 'all' && tab !== 'representatives' && total > PAGE_SIZE && (
@@ -349,7 +448,19 @@ function VendorsTable({ items, onOpen }: { items: Vendor[]; onOpen: (id: number)
   )
 }
 
-function AdminsTable({ items }: { items: Admin[] }) {
+function AdminsTable({
+  items,
+  roles,
+  onToggleActive,
+  onChangeRole,
+  onRevokeSessions,
+}: {
+  items: Admin[]
+  roles: AdminRoleOption[]
+  onToggleActive: (a: Admin) => void
+  onChangeRole: (a: Admin, roleID: string) => void
+  onRevokeSessions: (a: Admin) => void
+}) {
   if (items.length === 0) {
     return <EmptyState icon={<IconSecurity width={40} height={40} strokeWidth={1.4} />} title="Aucun compte admin" />
   }
@@ -359,9 +470,11 @@ function AdminsTable({ items }: { items: Admin[] }) {
         <thead>
           <tr>
             <th>Compte</th>
-            <th>Rôle</th>
+            <th>Rôle RBAC</th>
             <th>2FA</th>
+            <th>Statut</th>
             <th>Créé le</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -369,10 +482,19 @@ function AdminsTable({ items }: { items: Admin[] }) {
             <tr key={a.id}>
               <td>
                 <div className="cell-primary">{a.email}</div>
-                <div className="cell-secondary">#{a.id}</div>
+                <div className="cell-secondary">
+                  #{a.id} · {a.role}
+                </div>
               </td>
               <td>
-                <span className="badge badge-gray">{a.role}</span>
+                <select value={a.role_id ?? ''} onChange={(e) => onChangeRole(a, e.target.value)}>
+                  <option value="">Accès total (aucun rôle)</option>
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
               </td>
               <td>
                 {a.totp_enabled ? (
@@ -381,7 +503,22 @@ function AdminsTable({ items }: { items: Admin[] }) {
                   <span className="badge badge-orange">Désactivée</span>
                 )}
               </td>
+              <td>
+                {a.is_active ? (
+                  <span className="badge badge-green">Actif</span>
+                ) : (
+                  <span className="badge badge-gray">Désactivé</span>
+                )}
+              </td>
               <td className="cell-secondary">{formatDate(a.created_at)}</td>
+              <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                <button className="btn-ghost" onClick={() => onRevokeSessions(a)} type="button">
+                  Déconnecter
+                </button>{' '}
+                <button className="btn-ghost" onClick={() => onToggleActive(a)} type="button">
+                  {a.is_active ? 'Désactiver' : 'Réactiver'}
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>

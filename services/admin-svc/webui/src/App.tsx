@@ -5,6 +5,7 @@ import { Login } from './pages/Login'
 import { Overview } from './pages/Overview'
 import { AllUsers } from './pages/users/AllUsers'
 import { CustomerDetail } from './pages/users/CustomerDetail'
+import { AdminRoles } from './pages/users/AdminRoles'
 import { Shipping } from './pages/Shipping'
 import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
@@ -82,6 +83,7 @@ function AppRoutes() {
         <Route path="customers" element={<Navigate to="/admin/users" replace />} />
         <Route path="users" element={<AllUsers />} />
         <Route path="users/customers/:id" element={<CustomerDetail />} />
+        <Route path="users/roles" element={<AdminRoles />} />
         <Route path="payments" element={<Navigate to="/admin/finance" replace />} />
         <Route path="finance" element={<FinanceOverview />} />
         <Route path="finance/transactions" element={<Transactions />} />

@@ -338,8 +338,27 @@ func main() {
 		}))
 		// Module Utilisateurs : vue unifiée boutiques/clients/admins.
 		mux.HandleFunc("GET /admin/api/admins", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/admins" })))
+		mux.HandleFunc("POST /admin/api/admins", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.authURL+"/admins")
+		}))
+		mux.HandleFunc("PATCH /admin/api/admins/{id}/active", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.authURL+"/admins/"+r.PathValue("id")+"/active")
+		}))
+		mux.HandleFunc("PATCH /admin/api/admins/{id}/role", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.authURL+"/admins/"+r.PathValue("id")+"/role")
+		}))
 		mux.HandleFunc("POST /admin/api/admins/{id}/revoke-sessions", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.authURL+"/auth/admin/"+r.PathValue("id")+"/revoke-sessions")
+		}))
+		mux.HandleFunc("GET /admin/api/admin-roles", s.requireAdmin(s.proxyAuth(func() string { return s.authURL + "/admin-roles" })))
+		mux.HandleFunc("POST /admin/api/admin-roles", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.authURL+"/admin-roles")
+		}))
+		mux.HandleFunc("PATCH /admin/api/admin-roles/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPatch, s.authURL+"/admin-roles/"+r.PathValue("id"))
+		}))
+		mux.HandleFunc("DELETE /admin/api/admin-roles/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.authURL+"/admin-roles/"+r.PathValue("id"))
 		}))
 		mux.HandleFunc("GET /admin/api/users", s.requireAdmin(s.listUnifiedUsers))
 		mux.HandleFunc("GET /admin/api/representatives", s.requireAdmin(s.proxyAuth(func() string { return s.loyaltyURL + "/representatives" })))
