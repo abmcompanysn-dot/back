@@ -69,6 +69,17 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   const [isLoadingShipping, setIsLoadingShipping] = useState(false)
   const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null)
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null)
+  // order-received interroge order-svc via /orders/parent/{id} — il faut
+  // donc lui passer l'ID de la commande PARENT (groupée), pas celui d'une
+  // sous-commande vendeur individuelle. createdOrderId (ci-dessus) reste
+  // l'ID de sous-commande utilisé pour initialiser/confirmer LE paiement
+  // Stripe côté payment-svc (un paiement par sous-commande) — les deux
+  // ID sont différents et ne doivent pas être confondus (bug de prod
+  // trouvé le 2026-08-26 : commande #60 confirmée payée en base, mais
+  // /order-received?order_id=60 affichait "paiement non confirmé" car
+  // 60 est une sous-commande, son parent est #59 — orders/parent/60
+  // ne correspond à rien).
+  const [parentOrderIdForRedirect, setParentOrderIdForRedirect] = useState<number | null>(null)
   const [activeSection, setActiveSection] = useState<number>(0);
   const [authToken, setAuthToken] = useState<string | null>(null)
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | 'new'>('new')
@@ -392,6 +403,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
       if (paymentMethod === 'stripe' && data.clientSecret) {
         setStripeClientSecret(data.clientSecret);
         setCreatedOrderId(data.orderId);
+        setParentOrderIdForRedirect(data.parentOrderId ?? data.orderId);
         setStep('payment'); // On passe à la page de paiement dédiée
         // 'step' est un état interne (pas une navigation via navigateTo), donc
         // rien ne remettait le scroll en haut — si le formulaire d'adresse
@@ -402,6 +414,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
       }
       else if (paymentMethod === 'paydunya' && data.paydunyaToken) {
         setCreatedOrderId(data.orderId);
+        setParentOrderIdForRedirect(data.parentOrderId ?? data.orderId);
         // Ouverture de la modal PayDunya via le SDK chargé par Script
         if (typeof (window as any).PayDunyaCheckout !== 'undefined') {
           (window as any).PayDunyaCheckout.setup({
@@ -539,6 +552,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                 total={total}
                 currency={cart[0]?.product.currency || 'USD'}
                 orderId={createdOrderId || 0}
+                redirectOrderId={parentOrderIdForRedirect || createdOrderId || 0}
               />
             ) : (
               <Elements stripe={stripePromise} options={{ clientSecret: stripeClientSecret }}>
@@ -546,6 +560,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                   total={total}
                   currency={cart[0]?.product.currency || 'USD'}
                   orderId={createdOrderId || 0}
+                  redirectOrderId={parentOrderIdForRedirect || createdOrderId || 0}
                   onFallback={() => {
                     setPaymentMethod('paydunya');
                     setStep('form');

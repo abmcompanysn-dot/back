@@ -18,9 +18,16 @@ interface SavedCardConfirmButtonProps {
   total: number
   currency: string
   orderId: number
+  // ID de la commande PARENT (groupée), pour /order-received — distinct de
+  // orderId (sous-commande vendeur individuelle, utilisé par payment-svc).
+  // order-received interroge order-svc via /orders/parent/{id} : lui passer
+  // l'ID d'une sous-commande au lieu du parent y renvoyait "paiement non
+  // confirmé" même quand le paiement était bien confirmé en base (bug de
+  // prod trouvé le 2026-08-26, commande #60/parent #59).
+  redirectOrderId: number
 }
 
-export function SavedCardConfirmButton({ clientSecret, paymentMethodId, total, currency, orderId }: SavedCardConfirmButtonProps) {
+export function SavedCardConfirmButton({ clientSecret, paymentMethodId, total, currency, orderId, redirectOrderId }: SavedCardConfirmButtonProps) {
   const [isProcessing, setIsProcessing] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -50,7 +57,7 @@ export function SavedCardConfirmButton({ clientSecret, paymentMethodId, total, c
     if (paymentIntent?.status === 'succeeded') {
       trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod: 'stripe_saved_card' } })
       toast.success("Paiement validé !")
-      window.location.href = `${window.location.origin}/order-received?order_id=${orderId}&payment_intent=${paymentIntent.id}`
+      window.location.href = `${window.location.origin}/order-received?order_id=${redirectOrderId}&payment_intent=${paymentIntent.id}`
       return
     }
 
@@ -84,6 +91,9 @@ interface StripePaymentFormProps {
   total: number
   currency: string
   orderId: number
+  // Voir le commentaire équivalent dans SavedCardConfirmButtonProps —
+  // l'ID de la commande PARENT (groupée), distinct de orderId.
+  redirectOrderId: number
   onFallback: () => void
 }
 
@@ -93,7 +103,7 @@ interface StripePaymentFormProps {
 // face à un squelette de chargement infini.
 const ELEMENT_LOAD_TIMEOUT_MS = 8000
 
-export function StripePaymentForm({ total, currency, orderId, onFallback }: StripePaymentFormProps) {
+export function StripePaymentForm({ total, currency, orderId, redirectOrderId, onFallback }: StripePaymentFormProps) {
   const stripe = useStripe()
   const elements = useElements()
   const [isPayProcessing, setIsPayProcessing] = useState(false)
@@ -125,7 +135,7 @@ export function StripePaymentForm({ total, currency, orderId, onFallback }: Stri
     // redirect_status après une vérification 3D Secure. On pointe vers
     // /order-received — la même page de confirmation que PayDunya, pour une
     // expérience identique quel que soit le mode de paiement.
-    const returnUrl = `${window.location.origin}/order-received?order_id=${orderId}`
+    const returnUrl = `${window.location.origin}/order-received?order_id=${redirectOrderId}`
 
     const { error, paymentIntent } = await stripe.confirmPayment({
       elements,
@@ -148,7 +158,7 @@ export function StripePaymentForm({ total, currency, orderId, onFallback }: Stri
       // confirmation cohérente ; cette page appelle confirm-stripe elle-même.
       trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod: 'stripe' } })
       toast.success("Paiement validé !")
-      window.location.href = `${window.location.origin}/order-received?order_id=${orderId}&payment_intent=${paymentIntent.id}`
+      window.location.href = `${window.location.origin}/order-received?order_id=${redirectOrderId}&payment_intent=${paymentIntent.id}`
       return
     }
 
