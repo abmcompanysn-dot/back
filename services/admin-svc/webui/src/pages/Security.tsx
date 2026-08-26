@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import QRCode from 'qrcode'
 import { ApiError, api } from '../lib/api'
 
 interface Setup2FAResponse {
@@ -8,6 +9,7 @@ interface Setup2FAResponse {
 
 export function Security() {
   const [setupResult, setSetupResult] = useState<Setup2FAResponse | null>(null)
+  const [qrDataURL, setQrDataURL] = useState('')
   const [verifyCode, setVerifyCode] = useState('')
   const [disableCode, setDisableCode] = useState('')
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
@@ -19,6 +21,7 @@ export function Security() {
     try {
       const body = await api.post<Setup2FAResponse>('/auth/admin/2fa/setup')
       setSetupResult(body)
+      setQrDataURL(await QRCode.toDataURL(body.otpauth_url, { width: 200, margin: 1 }))
     } catch (err) {
       setMessage({ text: err instanceof ApiError ? err.message : 'échec', ok: false })
     } finally {
@@ -75,6 +78,11 @@ export function Security() {
 
       {setupResult && (
         <div>
+          {qrDataURL && (
+            <div style={{ display: 'flex', justifyContent: 'center', margin: '12px 0' }}>
+              <img src={qrDataURL} alt="QR code 2FA" width={200} height={200} />
+            </div>
+          )}
           <p style={{ marginTop: 12 }}>Secret (saisie manuelle si le scan ne fonctionne pas) :</p>
           <div className="secret-code">{setupResult.secret}</div>
           <p style={{ fontSize: 12, wordBreak: 'break-all' }}>{setupResult.otpauth_url}</p>
