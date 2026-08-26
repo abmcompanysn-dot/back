@@ -158,6 +158,7 @@ type server struct {
 	paydunyaAPIKeyPrivate  string
 	paydunyaAPIKeyPublic   string
 	paydunyaMasterKey      string
+	paydunyaToken          string
 	paydunyaAPIBase        string
 	paydunyaEnabledStr     string
 	storefrontURL          string
@@ -182,6 +183,7 @@ func (s *server) settingsFields() []kit.SettingsField {
 		{Key: "paydunya_api_key_private", Ptr: &s.paydunyaAPIKeyPrivate, Secret: true, Description: "Clé API privée PayDunya (Wave, Orange Money)"},
 		{Key: "paydunya_api_key_public", Ptr: &s.paydunyaAPIKeyPublic, Secret: true, Description: "Clé API publique PayDunya (liée au compte marchand)"},
 		{Key: "paydunya_master_key", Ptr: &s.paydunyaMasterKey, Secret: true, Description: "Clé maître PayDunya (signature/validation)"},
+		{Key: "paydunya_token", Ptr: &s.paydunyaToken, Secret: true, Description: "Token PayDunya (Dashboard → Intégrez notre API → Token) — obligatoire en header PAYDUNYA-TOKEN sur checkout-invoice/create"},
 		{Key: "paydunya_api_base", Ptr: &s.paydunyaAPIBase, Description: "URL de base de l'API PayDunya"},
 		{Key: "paydunya_enabled", Ptr: &s.paydunyaEnabledStr, Description: "Activer PayDunya comme moyen de paiement (\"false\" pour désactiver sans effacer la clé) — vide ou toute autre valeur = activé"},
 		{Key: "storefront_url", Ptr: &s.storefrontURL, Description: "URL du site public, utilisée pour les liens de retour après paiement"},
@@ -837,10 +839,22 @@ func (s *server) createStripePaymentIntent(orderID int64, reference string, tota
 // interne reste en USD (source de vérité), converti ici uniquement pour
 // cet appel via le taux exposé par shipping-svc (exchange_rates,
 // source UNIQUE — voir shipping-svc/main.go).
+// createPayDunyaInvoice — endpoint et structure de payload corrigés le
+// 2026-08-26 d'après la doc officielle PayDunya (jamais vérifiée contre la
+// vraie doc jusqu'ici, cassée en prod : l'ancienne URL checkout-api/v1/
+// checkout/invoice renvoie une vraie page 404 PayDunya, pas une erreur
+// d'auth). Trois erreurs corrigées :
+//  1. URL : /api/v1/checkout-invoice/create (pas /checkout-api/v1/checkout/invoice)
+//  2. "items" est un OBJET indexé item_0/item_1/... (pas un tableau JSON),
+//     et "store.name" est un nœud racine obligatoire (absent avant)
+//  3. response_code de succès est "00" (pas "0000"), et l'URL de paiement
+//     est directement response_text — inutile de la reconstruire à la main
+//     (l'ancienne reconstruction pointait en plus vers l'URL cassée)
 func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent) (ref, redirect string, err error) {
 	priv := s.paydunyaAPIKeyPrivate
 	pub := s.paydunyaAPIKeyPublic
 	master := s.paydunyaMasterKey
+	token := s.paydunyaToken
 	if priv == "" {
 		return "", "", fmt.Errorf("PAYDUNYA_API_KEY_PRIVATE absente")
 	}
@@ -855,23 +869,35 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 		"invoice": map[string]any{
 			"total_amount": amountXOF,
 			"description":  "Commande MIAD " + ev.Reference,
-			"items": []map[string]any{{
-				"name": "Commande " + ev.Reference, "quantity": 1, "unit_price": amountXOF,
-			}},
+			"items": map[string]any{
+				"item_0": map[string]any{
+					"name": "Commande " + ev.Reference, "quantity": 1,
+					"unit_price": amountXOF, "total_price": amountXOF,
+				},
+			},
+		},
+		"store": map[string]any{
+			"name": "MIAD Market",
 		},
 		"actions": map[string]any{
-			"return_url": front + "/checkout/success?order=" + strconv.FormatInt(ev.OrderID, 10),
-			"cancel_url": front + "/checkout/cancel?order=" + strconv.FormatInt(ev.OrderID, 10),
+			// Domaine fixe de la passerelle Caddy (voir deploy/Caddyfile) —
+			// même convention que les URLs de webhook affichées en
+			// Configuration (Stripe/Resend), pas de nouveau champ settings
+			// pour une valeur qui ne change jamais en pratique.
+			"callback_url": "https://origin.miadmarket.ca/payments/webhook/paydunya",
+			"return_url":   front + "/checkout/success?order=" + strconv.FormatInt(ev.OrderID, 10),
+			"cancel_url":   front + "/checkout/cancel?order=" + strconv.FormatInt(ev.OrderID, 10),
 		},
 		"custom_data": map[string]any{"order_id": ev.OrderID},
 	}
 	body, _ := json.Marshal(payload)
 	base := s.paydunyaAPIBase
-	req, _ := http.NewRequest(http.MethodPost, base+"/checkout-api/v1/checkout/invoice", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/checkout-invoice/create", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("PAYDUNYA-MASTER-KEY", master)
 	req.Header.Set("PAYDUNYA-PRIVATE-KEY", priv)
 	req.Header.Set("PAYDUNYA-PUBLIC-KEY", pub)
+	req.Header.Set("PAYDUNYA-TOKEN", token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", "", err
@@ -889,10 +915,10 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return "", "", err
 	}
-	if doc.ResponseCode != "0000" || doc.Token == "" {
+	if doc.ResponseCode != "00" || doc.Token == "" {
 		return "", "", fmt.Errorf("PayDunya: %s (%s)", doc.ResponseText, doc.ResponseCode)
 	}
-	return doc.Token, base + "/checkout-api/v1/checkout/invoice/" + doc.Token, nil
+	return doc.Token, doc.ResponseText, nil
 }
 
 // fetchExchangeRate — lit shipping-svc/exchange-rates (source UNIQUE des
@@ -944,13 +970,14 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sig := r.Header.Get("Stripe-Signature")
-	if !validStripeSignature(body, sig, secret) {
+	ok, reason, computed, received := validStripeSignature(body, sig, secret)
+	if !ok {
 		// Diagnostic temporaire (2026-08-26) : kit.Fail n'écrit jamais dans
 		// les logs, donc ce rejet était totalement invisible même après le
 		// fix du décodage base64 — un webhook rejeté au même endroit pour
 		// une raison DIFFÉRENTE (secret mal configuré, en-tête absent...)
 		// aurait semblé identique de l'extérieur sans ce log.
-		slog.Error("signature Stripe rejetée", "sig_header_present", sig != "", "sig_header_len", len(sig), "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body))
+		slog.Error("signature Stripe rejetée", "reason", reason, "sig_header", sig, "computed_sig", computed, "received_sig", received, "secret_len", len(secret), "secret_prefix", secret[:min(10, len(secret))], "body_len", len(body), "body_prefix", string(body[:min(80, len(body))]), "body_suffix", string(body[max(0, len(body)-20):]))
 		kit.Fail(w, 401, "bad_signature", "signature Stripe invalide — événement rejeté")
 		return
 	}
@@ -988,7 +1015,10 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func validStripeSignature(body []byte, header, secret string) bool {
+// validStripeSignature renvoie (valide, motif-si-invalide, signature-calculée,
+// signature-reçue) — les deux dernières valeurs sont uniquement pour le log
+// de diagnostic temporaire dans stripeWebhook, jamais exposées au client.
+func validStripeSignature(body []byte, header, secret string) (bool, string, string, string) {
 	var t, v1 string
 	for _, part := range strings.Split(header, ",") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
@@ -1002,12 +1032,18 @@ func validStripeSignature(body []byte, header, secret string) bool {
 			v1 = kv[1]
 		}
 	}
-	if t == "" || v1 == "" || !strings.HasPrefix(secret, "whsec_") {
-		return false
+	if t == "" || v1 == "" {
+		return false, "t_ou_v1_absent", "", v1
+	}
+	if !strings.HasPrefix(secret, "whsec_") {
+		return false, "secret_sans_prefixe_whsec", "", v1
 	}
 	ts, err := strconv.ParseInt(t, 10, 64)
-	if err != nil || time.Now().Unix()-ts > 300 {
-		return false // tolérance 5 minutes
+	if err != nil {
+		return false, "timestamp_illisible", "", v1
+	}
+	if time.Now().Unix()-ts > 300 {
+		return false, "timestamp_trop_vieux", "", v1
 	}
 	// Le "signing secret" Stripe (whsec_...) est TOUJOURS du texte ASCII
 	// brut après le préfixe, jamais du base64 — malgré son apparence qui
@@ -1024,10 +1060,21 @@ func validStripeSignature(body []byte, header, secret string) bool {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(t + "."))
 	mac.Write(body)
-	return hmac.Equal([]byte(hex.EncodeToString(mac.Sum(nil))), []byte(v1))
+	computed := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(computed), []byte(v1)) {
+		return false, "hmac_mismatch", computed, v1
+	}
+	return true, "", computed, v1
 }
 
 // paydunyaCallback — PayDunya notifie avec le token de la facture.
+// Structure corrigée le 2026-08-26 d'après la doc officielle (IPN) : status
+// est un champ de premier niveau sous "data" (data.status), PAS imbriqué
+// sous data.invoice.status comme le code le lisait avant — ce champ
+// n'existant jamais dans la vraie réponse PayDunya, la comparaison
+// échouait TOUJOURS et envoyait chaque paiement réussi vers markFailed
+// au lieu de confirmPayment (bug distinct de celui sur l'URL de création
+// de facture, les deux masquaient le problème l'un derrière l'autre).
 func (s *server) paydunyaCallback(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -1036,9 +1083,9 @@ func (s *server) paydunyaCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	var doc struct {
 		Data struct {
+			Status  string `json:"status"`
 			Invoice struct {
-				Token  string `json:"token"`
-				Status string `json:"status"`
+				Token string `json:"token"`
 			} `json:"invoice"`
 		} `json:"data"`
 	}
@@ -1052,7 +1099,7 @@ func (s *server) paydunyaCallback(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 404, "unknown_token", "facture PayDunya inconnue: "+token)
 		return
 	}
-	if strings.EqualFold(doc.Data.Invoice.Status, "completed") {
+	if strings.EqualFold(doc.Data.Status, "completed") {
 		s.confirmPayment(w, r, orderID, "paydunya", token)
 	} else {
 		s.markFailed(w, r, orderID, "paydunya")

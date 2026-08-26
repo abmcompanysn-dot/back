@@ -38,6 +38,7 @@ const TABS: ServiceTab[] = [
       { key: 'paydunya_api_key_private', label: 'Clé privée PayDunya', secret: true },
       { key: 'paydunya_api_key_public', label: 'Clé publique PayDunya', secret: true },
       { key: 'paydunya_master_key', label: 'Clé maître PayDunya', secret: true },
+      { key: 'paydunya_token', label: 'Token PayDunya', secret: true, hint: 'Dashboard PayDunya → Intégrez notre API → Token (obligatoire, distinct des 3 clés ci-dessus)' },
       { key: 'paydunya_api_base', label: 'URL de base API PayDunya' },
       { key: 'paydunya_enabled', label: 'PayDunya activé', hint: '"false" pour désactiver PayDunya côté site sans effacer la clé — toute autre valeur (ou vide) = activé' },
       { key: 'storefront_url', label: 'URL du site public', hint: 'Utilisée pour les liens de retour après paiement' },
