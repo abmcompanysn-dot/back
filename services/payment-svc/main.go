@@ -1037,42 +1037,77 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 // paydunyaCallback — PayDunya notifie avec le token de la facture.
-// Structure corrigée le 2026-08-26 d'après la doc officielle (IPN) : status
-// est un champ de premier niveau sous "data" (data.status), PAS imbriqué
-// sous data.invoice.status comme le code le lisait avant — ce champ
-// n'existant jamais dans la vraie réponse PayDunya, la comparaison
-// échouait TOUJOURS et envoyait chaque paiement réussi vers markFailed
-// au lieu de confirmPayment (bug distinct de celui sur l'URL de création
-// de facture, les deux masquaient le problème l'un derrière l'autre).
+// Structure corrigée le 2026-08-26 d'après la doc officielle (IPN), deux
+// bugs distincts :
+//  1. status est un champ de premier niveau sous "data" (data.status), PAS
+//     imbriqué sous data.invoice.status comme le code le lisait avant.
+//  2. Le PLUS GRAVE : la doc précise explicitement que PayDunya poste sur
+//     le callback en application/x-www-form-urlencoded (clés imbriquées
+//     data[status], data[invoice][token]...), PAS en JSON — alors que
+//     tout le reste de cette API PayDunya (création de facture, etc.) est
+//     du JSON. json.Unmarshal sur un body form-urlencoded échoue toujours
+//     en erreur de parsing JSON → 400 invalid_callback, silencieux car
+//     kit.Fail ne loggue jamais rien : aucune trace visible côté serveur,
+//     alors que le webhook était bien reçu (log "req POST .../paydunya"
+//     présent) — ce qui explique la commande jamais confirmée malgré un
+//     paiement PayDunya réussi et un callback livré avec succès (HTTP 200
+//     implicite de kit.Fail... même ça c'est un problème, voir plus bas).
+//     Body lu comme form-urlencoded en priorité (le vrai format PayDunya),
+//     JSON en repli pour ne pas casser un éventuel test manuel.
 func (s *server) paydunyaCallback(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		kit.Fail(w, 400, "body_unreadable", err.Error())
 		return
 	}
-	var doc struct {
-		Data struct {
-			Status  string `json:"status"`
-			Invoice struct {
-				Token string `json:"token"`
-			} `json:"invoice"`
-		} `json:"data"`
+
+	status, token := parsePayDunyaCallbackForm(body)
+	if token == "" {
+		// Repli JSON (jamais confirmé comme format réel par PayDunya, mais
+		// coûte rien à essayer avant d'abandonner).
+		var doc struct {
+			Data struct {
+				Status  string `json:"status"`
+				Invoice struct {
+					Token string `json:"token"`
+				} `json:"invoice"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &doc) == nil {
+			status, token = doc.Data.Status, doc.Data.Invoice.Token
+		}
 	}
-	if err := json.Unmarshal(body, &doc); err != nil {
-		kit.Fail(w, 400, "invalid_callback", err.Error())
+	if token == "" {
+		slog.Error("paydunyaCallback: token introuvable dans le body (ni form-urlencoded ni JSON)", "body_prefix", string(body[:min(200, len(body))]))
+		kit.Fail(w, 400, "invalid_callback", "token introuvable dans le body")
 		return
 	}
-	token := doc.Data.Invoice.Token
+
 	var orderID int64
 	if err := s.db.QueryRow(r.Context(), "SELECT order_id FROM payments WHERE provider_ref=$1", token).Scan(&orderID); err != nil {
+		slog.Error("paydunyaCallback: token inconnu", "token", token, "status", status)
 		kit.Fail(w, 404, "unknown_token", "facture PayDunya inconnue: "+token)
 		return
 	}
-	if strings.EqualFold(doc.Data.Status, "completed") {
+	slog.Info("paydunyaCallback reçu", "order_id", orderID, "token", token, "status", status)
+	if strings.EqualFold(status, "completed") {
 		s.confirmPayment(w, r, orderID, "paydunya", token)
 	} else {
 		s.markFailed(w, r, orderID, "paydunya")
 	}
+}
+
+// parsePayDunyaCallbackForm — extrait data[status] et data[invoice][token]
+// d'un body application/x-www-form-urlencoded (le vrai format du callback
+// PayDunya, confirmé par leur doc). url.ParseQuery gère nativement les
+// clés avec crochets comme des chaînes littérales (pas de nesting réel en
+// query string), donc on cherche directement ces clés exactes.
+func parsePayDunyaCallbackForm(body []byte) (status, token string) {
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return "", ""
+	}
+	return values.Get("data[status]"), values.Get("data[invoice][token]")
 }
 
 /* ---------- Mutations ---------- */
