@@ -62,19 +62,47 @@ async function fetchAllProductIds(opts: {
 }
 
 /**
- * Mélange déterministe (Fisher-Yates + PRNG mulberry32 dérivé de la graine
- * texte) : la même graine reproduit toujours le même ordre.
+ * declusterByVendor — sépare les produits d'une même boutique pour qu'au
+ * plus MAX_CONSECUTIVE (2) se suivent d'affilée. Durci le 2026-08-26 :
+ * la version précédente ne comparait qu'à l'élément immédiatement
+ * précédent (i-1), donc un swap mal placé pouvait laisser passer un motif
+ * A A B A A (jamais deux identiques strictement collés, mais le même
+ * vendeur revient sans cesse) — pas ce que "aucun vendeur ne peut avoir
+ * plus de 1-2 produits côte à côte" demande. Compare maintenant contre les
+ * MAX_CONSECUTIVE derniers éléments déjà placés dans `out`, pas contre
+ * `arr` d'origine (sinon un swap qui vient d'être fait n'est jamais revu).
+ * `optionalHead` (ajouté pour InfiniteProductFeed.tsx) permet de tenir
+ * compte des derniers produits de la page PRÉCÉDENTE déjà affichés — sans
+ * ça, le motif recommençait à chaque frontière de page puisque chaque
+ * lot de 20 était décluster indépendamment (le cache CDN de cette route
+ * empêche de connaître l'état d'une autre page côté serveur, donc ce
+ * contexte doit être fourni par l'appelant).
  */
-function declusterByVendor<T>(arr: T[]): T[] {
+const MAX_CONSECUTIVE = 2;
+function declusterByVendor<T>(arr: T[], optionalHead: T[] = []): T[] {
   const out = [...arr];
   const vendorId = (p: T) => (p as any)?.vendor?.id as string | null | undefined;
-  for (let i = 1; i < out.length; i++) {
-    const prevVendor = vendorId(out[i - 1]);
-    if (!prevVendor || vendorId(out[i]) !== prevVendor) continue;
-    const swapIdx = out.findIndex((p, idx) => idx > i && vendorId(p) !== prevVendor);
-    if (swapIdx !== -1) {
-      [out[i], out[swapIdx]] = [out[swapIdx], out[i]];
+  const history = [...optionalHead];
+  for (let i = 0; i < out.length; i++) {
+    const v = vendorId(out[i]);
+    if (v) {
+      const recentSameVendor = history.slice(-MAX_CONSECUTIVE).filter((p) => vendorId(p) === v).length;
+      if (recentSameVendor >= MAX_CONSECUTIVE) {
+        const swapIdx = out.findIndex((p, idx) => {
+          if (idx <= i) return false;
+          const pv = vendorId(p);
+          if (pv === v) return false;
+          // Le candidat lui-même ne doit pas créer une nouvelle série trop
+          // longue une fois déplacé ici — vérifié contre le même historique.
+          const candidateRecent = history.slice(-MAX_CONSECUTIVE).filter((p2) => vendorId(p2) === pv).length;
+          return candidateRecent < MAX_CONSECUTIVE;
+        });
+        if (swapIdx !== -1) {
+          [out[i], out[swapIdx]] = [out[swapIdx], out[i]];
+        }
+      }
     }
+    history.push(out[i]);
   }
   return out;
 }

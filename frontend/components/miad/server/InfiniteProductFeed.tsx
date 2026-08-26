@@ -7,6 +7,45 @@ import { LinkProductCard } from '../LinkProductCard'
 
 const PER_PAGE = 20
 
+// declusterNewBatch — sépare les produits d'une même boutique pour qu'au
+// plus MAX_CONSECUTIVE (2) se suivent d'affilée, EN TENANT COMPTE de la
+// fin du lot déjà affiché (prevTail). Nécessaire côté client en plus du
+// décluster déjà fait par /api/products : ce dernier ne connaît jamais la
+// fin du lot précédent (chaque appel de page est mis en cache CDN
+// indépendamment, stale-while-revalidate 1 an) — sans ce passage
+// supplémentaire, le motif "vendeur répété" pouvait réapparaître à
+// chaque frontière de page de 20 malgré le décluster serveur par page
+// (2026-08-26). Les swaps ne portent QUE sur `newBatch` (jamais sur
+// prevTail/les produits déjà affichés) : réordonner des cartes déjà
+// visibles à l'écran pendant que l'utilisateur scrolle créerait un saut
+// visuel disruptif — seul le contenu pas encore rendu peut bouger.
+const MAX_CONSECUTIVE = 2
+function declusterNewBatch(prevTail: WooProduct[], newBatch: WooProduct[]): WooProduct[] {
+  const out = [...newBatch]
+  const vendorId = (p: WooProduct) => p.vendor?.id
+  const history = [...prevTail]
+  for (let i = 0; i < out.length; i++) {
+    const v = vendorId(out[i])
+    if (v) {
+      const recentSameVendor = history.slice(-MAX_CONSECUTIVE).filter((p) => vendorId(p) === v).length
+      if (recentSameVendor >= MAX_CONSECUTIVE) {
+        const swapIdx = out.findIndex((p, idx) => {
+          if (idx <= i) return false
+          const pv = vendorId(p)
+          if (!pv || pv === v) return false
+          const candidateRecent = history.slice(-MAX_CONSECUTIVE).filter((p2) => vendorId(p2) === pv).length
+          return candidateRecent < MAX_CONSECUTIVE
+        })
+        if (swapIdx !== -1) {
+          ;[out[i], out[swapIdx]] = [out[swapIdx], out[i]]
+        }
+      }
+    }
+    history.push(out[i])
+  }
+  return out
+}
+
 // Cache module par clé (survit au démontage/remontage du composant tant que
 // la page n'est pas rechargée) — MiadMarketClient.tsx démonte entièrement
 // l'accueil quand on ouvre une fiche produit (switch sur currentView), donc
@@ -66,7 +105,7 @@ export function InfiniteProductFeed({ cacheKey = 'home', title, language = 'fr' 
       const res = await fetch(`/api/products?page=${nextPage}&per_page=${PER_PAGE}&lang=${language}`)
       const data = await res.json()
       const newProducts: WooProduct[] = data.products || []
-      setProducts((prev) => [...prev, ...newProducts])
+      setProducts((prev) => [...prev, ...declusterNewBatch(prev.slice(-MAX_CONSECUTIVE), newProducts)])
       setPage(nextPage)
       // Ne pas se fier à data.pages : le cache Cloudflare de /api/products a
       // été observé servir un total/pages erroné (sous-compté) pour certaines
