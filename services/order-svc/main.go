@@ -231,6 +231,7 @@ func main() {
 		mux.HandleFunc("GET /orders/{id}", s.getOrder)
 		mux.HandleFunc("GET /orders/parent/{parent_id}", s.getParentOrder)
 		mux.HandleFunc("POST /orders/{id}/confirm", s.confirmPayment)
+		mux.HandleFunc("POST /orders/parent/{parent_id}/confirm", s.confirmParentPayment)
 		mux.HandleFunc("PUT /orders/{id}/status", s.updateOrderStatus)
 		mux.HandleFunc("PUT /orders/parent/{parent_id}/shipping-address", s.updateShippingAddress)
 		mux.HandleFunc("GET /order-events/{id}", s.listOrderEvents)
@@ -762,6 +763,50 @@ func (s *server) confirmPayment(w http.ResponseWriter, r *http.Request) {
 		"order_id": id, "status": "paid", "at": time.Now().UTC().Format(time.RFC3339),
 	})
 	kit.JSON(w, 200, map[string]any{"id": id, "status": "paid"})
+}
+
+// confirmParentPayment — confirme TOUTES les sous-commandes d'une commande
+// groupée en une seule transaction. Ajouté le 2026-08-26 : le paiement
+// (Stripe/PayDunya) se fait maintenant en UNE fois pour le montant total
+// de la commande groupée (voir payment-svc), plus une facture par vendeur
+// — confirmPayment (id de sous-commande) ne suffit donc plus, il fallait
+// une version qui confirme tout le groupe d'un coup. Publie un event
+// order.status_changed PAR sous-commande (pas un seul event groupé) pour
+// que payment-svc.creditVendorWallet continue de fonctionner sans
+// modification — un crédit de wallet par vendeur, montant déjà correct
+// par sous-commande (order.TotalUSD y reste le total DE CETTE sous-
+// commande, jamais changé, seul le paiement lui-même est désormais agrégé
+// au niveau du parent).
+func (s *server) confirmParentPayment(w http.ResponseWriter, r *http.Request) {
+	parentID := atoi(r.PathValue("parent_id"))
+
+	rows, err := s.db.Query(r.Context(), `
+		UPDATE orders SET status = 'paid', payment_status = 'paid', fulfillment_stage = 'pending', updated_at = now()
+		WHERE parent_order_id = $1 AND status = 'pending_payment'
+		RETURNING id`, parentID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	var confirmedIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
+			confirmedIDs = append(confirmedIDs, id)
+		}
+	}
+	rows.Close()
+
+	if len(confirmedIDs) == 0 {
+		kit.Fail(w, 409, "not_pending", "aucune sous-commande en attente de paiement pour ce groupe — état actuel à lire via GET /orders/parent/{id}")
+		return
+	}
+	for _, id := range confirmedIDs {
+		kit.Publish(s.kafka, "order.status_changed", fmt.Sprint(id), map[string]any{
+			"order_id": id, "status": "paid", "at": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"parent_order_id": parentID, "confirmed_order_ids": confirmedIDs, "status": "paid"})
 }
 
 // updateOrderStatus — changement de statut manuel (admin/représentant),

@@ -69,16 +69,12 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   const [isLoadingShipping, setIsLoadingShipping] = useState(false)
   const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null)
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null)
-  // order-received interroge order-svc via /orders/parent/{id} — il faut
-  // donc lui passer l'ID de la commande PARENT (groupée), pas celui d'une
-  // sous-commande vendeur individuelle. createdOrderId (ci-dessus) reste
-  // l'ID de sous-commande utilisé pour initialiser/confirmer LE paiement
-  // Stripe côté payment-svc (un paiement par sous-commande) — les deux
-  // ID sont différents et ne doivent pas être confondus (bug de prod
-  // trouvé le 2026-08-26 : commande #60 confirmée payée en base, mais
-  // /order-received?order_id=60 affichait "paiement non confirmé" car
-  // 60 est une sous-commande, son parent est #59 — orders/parent/60
-  // ne correspond à rien).
+  // Depuis le 2026-08-26, UN SEUL paiement par commande groupée (peu
+  // importe le nombre de boutiques) — createdOrderId ET
+  // parentOrderIdForRedirect valent donc désormais le même id (le parent)
+  // dans tous les cas ; les deux états sont conservés distincts par
+  // prudence (repli de l'un sur l'autre plus bas) plutôt que fusionnés,
+  // au cas où /api/orders échouerait à résoudre l'un des deux.
   const [parentOrderIdForRedirect, setParentOrderIdForRedirect] = useState<number | null>(null)
   const [activeSection, setActiveSection] = useState<number>(0);
   const [authToken, setAuthToken] = useState<string | null>(null)

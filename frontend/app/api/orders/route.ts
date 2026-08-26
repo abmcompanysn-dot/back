@@ -82,40 +82,42 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Réponse de création de commande invalide' }, { status: 502 })
     }
 
-    // Une sous-commande par vendeur, chacune avec son propre paiement
-    // (payment-svc précrée l'enregistrement en consommant order.created —
-    // léger délai possible, d'où le retry court avant d'abandonner).
-    const payments = await Promise.all(
-      vendorOrders.map(async (vo) => {
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const res = await fetch(`${PAYMENT_SVC_URL}/payments/init`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_id: vo.id }),
-          })
-          if (res.ok) return { order_id: vo.id, ...(await res.json()) }
-          if (attempt < 4) await new Promise((r) => setTimeout(r, 400))
-        }
-        return { order_id: vo.id, error: 'Paiement non initialisé' }
+    // UN SEUL paiement pour toute la commande groupée, peu importe le
+    // nombre de boutiques dedans (changé le 2026-08-26 : avant, une
+    // facture Stripe/PayDunya PAR sous-commande vendeur — le client ne
+    // payait jamais que la première, les autres restaient orphelines en
+    // pending_payment indéfiniment ; payment-svc route maintenant lui-même
+    // vers /orders/parent/{id}/confirm à la confirmation pour créditer
+    // chaque vendeur séparément). payments.order_id est désormais indexé
+    // sur parentOrderId, donc l'appel se fait directement avec lui — plus
+    // besoin d'itérer sur vendorOrders ici.
+    let payment: any = null
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await fetch(`${PAYMENT_SVC_URL}/payments/init`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: parentOrderId }),
       })
-    )
+      if (res.ok) {
+        payment = await res.json()
+        break
+      }
+      if (attempt < 4) await new Promise((r) => setTimeout(r, 400))
+    }
 
     return NextResponse.json({
       success: true,
       parentOrderId,
-      orderId: vendorOrders[0]?.id,
-      payments,
-      // Compat immédiate pour le flux mono-vendeur (le cas le plus fréquent) :
-      clientSecret: payments[0]?.client_secret,
-      redirectUrl: payments[0]?.redirect_url,
+      orderId: parentOrderId,
+      payment,
+      clientSecret: payment?.client_secret,
+      redirectUrl: payment?.redirect_url,
       // CheckoutPage.tsx (paiement PayDunya) lit ces deux noms précis, pas
-      // clientSecret/redirectUrl ci-dessus — décalage jamais remarqué avant
-      // car PayDunya était cassé côté backend (payment_svc renvoyait
-      // toujours une erreur avant d'atteindre ce point). paydunyaToken =
-      // provider_ref (le token de facture PayDunya, pas client_secret qui
-      // est un concept Stripe), paydunyaUrl = redirect_url.
-      paydunyaToken: payments[0]?.payment?.provider_ref,
-      paydunyaUrl: payments[0]?.redirect_url,
+      // clientSecret/redirectUrl ci-dessus. paydunyaToken = provider_ref
+      // (le token de facture PayDunya, pas client_secret qui est un
+      // concept Stripe), paydunyaUrl = redirect_url.
+      paydunyaToken: payment?.payment?.provider_ref,
+      paydunyaUrl: payment?.redirect_url,
     })
   } catch (error: any) {
     return NextResponse.json(

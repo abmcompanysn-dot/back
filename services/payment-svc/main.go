@@ -36,6 +36,16 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS payments (
   id           BIGSERIAL PRIMARY KEY,
+  -- order_id stocke le PARENT_ORDER_ID (commande groupée), pas l'id d'une
+  -- sous-commande vendeur — changé le 2026-08-26 : un client ne doit payer
+  -- qu'UNE FOIS pour toute sa commande, peu importe le nombre de boutiques
+  -- dedans (auparavant : une facture Stripe/PayDunya PAR sous-commande,
+  -- jamais vraiment utilisable — le frontend ne payait/attendait de toute
+  -- façon que payments[0], les autres sous-commandes restaient orphelines
+  -- en pending_payment indéfiniment). La répartition par vendeur reste
+  -- intacte : confirmParentPayment (order-svc) boucle sur les sous-
+  -- commandes à la confirmation, et creditVendorWallet (plus bas) est
+  -- toujours appelé une fois par sous-commande avec SON propre montant.
   order_id     BIGINT NOT NULL,
   provider     TEXT NOT NULL CHECK (provider IN ('stripe','paydunya')),
   provider_ref TEXT DEFAULT '',
@@ -199,6 +209,25 @@ func main() {
 	}
 	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
 		log.Error("migration impossible", "err", err)
+		return
+	}
+	// Migration 2026-08-26 : order_id passe de "id sous-commande" à "id
+	// commande groupée" (voir doc-comment de la colonne dans schema) — un
+	// paiement Stripe/PayDunya unique par commande, pas un par vendeur.
+	// Des lignes existantes en prod violent déjà l'unicité voulue (une
+	// ligne payments par sous-commande créée avant ce changement) : on
+	// garde la plus ancienne par order_id (première créée = celle sur
+	// laquelle le client a effectivement payé) et supprime les doublons
+	// avant de poser l'index unique, sinon CREATE UNIQUE INDEX échoue au
+	// démarrage. Idempotent : DROP+CREATE ne fait rien si déjà en place.
+	if _, err := db.Exec(ctx, `
+		DELETE FROM payments a USING payments b
+		WHERE a.order_id = b.order_id AND a.id > b.id`); err != nil {
+		log.Error("nettoyage doublons payments impossible", "err", err)
+		return
+	}
+	if _, err := db.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_order_unique ON payments (order_id)`); err != nil {
+		log.Error("index unique payments impossible", "err", err)
 		return
 	}
 
@@ -752,16 +781,33 @@ func (s *server) consumeOrders(log *slog.Logger) {
 // immédiatement pour Stripe Elements, il ne peut pas attendre que ce
 // consommateur Kafka ait tourné. Les deux chemins convergent sur la
 // même ligne "payments" (idempotent via ON CONFLICT).
+//
+// Un paiement PAR COMMANDE GROUPÉE, pas par sous-commande (2026-08-26) :
+// cet event arrive une fois PAR VENDEUR (order-svc publie order.created
+// pour chaque sous-commande créée) — ON CONFLICT (order_id) DO NOTHING
+// avec order_id=redirectOrderID(ev) (le parent) garantit qu'une seule
+// ligne "payments" existe pour tout le groupe, peu importe combien de
+// sous-commandes/vendeurs il contient ; les events suivants pour les
+// autres vendeurs de la même commande n'ont plus rien à faire ici. Le
+// montant utilisé est le TOTAL agrégé du groupe (via GET /orders/parent),
+// pas ev.TotalUSD qui n'est que le total d'UNE sous-commande.
 func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCreatedEvent) {
 	provider := ev.PaymentMethod
 	if provider == "" {
 		provider = "stripe"
 	}
+	groupOrderID := redirectOrderID(ev)
+	totalUSD := ev.TotalUSD
+	if parent, err := fetchParentOrder(ctx, s.orderURL, groupOrderID); err == nil {
+		totalUSD = parent.TotalUSD
+	} else {
+		log.Warn("total agrégé indisponible, repli sur le total de la sous-commande", "parent_order_id", groupOrderID, "err", err)
+	}
 	var id int64
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO payments (order_id, provider, amount_usd, status)
 		VALUES ($1, $2, $3, 'initiated')
-		ON CONFLICT DO NOTHING RETURNING id`, ev.OrderID, provider, ev.TotalUSD).Scan(&id)
+		ON CONFLICT (order_id) DO NOTHING RETURNING id`, groupOrderID, provider, totalUSD).Scan(&id)
 	if err != nil {
 		log.Warn("paiement déjà initié", "order_id", ev.OrderID)
 		return
@@ -770,19 +816,25 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 		return // Stripe : PaymentIntent créé à la demande via POST /payments/init
 	}
 
-	ref, redirect, err := s.createPayDunyaInvoice(ctx, ev)
+	// groupOrderID/totalUSD (pas ev.OrderID/ev.TotalUSD) : la facture doit
+	// porter sur le total agrégé du groupe, avec le parent en métadonnée
+	// (metadata[order_id] côté PayDunya), pas une sous-commande.
+	groupEv := ev
+	groupEv.OrderID = groupOrderID
+	groupEv.TotalUSD = totalUSD
+	ref, redirect, err := s.createPayDunyaInvoice(ctx, groupEv)
 	if err != nil {
 		// EXPLICITE : le paiement est marqué failed, l'événement part sur Kafka.
 		_, _ = s.db.Exec(ctx, "UPDATE payments SET status='failed' WHERE id=$1", id)
-		kit.Publish(s.producer, "payment.failed", fmt.Sprint(ev.OrderID), map[string]any{
-			"order_id": ev.OrderID, "provider": provider, "reason": err.Error(),
+		kit.Publish(s.producer, "payment.failed", fmt.Sprint(groupOrderID), map[string]any{
+			"order_id": groupOrderID, "provider": provider, "reason": err.Error(),
 			"at": time.Now().UTC().Format(time.RFC3339),
 		})
-		log.Error("création de facture PayDunya impossible", "order_id", ev.OrderID, "err", err)
+		log.Error("création de facture PayDunya impossible", "order_id", groupOrderID, "err", err)
 		return
 	}
 	_, _ = s.db.Exec(ctx, "UPDATE payments SET provider_ref=$2, redirect_url=$3 WHERE id=$1", id, ref, redirect)
-	log.Info("facture PayDunya créée", "payment_id", id, "order_id", ev.OrderID, "ref", ref)
+	log.Info("facture PayDunya créée", "payment_id", id, "order_id", groupOrderID, "ref", ref)
 }
 
 /* ---------- Fournisseurs réels ---------- */
@@ -1135,6 +1187,13 @@ func parsePayDunyaCallbackForm(body []byte) (status, token string) {
 
 /* ---------- Mutations ---------- */
 
+// confirmPayment — orderID ici est désormais le PARENT_ORDER_ID (voir
+// doc-comment du schema payments) : un seul paiement pour tout le groupe.
+// Confirme via POST /orders/parent/{id}/confirm (order-svc), qui bascule
+// TOUTES les sous-commandes du groupe en 'paid' d'un coup et renvoie leurs
+// ids — nécessaire pour créditer chaque vendeur séparément juste après
+// (creditVendorWallet reste par sous-commande : montant/commission propres
+// à chaque vendeur, inchangé depuis avant ce refactor).
 func (s *server) confirmPayment(w http.ResponseWriter, r *http.Request, orderID int64, provider, ref string) {
 	res, err := s.db.Exec(r.Context(), `
 		UPDATE payments SET status='confirmed', provider_ref=CASE WHEN provider_ref='' THEN $2 ELSE provider_ref END,
@@ -1153,19 +1212,28 @@ func (s *server) confirmPayment(w http.ResponseWriter, r *http.Request, orderID 
 	kit.Publish(s.producer, "payment.confirmed", fmt.Sprint(orderID), map[string]any{
 		"order_id": orderID, "provider": provider, "at": time.Now().UTC().Format(time.RFC3339),
 	})
-	if resp, err := http.Post(fmt.Sprintf("%s/orders/%d/confirm", s.orderURL, orderID), "application/json", nil); err == nil {
+	confirmedSubOrderIDs := []int64{}
+	if resp, err := http.Post(fmt.Sprintf("%s/orders/parent/%d/confirm", s.orderURL, orderID), "application/json", nil); err == nil {
+		var out struct {
+			ConfirmedOrderIDs []int64 `json:"confirmed_order_ids"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
 		resp.Body.Close()
+		confirmedSubOrderIDs = out.ConfirmedOrderIDs
 	} else {
 		slog.Error("order-svc injoignable — payment.confirmed reste sur Kafka", "err", err)
 	}
-	s.creditVendorWallet(r.Context(), orderID)
+	for _, subID := range confirmedSubOrderIDs {
+		s.creditVendorWallet(r.Context(), subID)
+	}
 	kit.JSON(w, 200, map[string]string{"received": "true"})
 }
 
 // creditVendorWallet — crédite le wallet du vendeur du montant net (après
-// commission plateforme) une fois le paiement confirmé. order_id ici est
-// déjà celui d'UNE sous-commande (1 vendeur par order_id, voir le modèle
-// parent/sous-commandes d'order-svc) — pas besoin de désagréger davantage.
+// commission plateforme) une fois le paiement confirmé. orderID ici est
+// l'id d'UNE sous-commande (1 vendeur par order_id, voir le modèle
+// parent/sous-commandes d'order-svc) — appelé une fois par sous-commande
+// confirmée par confirmPayment ci-dessus, jamais avec le parent_order_id.
 // Jamais bloquant pour la confirmation de paiement elle-même : une erreur
 // ici est journalisée, pas remontée au client/webhook (le paiement reste
 // confirmé même si le crédit wallet échoue, à réconcilier manuellement).
@@ -1246,6 +1314,37 @@ func fetchOrder(ctx context.Context, orderURL string, orderID int64) (*orderSumm
 		return nil, err
 	}
 	return &out, nil
+}
+
+// fetchParentOrder — total agrégé (toutes sous-commandes/vendeurs) d'une
+// commande groupée, via GET /orders/parent/{id} (order-svc, getParentOrder).
+// "total" y est une STRING formatée (strconv.FormatFloat), pas un float64
+// natif comme sur GET /orders/{id} — deux endpoints, deux formats,
+// vérifiés séparément plutôt que de supposer qu'ils partagent orderSummary.
+func fetchParentOrder(ctx context.Context, orderURL string, parentID int64) (*orderSummary, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/orders/parent/%d", orderURL, parentID), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("order-svc a répondu %d", resp.StatusCode)
+	}
+	var out struct {
+		Total string `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	total, err := strconv.ParseFloat(out.Total, 64)
+	if err != nil {
+		return nil, fmt.Errorf("total agrégé illisible: %q", out.Total)
+	}
+	return &orderSummary{TotalUSD: total}, nil
 }
 
 func fetchVendorCommissionRate(ctx context.Context, vendorURL string, vendorID int64) (*float64, error) {
@@ -1348,12 +1447,13 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		if reference == "" {
 			reference = fmt.Sprintf("MIAD-%d", body.OrderID)
 		}
-		var parentOrderID int64
-		if order, err := fetchOrder(ctx, s.orderURL, body.OrderID); err == nil {
-			parentOrderID = order.ParentOrderID
-		}
+		// body.OrderID EST le parent_order_id ici (payments.order_id stocke
+		// le parent depuis le 2026-08-26, voir doc-comment du schema) — pas
+		// besoin de le résoudre via fetchOrder, il sert directement de
+		// ParentOrderID pour que createPayDunyaInvoice construise la bonne
+		// return_url (order-received?order_id=<parent>).
 		pdRef, pdRedirect, err := s.createPayDunyaInvoice(ctx, orderCreatedEvent{
-			OrderID: body.OrderID, ParentOrderID: parentOrderID, Reference: reference, TotalUSD: amount,
+			OrderID: body.OrderID, ParentOrderID: body.OrderID, Reference: reference, TotalUSD: amount,
 		})
 		if err != nil {
 			kit.Fail(w, 502, "paydunya_error", fmt.Sprintf("création de la facture PayDunya impossible: %v", err))
