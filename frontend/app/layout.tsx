@@ -7,6 +7,7 @@ import PushManager from '@/components/miad/PushManager'
 import MagicLinkHandler from '@/components/miad/MagicLinkHandler'
 import { MotionConfigProvider } from '@/components/miad/MotionConfigProvider'
 import { CurrencyProvider } from '@/contexts/CurrencyContext'
+import { WishlistProvider } from '@/contexts/WishlistContext'
 import './globals.css'
 
 const inter = Inter({
@@ -107,15 +108,17 @@ export default function RootLayout({
       <body className={`${inter.variable} font-sans antialiased`}>
         <MotionConfigProvider>
           <CurrencyProvider>
-            <BackNavigationGuard />
-            <MagicLinkHandler />
-            <PushManager />
-            {children}
-            {/* InstallPrompt retiré (pas supprimé) le 2026-08-07 pour la stabilité
-                du site : blocage Google Play Protect + échecs d'installation sur
-                Samsung Internet malgré le correctif du manifest (voir InstallPrompt.tsx
-                et public/manifest.json) — à réactiver une fois ces soucis résolus. */}
-            <Toaster richColors position="top-center" />
+            <WishlistProvider>
+              <BackNavigationGuard />
+              <MagicLinkHandler />
+              <PushManager />
+              {children}
+              {/* InstallPrompt retiré (pas supprimé) le 2026-08-07 pour la stabilité
+                  du site : blocage Google Play Protect + échecs d'installation sur
+                  Samsung Internet malgré le correctif du manifest (voir InstallPrompt.tsx
+                  et public/manifest.json) — à réactiver une fois ces soucis résolus. */}
+              <Toaster richColors position="top-center" />
+            </WishlistProvider>
           </CurrencyProvider>
         </MotionConfigProvider>
       </body>

@@ -17,6 +17,7 @@ import Image from 'next/image'
 import { type WooProduct, type WooProductVariation, type WooVendor, translations } from '@/lib/woocommerce'
 import { recordRecentlyViewed } from '@/lib/recently-viewed'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useWishlist } from '@/contexts/WishlistContext'
 import { ProductVariations } from './ProductVariations'
 import { ShippingInfo } from './ShippingInfo'
 import { ProductShippingEstimate } from './ProductShippingEstimate'; // Import the new component
@@ -354,6 +355,7 @@ function VendorCard({ vendor, onClick, newVendorLabel = 'Nouveau vendeur' }: { v
 
 export function ProductDetail({ product, onBack, onProductClick, allProducts, onStoreClick, onAddToCart, onBuyNow, onCartClick, user, userCountry, cartCount, shippingRates }: ProductDetailProps) {
   const { formatPrice: fp } = useCurrency()
+  const { isFavorite, toggle: toggleWishlist } = useWishlist()
   const [quantity, setQuantity] = useState(1)
   // État pour la variante active sélectionnée via le composant enfant
   const [shippingCost, setShippingCost] = useState<number>(10); // Valeur par défaut numérique au lieu de null
@@ -682,7 +684,17 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
                   </p>
                 )}
               </div>
-              <ShareProductButton product={product} />
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  aria-label={isFavorite(product.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                  onClick={() => toggleWishlist(product.id)}
+                  className="w-10 h-10 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors"
+                >
+                  <Heart size={18} className={isFavorite(product.id) ? 'fill-red-500 text-red-500' : 'text-muted-foreground'} />
+                </button>
+                <ShareProductButton product={product} />
+              </div>
             </div>
 
             {/* Bloc Renseignements de la Boutique (Style Premium) */}

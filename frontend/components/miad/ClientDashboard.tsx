@@ -223,9 +223,9 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
   // On vérifie que le token est une vraie valeur, pas juste la chaîne "null"
   const hasValidToken = token && token !== 'null' && token !== 'undefined';
 
-  const { data: profileData, error: profileError, isLoading: isProfileLoading } = useSWR(
-    hasValidToken ? '/api/customer' : null, 
-    fetcher, 
+  const { data: profileData, error: profileError, isLoading: isProfileLoading, mutate: mutateProfile } = useSWR(
+    hasValidToken ? '/api/customer' : null,
+    fetcher,
     {
       revalidateOnFocus: false,
       dedupingInterval: 60000,
@@ -235,7 +235,7 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
 
   // Récupération des commandes réelles
   const { data: ordersData, error: ordersError } = useSWR(
-    hasValidToken ? '/api/orders' : null, 
+    hasValidToken ? '/api/orders' : null,
     fetcher
   )
 
@@ -263,6 +263,16 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
   const [recentlyViewed, setRecentlyViewed] = useState<WooProduct[]>([])
   const [recommended, setRecommended] = useState<WooProduct[]>([])
   const [activityLoading, setActivityLoading] = useState(true)
+
+  // Wishlist — même clé SWR que WishlistContext (le bouton cœur des
+  // cartes produit), donc pas de second fetch réseau si déjà en cache.
+  // Ne charge qu'à l'ouverture de l'onglet, pas au montage du dashboard.
+  const { data: wishlistData, isLoading: wishlistLoading } = useSWR(
+    hasValidToken && activeSection === 'wishlist' ? '/api/wishlist' : null,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30000 }
+  )
+  const wishlistProducts: WooProduct[] = wishlistData?.products || []
 
   // Chargée à la demande (pas au montage) : localStorage + appels /api/products,
   // inutile de payer ce coût tant que l'utilisateur ne visite pas cet onglet.
@@ -324,6 +334,11 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
       if (res.ok) {
         toast.success('Adresse mise à jour avec succès');
         setIsEditingAddress(null);
+        // Sans ça, le GET /api/customer déjà en cache (revalidateOnFocus
+        // désactivé) continuait d'afficher l'ancienne adresse jusqu'au
+        // prochain rechargement complet de la page (corrigé le 2026-08-26,
+        // en même temps que le mapping billing/shipping côté GET).
+        mutateProfile();
       } else {
         const err = await res.json().catch(() => ({}));
         toast.error(err.error || 'Impossible de sauvegarder l\'adresse.');
@@ -847,22 +862,41 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
               </div>
             )}
 
-            {/* WISHLIST */}
+            {/* WISHLIST — construit le 2026-08-26 (jusqu'ici section
+                purement décorative, jamais de vrai fetch). WishlistContext
+                gère déjà le cache SWR de '/api/wishlist' pour le bouton
+                cœur des cartes produit ; on relit la même clé ici plutôt
+                que de refaire un second fetch redondant. */}
             {activeSection === 'wishlist' && !isProfileLoading && (
               <div className="bg-card rounded-xl border border-border overflow-hidden">
                 <div className="p-6 border-b border-border">
                   <h2 className="font-bold text-foreground text-lg">Ma liste de souhaits</h2>
                 </div>
-                <div className="py-20 flex flex-col items-center text-center px-4">
-                  <Heart size={56} className="text-muted-foreground/20 mb-4" />
-                  <p className="font-semibold text-foreground mb-2">Aucun produit sauvegardé</p>
-                  <p className="text-sm text-muted-foreground mb-6 max-w-xs">
-                    Cliquez sur le cœur d'un produit pour le sauvegarder ici
-                  </p>
-                  <Button onClick={onBack} className="bg-accent text-accent-foreground hover:bg-accent/90">
-                    Explorer les produits
-                  </Button>
-                </div>
+                {wishlistLoading ? (
+                  <div className="py-20 text-center text-sm text-muted-foreground">Chargement…</div>
+                ) : wishlistProducts.length > 0 ? (
+                  <div className="p-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {wishlistProducts.map((p) => (
+                      <ProductCard
+                        key={p.id}
+                        product={p}
+                        onClick={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
+                        onAddToCart={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-20 flex flex-col items-center text-center px-4">
+                    <Heart size={56} className="text-muted-foreground/20 mb-4" />
+                    <p className="font-semibold text-foreground mb-2">Aucun produit sauvegardé</p>
+                    <p className="text-sm text-muted-foreground mb-6 max-w-xs">
+                      Cliquez sur le cœur d'un produit pour le sauvegarder ici
+                    </p>
+                    <Button onClick={onBack} className="bg-accent text-accent-foreground hover:bg-accent/90">
+                      Explorer les produits
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1139,11 +1173,12 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
             {/* ADDRESSES */}
             {activeSection === 'addresses' && !isProfileLoading && (
               <div className="bg-card rounded-xl border border-border overflow-hidden">
-                <div className="p-6 border-b border-border flex items-center justify-between">
+                <div className="p-6 border-b border-border">
                   <h2 className="font-bold text-foreground text-lg">Mes adresses</h2>
-                  <Button size="sm" className="bg-accent text-accent-foreground hover:bg-accent/90">
-                    + Ajouter une adresse
-                  </Button>
+                  {/* Bouton "+ Ajouter une adresse" retiré (2026-08-26) — sans
+                      onClick, il ne faisait rien. Seuls billing/shipping
+                      existent comme emplacements (pas une liste extensible),
+                      chacun a déjà son propre bouton Ajouter/Modifier ci-dessous. */}
                 </div>
                 <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Adresse de Facturation */}

@@ -2,11 +2,12 @@
 
 import { useState } from 'react'
 import { mutate } from 'swr'
-import { Star, ShoppingCart, Truck, ShoppingBag } from 'lucide-react'
+import { Star, ShoppingCart, Truck, ShoppingBag, Heart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { type WooProduct } from '@/lib/woocommerce'
 import { getAnchorPrice } from '@/lib/coins'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useWishlist } from '@/contexts/WishlistContext'
 import { isLocalDelivery } from '@/lib/shipping-utils'
 import { LazyImage } from './LazyImage'
 
@@ -32,6 +33,8 @@ interface ProductCardProps {
 
 export function ProductCard({ product, onClick, onAddToCart, hideVendorInfo, userCountry = '' }: ProductCardProps) {
   const { formatPrice: fp } = useCurrency()
+  const { isFavorite, toggle: toggleWishlist } = useWishlist()
+  const favorite = isFavorite(product.id)
   const local = isLocalDelivery(product.countryCode || '', userCountry)
   const [imgErrored, setImgErrored] = useState(false)
   const [imgLoaded, setImgLoaded] = useState(() => !!product.image && loadedImagesCache.has(product.image))
@@ -67,6 +70,14 @@ export function ProductCard({ product, onClick, onAddToCart, hideVendorInfo, use
             {product.countryCode}
           </div>
         )}
+        <button
+          type="button"
+          aria-label={favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+          onClick={(e) => { e.stopPropagation(); toggleWishlist(product.id) }}
+          className="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-white/90 backdrop-blur-sm shadow-sm border border-border/50 flex items-center justify-center hover:scale-110 transition-transform"
+        >
+          <Heart size={13} className={favorite ? 'fill-red-500 text-red-500' : 'text-muted-foreground'} />
+        </button>
         {local && (
           <div className="absolute bottom-1.5 left-1.5 flex items-center gap-0.5 bg-emerald-500 text-white px-1.5 py-0.5 rounded text-[9px] font-black shadow">
             <Truck size={9} /><span>3$ local</span>

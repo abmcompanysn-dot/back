@@ -79,30 +79,38 @@ export async function GET(request: Request) {
       totalOrders: ordersArray.length,
     };
 
-    const formatCustomer = (c: any) => ({
-      id: c.id,
-      firstName: (c.full_name || '').split(' ')[0] || '',
-      lastName: (c.full_name || '').split(' ').slice(1).join(' ') || '',
-      name: c.full_name || c.email || 'Membre MIAD',
-      email: c.email,
-      role: isAdmin(user) ? 'administrator' : 'customer',
-      username: c.email,
-      ordersCount: orderStats.totalOrders,
-      totalSpent: '0', // order-svc n'expose pas encore de total dépensé agrégé côté customer
-      isPayingCustomer: orderStats.totalOrders > 0,
-      avatar: `https://www.gravatar.com/avatar/${Buffer.from((c.email || '').toLowerCase()).toString('hex')}?s=96&d=mm`,
-      dateCreated: c.created_at,
-      // auth-svc stocke `addresses` comme une LISTE d'adresses (JSONB array),
-      // pas des objets billing/shipping distincts comme sous WooCommerce —
-      // pas de mapping fiable vers billing/shipping ici (voir PATCH plus bas,
-      // qui n'a de toute façon aucun endpoint backend pour écrire dessus).
-      billing: {},
-      shipping: {},
-      addresses: c.addresses || [],
-      phone: c.phone || '',
-      orderStats,
-      recentOrders: ordersArray.slice(0, 5),
-    });
+    const formatCustomer = (c: any) => {
+      // auth-svc stocke `addresses` comme une LISTE d'adresses (JSONB
+      // array, une entrée par type billing/shipping — voir
+      // updateCustomerAddress dans auth-svc), pas des objets billing/
+      // shipping distincts comme sous WooCommerce. Corrigé le 2026-08-26 :
+      // ce GET renvoyait TOUJOURS billing/shipping vides même après un
+      // PATCH réussi (qui écrit correctement dans addresses), donc l'UI
+      // du dashboard client affichait "aucune adresse" indéfiniment.
+      const addressList: any[] = Array.isArray(c.addresses) ? c.addresses : [];
+      const billing = addressList.find((a) => a?.type === 'billing') || {};
+      const shipping = addressList.find((a) => a?.type === 'shipping') || {};
+      return {
+        id: c.id,
+        firstName: (c.full_name || '').split(' ')[0] || '',
+        lastName: (c.full_name || '').split(' ').slice(1).join(' ') || '',
+        name: c.full_name || c.email || 'Membre MIAD',
+        email: c.email,
+        role: isAdmin(user) ? 'administrator' : 'customer',
+        username: c.email,
+        ordersCount: orderStats.totalOrders,
+        totalSpent: '0', // order-svc n'expose pas encore de total dépensé agrégé côté customer
+        isPayingCustomer: orderStats.totalOrders > 0,
+        avatar: `https://www.gravatar.com/avatar/${Buffer.from((c.email || '').toLowerCase()).toString('hex')}?s=96&d=mm`,
+        dateCreated: c.created_at,
+        billing,
+        shipping,
+        addresses: addressList,
+        phone: c.phone || '',
+        orderStats,
+        recentOrders: ordersArray.slice(0, 5),
+      };
+    };
 
     return NextResponse.json({ success: true, data: formatCustomer(c) });
 
