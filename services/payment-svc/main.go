@@ -889,8 +889,21 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 		"custom_data": map[string]any{"order_id": ev.OrderID},
 	}
 	body, _ := json.Marshal(payload)
+	// PayDunya a DEUX endpoints distincts pour test et production
+	// (sandbox-api/v1/... vs api/v1/...), pas un seul endpoint qui déduit
+	// le mode depuis les clés — appeler api/v1/ (prod) avec des clés
+	// test_... échoue avec "LIVE Private Key and Token combination is
+	// invalid" même si tout le reste (payload, headers) est correct.
+	// Confirmé en prod le 2026-08-26 après avoir déjà corrigé l'URL une
+	// première fois vers la bonne route /checkout-invoice/create, mais
+	// sans distinguer test/prod — mode déduit ici du préfixe test_ sur la
+	// clé privée, même logique que stripeMode().
+	apiPrefix := "/api/v1"
+	if strings.HasPrefix(priv, "test_") {
+		apiPrefix = "/sandbox-api/v1"
+	}
 	base := s.paydunyaAPIBase
-	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/checkout-invoice/create", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, base+apiPrefix+"/checkout-invoice/create", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("PAYDUNYA-MASTER-KEY", master)
 	req.Header.Set("PAYDUNYA-PRIVATE-KEY", priv)
