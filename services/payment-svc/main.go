@@ -155,12 +155,22 @@ type server struct {
 	platformCommissionRate string
 	stripeSecretKey        string
 	stripeWebhookSecret    string
+	stripeEnabledStr       string
 	paydunyaAPIKeyPrivate  string
 	paydunyaAPIKeyPublic   string
 	paydunyaMasterKey      string
 	paydunyaAPIBase        string
+	paydunyaEnabledStr     string
 	storefrontURL          string
 }
+
+// stripeEnabled/paydunyaEnabled — toggle indépendant des clés API (demandé
+// le 2026-08-26 : pouvoir couper temporairement un moyen de paiement sans
+// effacer sa clé). Stocké comme string ("true"/"false", vide = activé par
+// défaut) car kit.SettingsField ne supporte que *string — pas de nouveau
+// type à ajouter à kit pour ce seul besoin.
+func (s *server) stripeEnabled() bool  { return s.stripeEnabledStr != "false" }
+func (s *server) paydunyaEnabled() bool { return s.paydunyaEnabledStr != "false" }
 
 const settingsTable = "payment_settings"
 
@@ -169,10 +179,12 @@ func (s *server) settingsFields() []kit.SettingsField {
 		{Key: "platform_commission_rate", Ptr: &s.platformCommissionRate, Description: "Taux de commission plateforme (fraction, ex: 0.10 = 10%) appliqué à défaut d'un override vendeur"},
 		{Key: "stripe_secret_key", Ptr: &s.stripeSecretKey, Secret: true, Description: "Clé secrète API Stripe (paiements carte)"},
 		{Key: "stripe_webhook_secret", Ptr: &s.stripeWebhookSecret, Secret: true, Description: "Secret de vérification de signature des webhooks Stripe"},
+		{Key: "stripe_enabled", Ptr: &s.stripeEnabledStr, Description: "Activer Stripe comme moyen de paiement (\"false\" pour désactiver sans effacer la clé) — vide ou toute autre valeur = activé"},
 		{Key: "paydunya_api_key_private", Ptr: &s.paydunyaAPIKeyPrivate, Secret: true, Description: "Clé API privée PayDunya (Wave, Orange Money)"},
 		{Key: "paydunya_api_key_public", Ptr: &s.paydunyaAPIKeyPublic, Secret: true, Description: "Clé API publique PayDunya (liée au compte marchand)"},
 		{Key: "paydunya_master_key", Ptr: &s.paydunyaMasterKey, Secret: true, Description: "Clé maître PayDunya (signature/validation)"},
 		{Key: "paydunya_api_base", Ptr: &s.paydunyaAPIBase, Description: "URL de base de l'API PayDunya"},
+		{Key: "paydunya_enabled", Ptr: &s.paydunyaEnabledStr, Description: "Activer PayDunya comme moyen de paiement (\"false\" pour désactiver sans effacer la clé) — vide ou toute autre valeur = activé"},
 		{Key: "storefront_url", Ptr: &s.storefrontURL, Description: "URL du site public, utilisée pour les liens de retour après paiement"},
 	}
 }
@@ -256,15 +268,32 @@ func main() {
 // ci-dessus) : pas de table, pas de persistance, juste un reflet de ce qui
 // est réellement configuré. Format proche WooCommerce (wc/v3/payment_gateways)
 // pour compatibilité frontend (gateway id/title/enabled).
+// stripeMode — le mode test/live Stripe est déterminé par le PRÉFIXE de la
+// clé secrète (sk_test_... vs sk_live_...), pas par un champ séparé —
+// c'est Stripe qui impose cette convention, aucune ambiguïté possible.
+// Affiché en Configuration pour éviter de confondre les deux (demandé le
+// 2026-08-26 : tester par erreur en live, ou l'inverse).
+func stripeMode(secretKey string) string {
+	switch {
+	case strings.HasPrefix(secretKey, "sk_test_"):
+		return "test"
+	case strings.HasPrefix(secretKey, "sk_live_"):
+		return "live"
+	default:
+		return "unknown"
+	}
+}
+
 func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
 	gateways := []map[string]any{
 		{
 			"id": "stripe", "title": "Carte bancaire", "method_title": "Stripe",
-			"enabled": s.stripeSecretKey != "",
+			"enabled": s.stripeSecretKey != "" && s.stripeEnabled(),
+			"mode":    stripeMode(s.stripeSecretKey),
 		},
 		{
 			"id": "paydunya", "title": "Mobile Money / PayDunya", "method_title": "PayDunya",
-			"enabled": s.paydunyaAPIKeyPrivate != "",
+			"enabled": s.paydunyaAPIKeyPrivate != "" && s.paydunyaEnabled(),
 		},
 	}
 	kit.JSON(w, 200, map[string]any{"gateways": gateways})
