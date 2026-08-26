@@ -438,7 +438,25 @@ func (s *server) updateVendorAdmin(w http.ResponseWriter, r *http.Request) {
 	kit.Publish(s.kafka, "vendor.updated", fmt.Sprint(id), map[string]any{
 		"vendor_id": id, "at": time.Now().UTC().Format(time.RFC3339),
 	})
+	// Event dédié pour suspended_until — équivalent de "Vendor Enable"/
+	// "Vendor Disable" côté Dokan. vendor.updated générique ne précise
+	// jamais QUEL champ a changé, donc email-svc ne peut pas en déduire
+	// une notification vendeur pertinente sans ce signal explicite.
+	if body.SuspendedUntil != nil {
+		suspended := *body.SuspendedUntil != ""
+		kit.Publish(s.kafka, "vendor.suspension_changed", fmt.Sprint(id), map[string]any{
+			"vendor_id": id, "suspended": suspended, "message": stringOrEmptyPtr(body.SuspensionMessage),
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
 	kit.JSON(w, 200, map[string]any{"id": id, "updated": true})
+}
+
+func stringOrEmptyPtr(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func (s *server) approveKYC(w http.ResponseWriter, r *http.Request) {

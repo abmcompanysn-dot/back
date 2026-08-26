@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { isAdmin, LOYALTY_SVC_URL, EMAIL_SVC_URL } from '@/lib/miad-server-auth'
+import { isAdmin, LOYALTY_SVC_URL, EMAIL_SVC_URL, VENDOR_SVC_URL, fetchWpUser } from '@/lib/miad-server-auth'
 import { callHeadlessAdmin } from '@/lib/miad-admin-api'
 
 export const runtime = 'edge'
@@ -44,7 +44,45 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { client_name, client_email, message, rep_id, rep_name, customer_id, country } = body
+    const { client_name, client_email, message, rep_id, rep_name, customer_id, country, recipientId, subject: bodySubject } = body
+
+    // Contact vendeur (ContactVendorForm.tsx) : bug corrigé le 2026-08-26 —
+    // recipientId était envoyé mais totalement ignoré ici (routait toujours
+    // vers loyalty-svc/rep_id, jamais vers le vendeur), et client_name
+    // n'était jamais fourni par ce formulaire donc la validation ci-dessous
+    // échouait systématiquement en 400. Le vendeur reçoit l'email
+    // directement (pas de table de messages côté vendor-svc — hors
+    // périmètre), une copie part à l'admin pour supervision (demandé
+    // explicitement : "le message va être redirigé vers l'admin").
+    if (recipientId && !rep_id) {
+      const auth = request.headers.get('Authorization')
+      const user = auth?.startsWith('Bearer ') ? await fetchWpUser(auth.slice(7)) : null
+      if (!user) return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
+      if (!message?.trim()) return NextResponse.json({ error: 'Message requis' }, { status: 400 })
+
+      const vendorRes = await fetch(`${VENDOR_SVC_URL}/vendors/${recipientId}`, { cache: 'no-store' })
+      if (!vendorRes.ok) return NextResponse.json({ error: 'Vendeur introuvable' }, { status: 404 })
+      const vendor = await vendorRes.json()
+      const senderName = client_name || user.email || 'Client MIAD'
+      const subject = bodySubject || `Nouveau message de ${senderName}`
+
+      const recipients = [vendor.email, process.env.NOTIFY_EMAIL || 'miadmarket25@gmail.com'].filter(Boolean)
+      await Promise.all(
+        recipients.map((to) =>
+          fetch(`${EMAIL_SVC_URL}/emails/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to,
+              template: 'vendor_contact_message',
+              subject,
+              payload: { vendor_name: vendor.name || vendor.store_name || 'Boutique', client_name: senderName, client_email: client_email || user.email || '', message },
+            }),
+          }).catch(() => null)
+        )
+      )
+      return NextResponse.json({ ok: true })
+    }
 
     if (!client_name?.trim() || !message?.trim()) {
       return NextResponse.json({ error: 'Données manquantes' }, { status: 400 })

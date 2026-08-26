@@ -814,8 +814,10 @@ func (s *server) updateOrderStatus(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande %d introuvable", id))
 		return
 	}
+	var vendorIDForEvent int64
+	_ = s.db.QueryRow(r.Context(), "SELECT vendor_id FROM orders WHERE id = $1", id).Scan(&vendorIDForEvent)
 	kit.Publish(s.kafka, "order.status_changed", fmt.Sprint(id), map[string]any{
-		"order_id": id, "status": body.Status, "at": time.Now().UTC().Format(time.RFC3339),
+		"order_id": id, "status": body.Status, "vendor_id": vendorIDForEvent, "at": time.Now().UTC().Format(time.RFC3339),
 	})
 	s.logOrderEvent(r.Context(), id, "status_changed", fmt.Sprintf("statut changé vers %q", body.Status), "admin")
 	kit.JSON(w, 200, map[string]any{"id": id, "status": body.Status})
@@ -1053,6 +1055,14 @@ func (s *server) createReturn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logOrderEvent(r.Context(), body.OrderID, "return_requested", body.Reason, "customer")
+
+	var vendorID, customerID int64
+	_ = s.db.QueryRow(r.Context(), "SELECT vendor_id, customer_id FROM orders WHERE id = $1", body.OrderID).Scan(&vendorID, &customerID)
+	kit.Publish(s.kafka, "return.created", fmt.Sprint(id), map[string]any{
+		"return_id": id, "order_id": body.OrderID, "vendor_id": vendorID, "customer_id": customerID,
+		"reason": body.Reason, "at": time.Now().UTC().Format(time.RFC3339),
+	})
+
 	kit.JSON(w, 201, map[string]any{"id": id})
 }
 
@@ -1137,6 +1147,14 @@ func (s *server) moderateReturn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logOrderEvent(r.Context(), orderID, "return_"+body.Status, body.AdminNote, "admin")
+
+	var vendorID, customerID int64
+	_ = s.db.QueryRow(r.Context(), "SELECT vendor_id, customer_id FROM orders WHERE id = $1", orderID).Scan(&vendorID, &customerID)
+	kit.Publish(s.kafka, "return.status_changed", fmt.Sprint(id), map[string]any{
+		"return_id": id, "order_id": orderID, "vendor_id": vendorID, "customer_id": customerID,
+		"status": body.Status, "admin_note": body.AdminNote, "at": time.Now().UTC().Format(time.RFC3339),
+	})
+
 	kit.JSON(w, 200, map[string]any{"id": id, "status": body.Status})
 }
 
