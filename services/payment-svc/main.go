@@ -1223,8 +1223,9 @@ func (s *server) creditVendorWallet(ctx context.Context, orderID int64) {
 }
 
 type orderSummary struct {
-	VendorID int64   `json:"vendor_id"`
-	TotalUSD float64 `json:"total_usd"`
+	VendorID      int64   `json:"vendor_id"`
+	TotalUSD      float64 `json:"total_usd"`
+	ParentOrderID int64   `json:"parent_order_id"`
 }
 
 func fetchOrder(ctx context.Context, orderURL string, orderID int64) (*orderSummary, error) {
@@ -1326,6 +1327,45 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ref, clientSecret = piID, secret
+	}
+
+	// PayDunya : jusqu'ici la facture n'était créée que par initiateFor
+	// (consommateur Kafka order.created), de façon ASYNCHRONE — /api/orders
+	// côté frontend appelle POST /payments/init immédiatement après avoir
+	// créé la commande, souvent avant que ce consommateur ait eu le temps
+	// de tourner. Résultat : réponse 200 OK mais redirect_url="" (pas une
+	// erreur HTTP, donc le retry frontend — qui ne retente que sur !res.ok
+	// — ne se déclenchait jamais), d'où paydunyaToken/paydunyaUrl vides
+	// côté client malgré une commande valide. Symptôme confondu une
+	// première fois avec l'instabilité réseau réelle de PayDunya ("Too many
+	// connections", cause distincte, vraie mais pas la seule) — les deux
+	// se manifestent de la même façon côté client. Fix : créer la facture
+	// ici à la demande si elle n'existe pas encore, même principe que
+	// Stripe juste au-dessus, élimine la race condition à la racine plutôt
+	// que de rallonger un retry côté frontend.
+	if provider == "paydunya" && redirect == "" && (status == "initiated" || status == "failed") {
+		reference := body.Reference
+		if reference == "" {
+			reference = fmt.Sprintf("MIAD-%d", body.OrderID)
+		}
+		var parentOrderID int64
+		if order, err := fetchOrder(ctx, s.orderURL, body.OrderID); err == nil {
+			parentOrderID = order.ParentOrderID
+		}
+		pdRef, pdRedirect, err := s.createPayDunyaInvoice(ctx, orderCreatedEvent{
+			OrderID: body.OrderID, ParentOrderID: parentOrderID, Reference: reference, TotalUSD: amount,
+		})
+		if err != nil {
+			kit.Fail(w, 502, "paydunya_error", fmt.Sprintf("création de la facture PayDunya impossible: %v", err))
+			return
+		}
+		if _, err := s.db.Exec(ctx,
+			"UPDATE payments SET provider_ref=$2, redirect_url=$3, status='initiated' WHERE id=$1",
+			id, pdRef, pdRedirect); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		ref, redirect = pdRef, pdRedirect
 	}
 
 	kit.JSON(w, 200, map[string]any{
