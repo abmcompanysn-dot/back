@@ -705,6 +705,7 @@ func (s *server) rejectPayout(w http.ResponseWriter, r *http.Request) {
 
 type orderCreatedEvent struct {
 	OrderID       int64   `json:"order_id"`
+	ParentOrderID int64   `json:"parent_order_id"`
 	Reference     string  `json:"reference"`
 	TotalUSD      float64 `json:"total_usd"`
 	PaymentMethod string  `json:"payment_method"`
@@ -848,6 +849,18 @@ func (s *server) createStripePaymentIntent(orderID int64, reference string, tota
 //  3. response_code de succès est "00" (pas "0000"), et l'URL de paiement
 //     est directement response_text — inutile de la reconstruire à la main
 //     (l'ancienne reconstruction pointait en plus vers l'URL cassée)
+// redirectOrderID — le parent groupe (multi-vendeur) est le seul ID que
+// order-received/confirm-paydunya sait résoudre (GET /orders/parent/{id}),
+// jamais l'ID d'une sous-commande individuelle. Repli sur OrderID si
+// ParentOrderID est absent (event Kafka ancien format, avant le fix du
+// 2026-08-26) plutôt que de planter — pire cas identique au bug d'avant.
+func redirectOrderID(ev orderCreatedEvent) int64 {
+	if ev.ParentOrderID != 0 {
+		return ev.ParentOrderID
+	}
+	return ev.OrderID
+}
+
 func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent) (ref, redirect string, err error) {
 	priv := s.paydunyaAPIKeyPrivate
 	pub := s.paydunyaAPIKeyPublic
@@ -893,7 +906,7 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 			// avec order_id + token", voir app/order-received/page.tsx) —
 			// jamais branchée côté payment-svc jusqu'ici. Pas de page
 			// "cancel" dédiée : /checkout est le seul repli existant.
-			"return_url":   front + "/order-received?order_id=" + strconv.FormatInt(ev.OrderID, 10),
+			"return_url":   front + "/order-received?order_id=" + strconv.FormatInt(redirectOrderID(ev), 10),
 			"cancel_url":   front + "/checkout",
 		},
 		"custom_data": map[string]any{"order_id": ev.OrderID},

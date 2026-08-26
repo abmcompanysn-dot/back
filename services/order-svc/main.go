@@ -366,7 +366,19 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 	for _, o := range created {
 		kit.Publish(s.kafka, "order.created", fmt.Sprint(o["id"]), map[string]any{
 			"order_id": o["id"], "reference": o["reference"], "vendor_id": o["vendor_id"],
-			"customer_id": body.CustomerID, "total_usd": o["total_usd"],
+			// parent_order_id ajouté le 2026-08-26 : payment-svc
+			// (createPayDunyaInvoice) n'avait accès qu'à l'order_id de LA
+			// sous-commande pour construire return_url, jamais au parent —
+			// PayDunya redirigeait donc vers order-received?order_id=<sous-
+			// commande>, alors que confirm-paydunya interroge GET
+			// /orders/parent/{id} avec CET id, qui ne correspond à aucun
+			// parent réel (404 silencieux traité comme "failed" → "Paiement
+			// non confirmé" alors que le paiement était bien confirmé,
+			// commande 183/parent 182 vérifiée en base). Stripe n'avait pas
+			// ce bug : redirectOrderId est déjà résolu côté frontend
+			// (CheckoutPage.tsx connaît parentOrderId dès la création).
+			"parent_order_id": parentID,
+			"customer_id":     body.CustomerID, "total_usd": o["total_usd"],
 			"payment_method": body.PaymentMethod,
 			"at":             time.Now().UTC().Format(time.RFC3339),
 		})
