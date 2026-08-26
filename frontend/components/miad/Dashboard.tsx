@@ -102,6 +102,15 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     '/api/vendor/products?per_page=100', authFetcher, { revalidateOnFocus: false, dedupingInterval: 30000, shouldRetryOnError: false }
   )
 
+  // Profil boutique (nom/contact/logo/bannière) — même bug de champ
+  // fantôme que products : dashData.seller n'a jamais existé côté
+  // vendor-svc, donc ni l'aperçu photo ni le formulaire Paramètres
+  // n'affichaient jamais l'état réel. GET /api/vendor/settings ajouté
+  // le 2026-08-26 (voir app/api/vendor/settings/route.ts).
+  const { data: profileData, mutate: mutateProfile } = useSWR(
+    '/api/vendor/settings', authFetcher, { revalidateOnFocus: false, dedupingInterval: 30000, shouldRetryOnError: false }
+  )
+
   // Déconnexion uniquement si le serveur confirme explicitement un token
   // invalide (même pattern que ClientDashboard.tsx) — authFetcher ignorait
   // jusqu'ici le statut HTTP, donc une session expirée ne redirigeait
@@ -386,8 +395,27 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
 
   // ── SETTINGS STATE ────────────────────────────────────────────────────────
   const [settingsForm, setSettingsForm] = useState({ storeName, email: '', phone: '', address: '', description: '' })
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [shippingToggles, setShippingToggles] = useState([true, false, false])
+
+  // Pré-remplit le formulaire avec les vraies valeurs une fois chargées
+  // (profileData arrive après le premier rendu, SWR étant async) — sans
+  // ça le vendeur devait retaper son adresse/description à chaque
+  // visite même si déjà enregistrées. settingsLoaded évite d'écraser une
+  // saisie en cours si le SWR revalide en arrière-plan pendant l'édition.
+  useEffect(() => {
+    if (profileData && !settingsLoaded) {
+      setSettingsForm({
+        storeName: profileData.storeName || storeName,
+        email: profileData.email || '',
+        phone: profileData.phone || '',
+        address: profileData.address || '',
+        description: profileData.description || '',
+      })
+      setSettingsLoaded(true)
+    }
+  }, [profileData, settingsLoaded, storeName])
 
   // ── DEMANDE DE RETRAIT ───────────────────────────────────────────────────
   const [payoutAmount, setPayoutAmount] = useState('')
@@ -425,8 +453,8 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
   const coverInputRef   = useRef<HTMLInputElement>(null)
   const nextAttrId = useRef(0)
 
-  const profilePhotoUrl = profilePhotoOverride || dashData?.seller?.gravatar || ''
-  const coverPhotoUrl   = coverPhotoOverride   || dashData?.seller?.banner   || ''
+  const profilePhotoUrl = profilePhotoOverride || profileData?.logoUrl || ''
+  const coverPhotoUrl   = coverPhotoOverride   || profileData?.bannerUrl || ''
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'avatar' | 'banner') => {
     const file = e.target.files?.[0]
@@ -435,9 +463,14 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     const toastId = toast.loading(type === 'avatar' ? 'Mise à jour du profil…' : 'Mise à jour de la bannière…')
     try {
       const token = localStorage.getItem('miad_token')
-      // 1. Upload vers WordPress Media
+      // 1. Upload vers MinIO (voir app/api/upload/route.ts — plus de
+      // WordPress Media depuis la migration ; upData.id est toujours 0,
+      // seul upData.url est réel, contrairement à ce que ce code lisait
+      // avant (bug trouvé le 2026-08-26 : mediaId toujours 0 envoyé à
+      // l'étape 2, donc jamais réellement persisté en base).
       const form = new FormData()
       form.append('file', file)
+      form.append('prefix', 'vendors')
       const upRes = await fetch('/api/upload', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -450,16 +483,18 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
       if (type === 'avatar') setProfilePhotoUrl(upData.url)
       else                   setCoverPhotoUrl(upData.url)
 
-      // 2. Associer à Dokan
+      // 2. Persiste l'URL réelle (vendor-svc PUT /vendor/profile attend
+      // {type, url}, pas {type, mediaId} — voir app/api/vendor/profile/route.ts)
       const profRes = await fetch('/api/vendor/profile', {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, mediaId: upData.id }),
+        body: JSON.stringify({ type, url: upData.url }),
       })
       if (!profRes.ok) {
         const err = await profRes.json()
-        throw new Error(err.error || 'Erreur Dokan')
+        throw new Error(err.error || 'Erreur serveur')
       }
+      mutateProfile()
       toast.success(type === 'avatar' ? 'Photo de profil mise à jour !' : 'Bannière mise à jour !', { id: toastId })
     } catch (err: any) {
       toast.error(err.message, { id: toastId })

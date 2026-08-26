@@ -3,6 +3,34 @@ import { VENDOR_SVC_URL, fetchWpUser } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge'
 
+// GET /api/vendor/settings — profil complet du vendeur connecté (nom,
+// contact, logo/bannière). Manquait jusqu'ici : le formulaire Paramètres
+// et l'aperçu photo de profil/couverture du dashboard n'avaient aucun
+// moyen de charger l'état existant, seulement d'écrire (PUT ci-dessous) —
+// voir aussi le fix sur handlePhotoUpload dans Dashboard.tsx (2026-08-26).
+export async function GET(request: Request) {
+  const auth = request.headers.get('Authorization')
+  if (!auth?.startsWith('Bearer ')) {
+    return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
+  }
+  const user = await fetchWpUser(auth.slice(7))
+  if (!user?.vendor_id) return NextResponse.json({ error: 'Accès réservé aux vendeurs' }, { status: 403 })
+
+  const res = await fetch(`${VENDOR_SVC_URL}/vendors/${user.vendor_id}`, { cache: 'no-store' })
+  if (!res.ok) return NextResponse.json({ error: 'boutique introuvable' }, { status: res.status })
+
+  const data = await res.json()
+  return NextResponse.json({
+    storeName: data.name || '',
+    phone: data.phone || '',
+    address: data.address || '',
+    email: data.email || '',
+    description: data.description || '',
+    logoUrl: data.gravatar || '',
+    bannerUrl: data.banner || '',
+  })
+}
+
 // PUT /api/vendor/settings
 // body: { storeName, phone, address, email, description }
 // Remplace l'appel en dur du dashboard vendeur vers l'ancien WordPress mort
