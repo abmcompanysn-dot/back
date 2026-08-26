@@ -219,6 +219,7 @@ func main() {
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)                              // role admin exigé
 		mux.HandleFunc("PATCH /customer/{id}/address", s.updateCustomerAddress)          // secret interne exigé
 		mux.HandleFunc("GET /admins", s.listAdmins)                                      // role admin exigé
+		mux.HandleFunc("GET /internal/admin-emails", s.listAdminEmails)                  // secret interne exigé
 		mux.HandleFunc("POST /admins", s.createAdmin)                                    // role admin exigé
 		mux.HandleFunc("PATCH /admins/{id}/active", s.setAdminActive)                    // role admin exigé
 		mux.HandleFunc("PATCH /admins/{id}/role", s.setAdminRole)                        // role admin exigé
@@ -1222,6 +1223,36 @@ func (s *server) updateCustomerAddress(w http.ResponseWriter, r *http.Request) {
 // listAdmins — comptes du back-office (module Utilisateurs), jamais le
 // hash/sel du mot de passe. totp_enabled exposé pour que l'UI affiche si
 // la 2FA est active sans avoir à la deviner.
+// listAdminEmails — GET /internal/admin-emails, surface minimale (juste
+// l'email, rien de sensible comme totp_enabled/role_id contrairement à
+// listAdmins) pour qu'email-svc puisse notifier tous les admins à chaque
+// commande sans avoir besoin d'un JWT admin (il n'en détient jamais un,
+// c'est un consumer Kafka pur). Protégé exclusivement par le secret
+// interne partagé — jamais accessible sans lui, pas de repli JWT ici
+// contrairement à getCustomer (aucun humain n'appelle cette route).
+func (s *server) listAdminEmails(w http.ResponseWriter, r *http.Request) {
+	if s.internalAPISecretStr == "" || r.Header.Get("X-Internal-Secret") != s.internalAPISecretStr {
+		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), "SELECT email FROM admins WHERE is_active = TRUE ORDER BY id")
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{"email": email})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items})
+}
+
 func (s *server) listAdmins(w http.ResponseWriter, r *http.Request) {
 	if err := s.requireRole(r, "admin"); err != nil {
 		kit.Fail(w, 403, "admin_required", err.Error())

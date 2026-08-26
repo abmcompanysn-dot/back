@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,8 +98,17 @@ type server struct {
 	orderURL    string
 	authURL     string
 	vendorURL   string
+	catalogURL  string
 	maxAttempts int
 	notifyEmail string
+
+	// internalAPISecret — même secret partagé que le frontend Next.js
+	// (INTERNAL_API_SECRET). auth-svc/GET /customer/{id} exige soit un JWT
+	// admin, soit ce header (voir auth-svc/getCustomer) : sans lui, TOUTE
+	// résolution d'email client échoue en 403 et aucun email commande ne
+	// part jamais (confirmé en prod le 2026-08-26 — répété sur 100% des
+	// commandes dans les logs email-svc).
+	internalAPISecret string
 
 	settings *kit.SettingsStore
 }
@@ -152,6 +162,8 @@ var seedTemplates = []EmailTemplate{
 	{Name: "refund_canceled", Label: "Remboursement refusé", Subject: "Demande de remboursement refusée — commande #{{.order_id}}", BodyHTML: refundCanceledHTML},
 	{Name: "vendor_contact_message", Label: "Message client → vendeur", Subject: "Nouveau message de {{.client_name}}", BodyHTML: vendorContactMessageHTML},
 	{Name: "vendor_new_order", Label: "Nouvelle commande (vendeur)", Subject: "Nouvelle commande #{{.order_id}}", BodyHTML: vendorNewOrderHTML},
+	{Name: "admin_new_order", Label: "Nouvelle commande (admin)", Subject: "Nouvelle commande #{{.order_id}}", BodyHTML: adminNewOrderHTML},
+	{Name: "rep_new_order", Label: "Nouvelle commande (représentant)", Subject: "Nouvelle commande #{{.order_id}} — {{.rep_zone}}", BodyHTML: repNewOrderHTML},
 	{Name: "vendor_completed_order", Label: "Commande livrée (vendeur)", Subject: "Commande #{{.order_id}} livrée", BodyHTML: vendorCompletedOrderHTML},
 	{Name: "vendor_disabled", Label: "Boutique suspendue", Subject: "Votre boutique a été suspendue", BodyHTML: vendorDisabledHTML},
 	{Name: "vendor_enabled", Label: "Boutique réactivée", Subject: "Votre boutique a été réactivée", BodyHTML: vendorEnabledHTML},
@@ -226,8 +238,11 @@ func main() {
 		orderURL:    kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		authURL:     kit.Env("AUTH_SVC_URL", "http://auth-svc:8086"),
 		vendorURL:   kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+		catalogURL:  kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
 		maxAttempts: 3,
 		notifyEmail: kit.Env("NOTIFY_EMAIL", "miadmarket25@gmail.com"),
+
+		internalAPISecret: kit.Env("INTERNAL_API_SECRET", ""),
 	}
 	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
 	if err := s.settings.Load(ctx); err != nil {
@@ -310,6 +325,7 @@ func (s *server) handleKafkaEvent(ctx context.Context, log *slog.Logger, msg *sa
 	case "order.created":
 		s.queueOrderConfirmation(ctx, log, payload)
 		s.queueVendorNewOrder(ctx, log, payload)
+		s.queueAdminNewOrder(ctx, log, payload)
 	case "payment.confirmed":
 		s.queuePaymentConfirmed(ctx, log, payload)
 	case "payment.failed":
@@ -396,6 +412,7 @@ type emailOrderLine struct {
 	Name     string
 	Quantity int
 	Price    string
+	Image    string
 }
 
 type emailShippingAddress struct {
@@ -416,6 +433,7 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 		CustomerID int64   `json:"customer_id"`
 		TotalUSD   float64 `json:"total_usd"`
 		Lines      []struct {
+			ProductID int64   `json:"product_id"`
 			Name      string  `json:"name"`
 			Quantity  int     `json:"quantity"`
 			UnitPrice float64 `json:"unit_price_usd"`
@@ -427,6 +445,12 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 	}
 	payload["total_usd"] = order.TotalUSD
 
+	// Images produits — un seul appel batch à catalog-svc (GET
+	// /products?include=id1,id2,...) plutôt qu'un appel par ligne. Best
+	// effort : un produit introuvable/supprimé ne doit jamais faire
+	// échouer l'email, juste laisser Image vide pour cette ligne.
+	images := s.fetchProductImages(ctx, order.Lines)
+
 	// Détails de la commande — utilisés par order_confirmation ET
 	// order_shipped (le fondateur a explicitement demandé que l'email
 	// d'expédition affiche lui aussi les articles, pas seulement le
@@ -436,6 +460,7 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 		items = append(items, emailOrderLine{
 			Name: l.Name, Quantity: l.Quantity,
 			Price: fmt.Sprintf("%.2f $", l.UnitPrice),
+			Image: images[l.ProductID],
 		})
 	}
 	payload["Items"] = items
@@ -463,13 +488,56 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 	var customer struct {
 		Email string `json:"email"`
 	}
-	if err := fetchJSON(ctx, s.authURL+"/customer/"+fmt.Sprint(order.CustomerID), &customer); err != nil {
+	// GET /customer/{id} exige un rôle admin OU X-Internal-Secret (voir
+	// auth-svc/getCustomer) — sans ce header, 403 systématique et aucun
+	// email commande ne part jamais (bug réel en prod, pas un cas limite).
+	headers := map[string]string{}
+	if s.internalAPISecret != "" {
+		headers["X-Internal-Secret"] = s.internalAPISecret
+	}
+	if err := fetchJSONWithHeaders(ctx, s.authURL+"/customer/"+fmt.Sprint(order.CustomerID), headers, &customer); err != nil {
 		return "", fmt.Errorf("auth-svc: %w", err)
 	}
 	if customer.Email == "" {
 		return "", fmt.Errorf("client %d inscrit par téléphone, sans email", order.CustomerID)
 	}
 	return customer.Email, nil
+}
+
+// fetchProductImages — résout l'image de chaque produit acheté en UN seul
+// appel batch à catalog-svc (GET /products?include=id1,id2,...), pas un
+// appel par ligne. Best effort : renvoie une map partielle (voire vide) si
+// catalog-svc est injoignable ou qu'un produit a été supprimé depuis —
+// l'email doit toujours partir, avec ou sans images.
+func (s *server) fetchProductImages(ctx context.Context, lines []struct {
+	ProductID int64   `json:"product_id"`
+	Name      string  `json:"name"`
+	Quantity  int     `json:"quantity"`
+	UnitPrice float64 `json:"unit_price_usd"`
+}) map[int64]string {
+	images := map[int64]string{}
+	ids := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if l.ProductID > 0 {
+			ids = append(ids, strconv.FormatInt(l.ProductID, 10))
+		}
+	}
+	if len(ids) == 0 {
+		return images
+	}
+	var resp struct {
+		Items []struct {
+			ID    int64  `json:"id"`
+			Image string `json:"image"`
+		} `json:"items"`
+	}
+	if err := fetchJSON(ctx, s.catalogURL+"/products?include="+strings.Join(ids, ","), &resp); err != nil {
+		return images // best effort — email part quand même sans images
+	}
+	for _, p := range resp.Items {
+		images[p.ID] = p.Image
+	}
+	return images
 }
 
 // resolveVendorEmail — même besoin que resolveOrderContact côté client :
@@ -498,9 +566,21 @@ func strAt(m map[string]any, key string) string {
 }
 
 func fetchJSON(ctx context.Context, url string, out any) error {
+	return fetchJSONWithHeaders(ctx, url, nil, out)
+}
+
+// fetchJSONWithHeaders — variante de fetchJSON acceptant des en-têtes
+// supplémentaires, utilisée pour X-Internal-Secret vers auth-svc (voir
+// resolveOrderContact) : certains endpoints internes exigent une preuve
+// que l'appelant est bien un service backend, pas un tiers qui devinerait
+// un ID (même mécanisme que updateCustomerAddress côté frontend Next.js).
+func fetchJSONWithHeaders(ctx context.Context, url string, headers map[string]string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -740,6 +820,37 @@ func (s *server) queueVendorNewOrder(ctx context.Context, log *slog.Logger, payl
 	}
 	subject := fmt.Sprintf("Nouvelle commande #%v", payload["order_id"])
 	s.queueEmail(ctx, log, email, "vendor_new_order", subject, payload)
+}
+
+// queueAdminNewOrder — un email par admin actif (SELECT email FROM admins,
+// décision actée : pas de rôle "super admin" distinct aujourd'hui, donc
+// tous les admins reçoivent la même notification). Résolution via
+// auth-svc/GET /internal/admin-emails, protégé par X-Internal-Secret
+// (aucun JWT admin disponible ici — c'est un consumer Kafka pur).
+func (s *server) queueAdminNewOrder(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	if _, err := s.resolveOrderContact(ctx, payload); err != nil {
+		log.Warn("enrichissement commande impossible pour notif admin", "err", err)
+	}
+	headers := map[string]string{}
+	if s.internalAPISecret != "" {
+		headers["X-Internal-Secret"] = s.internalAPISecret
+	}
+	var resp struct {
+		Items []struct {
+			Email string `json:"email"`
+		} `json:"items"`
+	}
+	if err := fetchJSONWithHeaders(ctx, s.authURL+"/internal/admin-emails", headers, &resp); err != nil {
+		log.Warn("liste admins introuvable pour notif nouvelle commande", "err", err)
+		return
+	}
+	subject := fmt.Sprintf("Nouvelle commande #%v", payload["order_id"])
+	for _, a := range resp.Items {
+		if a.Email == "" {
+			continue
+		}
+		s.queueEmail(ctx, log, a.Email, "admin_new_order", subject, payload)
+	}
 }
 
 func (s *server) queueVendorCompletedOrder(ctx context.Context, log *slog.Logger, payload map[string]any) {
@@ -1383,10 +1494,27 @@ const orderConfirmationHTML = `
               <table role="presentation" style="width:100%;border-collapse:collapse;">
                 {{range .Items}}
                 <tr>
+                  <td style="padding:10px 0;border-bottom:1px solid #eeeeee;width:52px;">
+                    {{if .Image}}<img src="{{.Image}}" alt="{{.Name}}" width="44" height="44" style="width:44px;height:44px;border-radius:6px;object-fit:cover;display:block;">{{end}}
+                  </td>
                   <td style="padding:10px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
                   <td align="right" style="padding:10px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
                 </tr>
                 {{end}}
+              </table>
+              {{end}}
+
+              {{if .Shipping}}
+              <h3 style="color:#005826;font-size:14px;margin:28px 0 12px;">Adresse de livraison :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;background-color:#f9fafb;border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;font-size:14px;color:#333333;line-height:1.5;">
+                    {{.Shipping.FullName}}<br>
+                    {{.Shipping.Address1}}<br>
+                    {{.Shipping.City}}{{if .Shipping.Postcode}} {{.Shipping.Postcode}}{{end}}, {{.Shipping.Country}}<br>
+                    {{if .Shipping.Phone}}{{.Shipping.Phone}}{{end}}
+                  </td>
+                </tr>
               </table>
               {{end}}
 
@@ -2393,6 +2521,16 @@ const vendorNewOrderHTML = `
               <p style="font-size:14px;color:#333333;margin-bottom:20px;">
                 Vous avez reçu une nouvelle commande. Préparez-la dès que possible.
               </p>
+              {{if .total_usd}}
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:16px;background-color:#f9fafb;border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <strong style="font-size:12px;color:#005826;">Montant total</strong><br>
+                    <span style="color:#005826;font-size:20px;font-weight:bold;">{{.total_usd}} $ US</span>
+                  </td>
+                </tr>
+              </table>
+              {{end}}
               {{if .Items}}
               <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
                 {{range .Items}}
@@ -2403,6 +2541,19 @@ const vendorNewOrderHTML = `
                 {{end}}
               </table>
               {{end}}
+              {{if .Shipping}}
+              <h3 style="color:#005826;font-size:14px;margin:20px 0 12px;">Adresse de livraison :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;background-color:#f9fafb;border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;font-size:14px;color:#333333;line-height:1.5;">
+                    {{.Shipping.FullName}}<br>
+                    {{.Shipping.Address1}}<br>
+                    {{.Shipping.City}}{{if .Shipping.Postcode}} {{.Shipping.Postcode}}{{end}}, {{.Shipping.Country}}<br>
+                    {{if .Shipping.Phone}}{{.Shipping.Phone}}{{end}}
+                  </td>
+                </tr>
+              </table>
+              {{end}}
               <p style="font-size:13px;color:#888888;margin-top:24px;">
                 Gérez cette commande depuis votre tableau de bord vendeur.
               </p>
@@ -2411,6 +2562,135 @@ const vendorNewOrderHTML = `
           <tr>
             <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
               <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification vendeur.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const adminNewOrderHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nouvelle commande</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">📦 Nouvelle commande</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}} — client #{{.customer_id}} — boutique #{{.vendor_id}}</p>
+              {{if .total_usd}}
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:16px;background-color:#f9fafb;border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <strong style="font-size:12px;color:#005826;">Montant total</strong><br>
+                    <span style="color:#005826;font-size:20px;font-weight:bold;">{{.total_usd}} $ US</span>
+                  </td>
+                </tr>
+              </table>
+              {{end}}
+              {{if .Items}}
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+                {{range .Items}}
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
+                  <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
+                </tr>
+                {{end}}
+              </table>
+              {{end}}
+              {{if .Shipping}}
+              <h3 style="color:#005826;font-size:14px;margin:20px 0 12px;">Adresse de livraison :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;background-color:#f9fafb;border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;font-size:14px;color:#333333;line-height:1.5;">
+                    {{.Shipping.FullName}}<br>
+                    {{.Shipping.Address1}}<br>
+                    {{.Shipping.City}}{{if .Shipping.Postcode}} {{.Shipping.Postcode}}{{end}}, {{.Shipping.Country}}<br>
+                    {{if .Shipping.Phone}}{{.Shipping.Phone}}{{end}}
+                  </td>
+                </tr>
+              </table>
+              {{end}}
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Vue d'ensemble — gérez cette commande depuis le tableau de bord admin.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification admin.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const repNewOrderHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nouvelle commande</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">🔔 Nouvelle commande — {{.rep_zone}}</h1>
+              <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}} — {{.vendor_name}}</p>
+              {{if .total_usd}}
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:16px;background-color:#f9fafb;border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <strong style="font-size:12px;color:#005826;">Montant total</strong><br>
+                    <span style="color:#005826;font-size:20px;font-weight:bold;">{{.total_usd}} $ US</span>
+                  </td>
+                </tr>
+              </table>
+              {{end}}
+              {{if .customer_name}}
+              <p style="font-size:14px;color:#333333;margin:0 0 12px;"><strong>Client :</strong> {{.customer_name}}</p>
+              {{end}}
+              {{if .shipping_summary}}
+              <p style="font-size:14px;color:#333333;margin:0 0 20px;"><strong>Adresse :</strong> {{.shipping_summary}}</p>
+              {{end}}
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Gérez cette commande depuis votre tableau de bord représentant.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification représentant.</p>
             </td>
           </tr>
         </table>
