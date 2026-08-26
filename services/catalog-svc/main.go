@@ -156,6 +156,26 @@ CREATE TABLE IF NOT EXISTS wishlists (
   PRIMARY KEY (customer_id, product_id)
 );
 CREATE INDEX IF NOT EXISTS idx_wishlists_customer ON wishlists (customer_id, created_at DESC);
+
+-- Panier — n'existait que côté client (localStorage, clé miad_cart), donc
+-- perdu à chaque changement d'appareil (demandé le 2026-08-26 : "l'appareil
+-- recupere ce qui a été fait avant" — même exigence que la wishlist déjà
+-- server-backed). variation_id NULLABLE (produit simple vs variable) —
+-- COALESCE(variation_id, 0) dans la clé unique car Postgres ne déduplique
+-- jamais deux NULL comme identiques dans un UNIQUE classique (sinon deux
+-- lignes NULL pour le même produit simple ajouté deux fois).
+CREATE TABLE IF NOT EXISTS cart_items (
+  id           BIGSERIAL PRIMARY KEY,
+  customer_id  BIGINT NOT NULL,
+  product_id   BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  variation_id BIGINT REFERENCES product_variations(id) ON DELETE CASCADE,
+  quantity     INT NOT NULL DEFAULT 1,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cart_items_unique
+  ON cart_items (customer_id, product_id, COALESCE(variation_id, 0));
+CREATE INDEX IF NOT EXISTS idx_cart_items_customer ON cart_items (customer_id, created_at);
 `
 
 type server struct {
@@ -210,6 +230,10 @@ func main() {
 		mux.HandleFunc("GET /wishlist/{customer_id}", s.listWishlist)
 		mux.HandleFunc("POST /wishlist/{customer_id}/{product_id}", s.addToWishlist)
 		mux.HandleFunc("DELETE /wishlist/{customer_id}/{product_id}", s.removeFromWishlist)
+		mux.HandleFunc("GET /cart/{customer_id}", s.listCart)
+		mux.HandleFunc("PUT /cart/{customer_id}/{product_id}", s.upsertCartItem)
+		mux.HandleFunc("DELETE /cart/{customer_id}/{product_id}", s.removeCartItem)
+		mux.HandleFunc("DELETE /cart/{customer_id}", s.clearCart)
 		mux.HandleFunc("GET /categories", s.listCategories)
 		mux.HandleFunc("GET /search/suggestions", s.suggestions)
 		mux.HandleFunc("POST /vendor/products", s.createProduct)
@@ -793,6 +817,118 @@ func (s *server) removeFromWishlist(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.db.Exec(r.Context(),
 		`DELETE FROM wishlists WHERE customer_id = $1 AND product_id = $2`, customerID, productID); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+/* ---------- Panier ---------- */
+
+// listCart — renvoie les lignes brutes (product_id/variation_id/quantity),
+// même parti pris que listWishlist : l'enrichissement (image/prix/nom) se
+// fait côté frontend via GET /products?include=..., pas ici.
+func (s *server) listCart(w http.ResponseWriter, r *http.Request) {
+	customerID := atoi(r.PathValue("customer_id"))
+	if customerID == 0 {
+		kit.Fail(w, 400, "invalid_customer_id", "customer_id invalide")
+		return
+	}
+	rows, err := s.db.Query(r.Context(),
+		`SELECT product_id, variation_id, quantity FROM cart_items WHERE customer_id = $1 ORDER BY created_at`, customerID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var productID int64
+		var variationID *int64
+		var quantity int
+		if rows.Scan(&productID, &variationID, &quantity) == nil {
+			items = append(items, map[string]any{
+				"product_id": productID, "variation_id": variationID, "quantity": quantity,
+			})
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"items": items})
+}
+
+// upsertCartItem — PUT /cart/{customer_id}/{product_id} { variation_id?, quantity }
+// La quantité est TOUJOURS remplacée (pas incrémentée) : le frontend
+// envoie la quantité finale voulue à chaque fois (cohérent avec un input
+// numérique sur la page panier), pas un delta — évite toute ambiguïté
+// entre "ajouter 1" et "définir à 1" côté serveur.
+func (s *server) upsertCartItem(w http.ResponseWriter, r *http.Request) {
+	customerID := atoi(r.PathValue("customer_id"))
+	productID := atoi(r.PathValue("product_id"))
+	if customerID == 0 || productID == 0 {
+		kit.Fail(w, 400, "invalid_id", "customer_id et product_id invalides")
+		return
+	}
+	var body struct {
+		VariationID *int64 `json:"variation_id"`
+		Quantity    int    `json:"quantity"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Quantity <= 0 {
+		kit.Fail(w, 400, "invalid_quantity", "quantity doit être > 0 (utilisez DELETE pour retirer)")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO cart_items (customer_id, product_id, variation_id, quantity)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (customer_id, product_id, COALESCE(variation_id, 0))
+		DO UPDATE SET quantity = $4, updated_at = now()`,
+		customerID, productID, body.VariationID, body.Quantity); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+// removeCartItem — DELETE /cart/{customer_id}/{product_id}?variation_id=X
+// variation_id en query (pas dans le path) : cohérent avec le fait qu'il
+// est optionnel — un produit simple n'en a pas.
+func (s *server) removeCartItem(w http.ResponseWriter, r *http.Request) {
+	customerID := atoi(r.PathValue("customer_id"))
+	productID := atoi(r.PathValue("product_id"))
+	if customerID == 0 || productID == 0 {
+		kit.Fail(w, 400, "invalid_id", "customer_id et product_id invalides")
+		return
+	}
+	variationParam := r.URL.Query().Get("variation_id")
+	var err error
+	if variationParam != "" {
+		_, err = s.db.Exec(r.Context(),
+			`DELETE FROM cart_items WHERE customer_id = $1 AND product_id = $2 AND variation_id = $3`,
+			customerID, productID, atoi(variationParam))
+	} else {
+		_, err = s.db.Exec(r.Context(),
+			`DELETE FROM cart_items WHERE customer_id = $1 AND product_id = $2 AND variation_id IS NULL`,
+			customerID, productID)
+	}
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+// clearCart — DELETE /cart/{customer_id}, appelé après un checkout réussi
+// (le panier ne doit pas réapparaître sur le prochain appareil une fois la
+// commande passée).
+func (s *server) clearCart(w http.ResponseWriter, r *http.Request) {
+	customerID := atoi(r.PathValue("customer_id"))
+	if customerID == 0 {
+		kit.Fail(w, 400, "invalid_customer_id", "customer_id invalide")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), `DELETE FROM cart_items WHERE customer_id = $1`, customerID); err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}

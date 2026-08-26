@@ -418,6 +418,80 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     }
   }, []);
 
+  // Panier serveur (2026-08-26) — jusqu'ici purement localStorage (miad_cart),
+  // donc perdu à chaque changement d'appareil, contrairement à la wishlist
+  // déjà server-backed. À la connexion, on récupère le panier serveur et on
+  // le FUSIONNE avec le panier local courant (jamais un remplacement pur :
+  // un visiteur peut avoir ajouté des articles avant de se connecter, ils ne
+  // doivent pas disparaître) — en cas de même produit/variation des deux
+  // côtés, la quantité la plus grande gagne (hypothèse la moins surprenante :
+  // on ne perd jamais silencieusement un article qu'on avait déjà mis dans
+  // le panier sur l'un OU l'autre appareil).
+  useEffect(() => {
+    if (!isLoggedIn) return
+    const token = localStorage.getItem('miad_token')
+    if (!token) return
+    fetch('/api/cart', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const serverItems: { product: WooProduct; quantity: number; variationId: number | null }[] = data?.items || []
+        if (serverItems.length === 0) return
+        setCart(prev => {
+          const keyOf = (productId: string, variationId?: number | string | null) => variationId ? `${productId}-${variationId}` : String(productId)
+          const merged = [...prev]
+          for (const si of serverItems) {
+            const key = keyOf(String(si.product.id), si.variationId)
+            const idx = merged.findIndex(i => keyOf(i.product.id, i.variation?.id) === key)
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], quantity: Math.max(merged[idx].quantity, si.quantity) }
+            } else {
+              merged.push({ product: si.product, quantity: si.quantity, variation: si.variationId ? { id: si.variationId } as any : undefined })
+            }
+          }
+          return merged
+        })
+      })
+      .catch(() => {}) // best-effort : le panier local reste utilisable même si le serveur est injoignable
+  }, [isLoggedIn]);
+
+  // Synchronise CHAQUE changement de panier vers le serveur (best-effort,
+  // jamais bloquant pour l'UI) — un client non connecté garde un panier
+  // purement local (comportement identique à avant, cohérent avec la
+  // wishlist qui exige aussi une connexion pour persister). Pas de debounce
+  // ici volontairement : chaque clic +/- doit refléter l'état exact voulu
+  // par l'utilisateur, un debounce ferait courir le risque qu'un changement
+  // rapide (double-clic, retour arrière) n'atteigne jamais le serveur.
+  const cartSyncedRef = useRef(false)
+  const prevCartKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isLoggedIn) return
+    const token = localStorage.getItem('miad_token')
+    if (!token) return
+    // Ignore le tout premier passage après la fusion serveur→local
+    // ci-dessus : sans ça, la fusion elle-même redéclencherait aussitôt un
+    // PUT vers le serveur pour des données qui en viennent déjà.
+    if (!cartSyncedRef.current) { cartSyncedRef.current = true; return }
+    const currentIds = new Set(cart.map(i => i.variation ? `${i.product.id}-${i.variation.id}` : String(i.product.id)))
+    for (const item of cart) {
+      fetch(`/api/cart/${item.product.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ variationId: item.variation?.id ?? null, quantity: item.quantity }),
+      }).catch(() => {})
+    }
+    // Retire du serveur ce qui a disparu du panier local (suppression) —
+    // seule la liste précédente en mémoire (ref) permet de savoir quoi a
+    // été retiré, la comparaison ne peut pas se faire sur `cart` seul.
+    for (const prevKey of prevCartKeysRef.current) {
+      if (!currentIds.has(prevKey)) {
+        const [productId, variationId] = prevKey.split('-')
+        const qs = variationId ? `?variationId=${variationId}` : ''
+        fetch(`/api/cart/${productId}${qs}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {})
+      }
+    }
+    prevCartKeysRef.current = currentIds
+  }, [cart, isLoggedIn]);
+
   // Restauration d'un panier partagé via lien (/?cart=<id>) — permet à un
   // client de reprendre son propre panier sur un autre appareil/navigateur.
   // Remplace le panier local (vide la plupart du temps sur un nouvel appareil).
