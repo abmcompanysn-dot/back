@@ -86,6 +86,7 @@ var watchedTopics = []string{
 	"return.created",
 	"return.status_changed",
 	"vendor.suspension_changed",
+	"customer.address_updated",
 }
 
 type server struct {
@@ -154,6 +155,7 @@ var seedTemplates = []EmailTemplate{
 	{Name: "vendor_completed_order", Label: "Commande livrée (vendeur)", Subject: "Commande #{{.order_id}} livrée", BodyHTML: vendorCompletedOrderHTML},
 	{Name: "vendor_disabled", Label: "Boutique suspendue", Subject: "Votre boutique a été suspendue", BodyHTML: vendorDisabledHTML},
 	{Name: "vendor_enabled", Label: "Boutique réactivée", Subject: "Votre boutique a été réactivée", BodyHTML: vendorEnabledHTML},
+	{Name: "address_updated", Label: "Adresse modifiée", Subject: "Votre adresse a été mise à jour", BodyHTML: addressUpdatedHTML},
 }
 
 // getSettings/putSettings — Configuration Système (page admin).
@@ -340,6 +342,8 @@ func (s *server) handleKafkaEvent(ctx context.Context, log *slog.Logger, msg *sa
 		case "rejected":
 			s.queueRefundCanceled(ctx, log, payload)
 		}
+	case "customer.address_updated":
+		s.queueAddressUpdated(ctx, log, payload)
 	case "vendor.suspension_changed":
 		suspended, _ := payload["suspended"].(bool)
 		if suspended {
@@ -772,6 +776,24 @@ func (s *server) queueVendorEnabled(ctx context.Context, log *slog.Logger, paylo
 		return
 	}
 	s.queueEmail(ctx, log, email, "vendor_enabled", "Votre boutique a été réactivée", payload)
+}
+
+// queueAddressUpdated — confirmation quand le client modifie son adresse
+// de facturation/livraison depuis son dashboard (demandé le 2026-08-26).
+// L'email lui-même est déjà dans le payload (fourni par auth-svc), pas
+// besoin de resolveOrderContact ici.
+func (s *server) queueAddressUpdated(ctx context.Context, log *slog.Logger, payload map[string]any) {
+	email, _ := payload["email"].(string)
+	if email == "" {
+		log.Warn("email manquant pour confirmation adresse modifiée")
+		return
+	}
+	addrType, _ := payload["type"].(string)
+	label := "de facturation"
+	if addrType == "shipping" {
+		label = "de livraison"
+	}
+	s.queueEmail(ctx, log, email, "address_updated", "Votre adresse "+label+" a été mise à jour", payload)
 }
 
 func (s *server) queueEmail(ctx context.Context, log *slog.Logger, to, templateName, subject string, payload map[string]any) {
@@ -2515,6 +2537,57 @@ const vendorEnabledHTML = `
           <tr>
             <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
               <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification vendeur.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+const addressUpdatedHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Adresse mise à jour</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;">
+              <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Adresse mise à jour</h1>
+              <p style="font-size:14px;color:#333333;margin-bottom:20px;">
+                Votre adresse {{if eq .type "shipping"}}de livraison{{else}}de facturation{{end}} a été modifiée avec succès.
+              </p>
+              {{if .address}}
+              <div style="background-color:#f9fafb;border-radius:8px;padding:16px 20px;font-size:14px;color:#333333;line-height:1.8;">
+                {{if .address.first_name}}{{.address.first_name}} {{.address.last_name}}<br>{{end}}
+                {{if .address.address_1}}{{.address.address_1}}<br>{{end}}
+                {{if .address.city}}{{.address.city}}{{end}}{{if .address.postcode}} {{.address.postcode}}{{end}}<br>
+                {{if .address.country}}{{.address.country}}{{end}}
+              </div>
+              {{end}}
+              <p style="font-size:13px;color:#888888;margin-top:24px;">
+                Si vous n'êtes pas à l'origine de cette modification, contactez-nous immédiatement.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0 0 4px;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+              <p style="margin:0;">Ceci est un email automatique, merci de ne pas y répondre.</p>
             </td>
           </tr>
         </table>

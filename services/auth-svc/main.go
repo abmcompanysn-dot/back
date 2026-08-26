@@ -1163,7 +1163,8 @@ func (s *server) updateCustomerAddress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var raw []byte
-	if err := s.db.QueryRow(r.Context(), "SELECT addresses FROM customers WHERE id = $1", id).Scan(&raw); err != nil {
+	var customerEmail *string
+	if err := s.db.QueryRow(r.Context(), "SELECT addresses, email FROM customers WHERE id = $1", id).Scan(&raw, &customerEmail); err != nil {
 		kit.Fail(w, 404, "customer_not_found", fmt.Sprintf("compte %d introuvable", id))
 		return
 	}
@@ -1192,6 +1193,14 @@ func (s *server) updateCustomerAddress(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+
+	if customerEmail != nil && *customerEmail != "" {
+		kit.Publish(s.kafka, "customer.address_updated", fmt.Sprint(id), map[string]any{
+			"customer_id": id, "email": *customerEmail, "type": body.Type, "address": body.Address,
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
 	kit.JSON(w, 200, map[string]any{"ok": true, "addresses": addresses})
 }
 
