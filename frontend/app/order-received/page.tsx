@@ -79,40 +79,55 @@ function OrderReceivedContent() {
     let cancelled = false
     const endpoint = method === 'stripe' ? 'confirm-stripe' : 'confirm-paydunya'
     const payload = method === 'stripe' ? { payment_intent_id: paymentIntentId } : { token }
+    // Le webhook Stripe/PayDunya qui confirme réellement la commande est
+    // asynchrone et peut arriver quelques secondes APRÈS que le navigateur
+    // ait atterri sur cette page (redirection immédiate après paiement) —
+    // sans retry, un premier essai trop tôt affiche "non confirmé" alors
+    // que le paiement a bel et bien réussi (le webhook confirme juste
+    // après). Backoff : 2s, 4s, 8s, 16s, 32s — ~1 minute de tolérance,
+    // cohérent avec le délai observé en pratique entre payment_intent.created
+    // et payment_intent.succeeded.
+    const RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 32000]
 
-    fetch(`/api/orders/${orderId}/${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-      .then(async (res) => {
-        const data = await res.json().catch(() => null)
-        if (cancelled) return
+    const check = (attempt: number) => {
+      fetch(`/api/orders/${orderId}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+        .then(async (res) => {
+          const data = await res.json().catch(() => null)
+          if (cancelled) return
 
-        if (data?.status === 'completed' || (method === 'stripe' && data?.success)) {
-          trackEvent('checkout_complete')
-          trackEvent('payment_success', { cartValue: data.total ? parseFloat(data.total) : undefined, metadata: { paymentMethod: method } })
-          setTotal(data.total ?? null)
-          setItems(Array.isArray(data.items) ? data.items : [])
-          setState('completed')
-          if (typeof window !== 'undefined') {
-            localStorage.removeItem('miad_cart')
-            window.dispatchEvent(new Event('cart-updated'))
+          if (data?.status === 'completed' || (method === 'stripe' && data?.success)) {
+            trackEvent('checkout_complete')
+            trackEvent('payment_success', { cartValue: data.total ? parseFloat(data.total) : undefined, metadata: { paymentMethod: method } })
+            setTotal(data.total ?? null)
+            setItems(Array.isArray(data.items) ? data.items : [])
+            setState('completed')
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem('miad_cart')
+              window.dispatchEvent(new Event('cart-updated'))
+            }
+          } else if (data?.status === 'pending') {
+            setState('pending')
+            if (attempt < RETRY_DELAYS_MS.length) {
+              setTimeout(() => { if (!cancelled) check(attempt + 1) }, RETRY_DELAYS_MS[attempt])
+            }
+          } else {
+            trackEvent('payment_failed', { paymentFailureReason: 'confirm_endpoint_rejected', metadata: { paymentMethod: method } })
+            setState('failed')
           }
-        } else if (data?.status === 'pending') {
-          setState('pending')
-        } else {
-          trackEvent('payment_failed', { paymentFailureReason: 'confirm_endpoint_rejected', metadata: { paymentMethod: method } })
-          setState('failed')
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          trackEvent('payment_failed', { paymentFailureReason: 'confirm_endpoint_unreachable', metadata: { paymentMethod: method } })
-          setState('failed')
-        }
-      })
+        })
+        .catch(() => {
+          if (!cancelled) {
+            trackEvent('payment_failed', { paymentFailureReason: 'confirm_endpoint_unreachable', metadata: { paymentMethod: method } })
+            setState('failed')
+          }
+        })
+    }
 
+    check(0)
     return () => { cancelled = true }
   }, [orderId, token, method, paymentIntentId, redirectStatus])
 
