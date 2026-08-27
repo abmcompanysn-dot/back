@@ -51,6 +51,12 @@ export function AllProducts() {
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('')
+  // catalog-svc ne renvoie jamais qu'une seule langue à la fois
+  // (WHERE lang = $1, pas de mode "toutes langues") — sans ce filtre,
+  // l'admin ne voyait jamais les produits EN dans cette liste : l'appel
+  // retombait toujours sur le défaut serveur ('fr'), sans aucun moyen de
+  // basculer (bug trouvé le 2026-08-27, catalogue import WooCommerce).
+  const [lang, setLang] = useState<'fr' | 'en'>('fr')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -77,7 +83,7 @@ export function AllProducts() {
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, query, status])
+  }, [page, query, status, lang])
 
   async function load() {
     setLoading(true)
@@ -87,6 +93,7 @@ export function AllProducts() {
         admin: 'true',
         page: String(page),
         page_size: String(PAGE_SIZE),
+        lang,
       })
       if (query.trim()) params.set('q', query.trim())
       if (status) params.set('status', status)
@@ -211,6 +218,17 @@ export function AllProducts() {
                   {o.label}
                 </option>
               ))}
+            </select>
+            <select
+              value={lang}
+              onChange={(e) => {
+                setLang(e.target.value as 'fr' | 'en')
+                setPage(1)
+              }}
+              aria-label="Langue des produits affichés"
+            >
+              <option value="fr">Français</option>
+              <option value="en">Anglais</option>
             </select>
           </div>
 
