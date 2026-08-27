@@ -469,10 +469,19 @@ func fetchProducts(page int, lang string) ([]wcProduct, error) {
 // Variations) : un appel dédié par produit est nécessaire. lang est
 // nécessaire pour rester cohérent avec la paire WPML du produit parent
 // (une variation peut avoir un nom/attributs traduits différemment).
-func fetchVariations(productID int64, lang string) ([]wcVariation, error) {
-	url := fmt.Sprintf("%s/wp-json/wc/v3/products/%d/variations?per_page=100&lang=%s&consumer_key=%s&consumer_secret=%s"+
+// fetchVariations — contrairement aux produits (une ligne par langue), les
+// variations WPML sont marquées lang="all" (neutres, jamais dupliquées) :
+// passer lang=fr/en (ou omettre lang) renvoie systématiquement une liste
+// VIDE, sans erreur, pour tout produit variable dont les variations passent
+// par WPML — confirmé le 2026-08-27 en interrogeant l'API directement
+// (202 produits sur 613 étaient dans ce cas après le premier re-import).
+// lang=all est le seul paramètre qui fonctionne pour cet endpoint précis ;
+// le paramètre lang reçu ici n'est donc plus utilisé, conservé uniquement
+// pour ne pas changer la signature de l'appelant.
+func fetchVariations(productID int64, _ string) ([]wcVariation, error) {
+	url := fmt.Sprintf("%s/wp-json/wc/v3/products/%d/variations?per_page=100&lang=all&consumer_key=%s&consumer_secret=%s"+
 		"&_fields=id,sku,price,stock_quantity,attributes,image",
-		*wcURL, productID, lang, *wcKey, *wcSecret)
+		*wcURL, productID, *wcKey, *wcSecret)
 	var out []wcVariation
 	return out, fetchJSONPaginated(url, &out)
 }
