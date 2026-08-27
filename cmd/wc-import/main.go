@@ -355,7 +355,7 @@ func main() {
 						vendor_id=excluded.vendor_id, category_id=excluded.category_id,
 						name=excluded.name, slug=excluded.slug, description=excluded.description,
 						price_usd=excluded.price_usd, images=excluded.images, status=excluded.status,
-						is_variable=excluded.is_variable
+						is_variable=excluded.is_variable, created_at=excluded.created_at
 					RETURNING id`,
 					p.ID, trid, lang, vendorID, categoryID, p.Name, p.Slug, p.Description,
 					parsePrice(p.Price), imagesJSON, status, isVariable, parseWCDate(p.DateCreated)).Scan(&productID)
