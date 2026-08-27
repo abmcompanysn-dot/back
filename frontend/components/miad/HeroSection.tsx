@@ -9,19 +9,19 @@ import { ChevronLeft, ChevronRight, Truck, Shield, Clock, Headphones } from 'luc
 // 1. Mets ton image dans le dossier /public/banners/
 // 2. Ajoute un objet { id, image, title, highlight, subtitle, cta } dans ce tableau
 //
-// Les 3 slides pointent aujourd'hui vers la MÊME image (2026.webp) — aucun
-// autre visuel n'existe dans le projet (l'ancien logo1.gif avait un
-// filigrane Adobe Stock visible, retiré le 2026-07-10, jamais remplacé par
-// un vrai visuel pour les slides 2 et 3). Signalé le 2026-08-21 : le
-// carrousel tournait bien mais semblait "cassé" car rien ne changeait
-// visuellement à l'oeil. En attendant 3 vraies photos, `bgTint` différencie
-// au moins la couleur de fond par slide.
+// Les 3 slides pointent vers la même image (miad-delivery-banner.webp,
+// visuel de marque MIAD) — remplace 2026.webp le 2026-08-27 : son fond en
+// larges touches de peinture rouge/jaune/vert (couleurs panafricaines)
+// gênait la lisibilité, signalé par le fondateur. bgTint/mix-blend-multiply
+// (qui teintait cette image différemment par slide, seul moyen de les
+// distinguer visuellement tant qu'un seul vrai visuel existe) retiré en
+// même temps — sans plus de raison d'être, et la teinte perturbait aussi
+// les couleurs de la nouvelle image.
 const SLIDES_BY_LANG = {
   fr: [
     {
       id: 'made-in-africa',
-      image: '/logo/2026.webp',
-      bgTint: 'bg-[#7a3a1e]',
+      image: '/promo/miad-delivery-banner.webp',
       title: 'MADE IN AFRICA',
       highlight: '',
       subtitle: 'Produits authentiques du continent africain',
@@ -29,8 +29,7 @@ const SLIDES_BY_LANG = {
     },
     {
       id: 'livraison',
-      image: '/logo/2026.webp',
-      bgTint: 'bg-[#1e4a3a]',
+      image: '/promo/miad-delivery-banner.webp',
       title: 'LIVRAISON',
       highlight: 'MIAD Express',
       subtitle: 'Expédition rapide vers plus de 220 pays',
@@ -38,8 +37,7 @@ const SLIDES_BY_LANG = {
     },
     {
       id: 'vendeurs-verifies',
-      image: '/logo/2026.webp',
-      bgTint: 'bg-[#1e2f4a]',
+      image: '/promo/miad-delivery-banner.webp',
       title: 'VENDEURS VÉRIFIÉS',
       highlight: '100%',
       subtitle: 'Des milliers de boutiques africaines certifiées MIAD',
@@ -49,8 +47,7 @@ const SLIDES_BY_LANG = {
   en: [
     {
       id: 'made-in-africa',
-      image: '/logo/2026.webp',
-      bgTint: 'bg-[#7a3a1e]',
+      image: '/promo/miad-delivery-banner.webp',
       title: 'MADE IN AFRICA',
       highlight: '',
       subtitle: 'Authentic products from the African continent',
@@ -58,8 +55,7 @@ const SLIDES_BY_LANG = {
     },
     {
       id: 'livraison',
-      image: '/logo/2026.webp',
-      bgTint: 'bg-[#1e4a3a]',
+      image: '/promo/miad-delivery-banner.webp',
       title: 'SHIPPING',
       highlight: 'MIAD Express',
       subtitle: 'Fast shipping to more than 220 countries',
@@ -67,8 +63,7 @@ const SLIDES_BY_LANG = {
     },
     {
       id: 'vendeurs-verifies',
-      image: '/logo/2026.webp',
-      bgTint: 'bg-[#1e2f4a]',
+      image: '/promo/miad-delivery-banner.webp',
       title: 'VERIFIED VENDORS',
       highlight: '100%',
       subtitle: 'Thousands of certified African stores on MIAD',
@@ -152,10 +147,8 @@ export function HeroSection(props: HeroSectionProps) {
               idx === current ? 'opacity-100 z-10' : 'opacity-0 z-0'
             }`}
           >
-            {/* Background image — les 3 slides partagent la même image faute
-                de vrais visuels distincts (voir commentaire plus haut) ; le
-                tint colore ci-dessous compense en différenciant chaque
-                slide malgré la photo identique. */}
+            {/* Background image — les 3 slides partagent la même image
+                (voir commentaire plus haut). */}
             <Image
               src={slide.image}
               alt=""
@@ -165,8 +158,6 @@ export function HeroSection(props: HeroSectionProps) {
               className="object-cover"
               draggable={false}
             />
-            <div className={`absolute inset-0 mix-blend-multiply ${slide.bgTint}`} />
-
             {/* Dark gradient overlay on the left for text readability */}
             <div className="absolute inset-0 bg-gradient-to-r from-black/65 via-black/30 to-transparent" />
 
