@@ -55,6 +55,13 @@ data:
   PAYMENT_TIMEOUT_MINUTES: "30"
   OTP_TTL_MINUTES: "5"
   JWT_TTL_HOURS: "72"
+  # PawaPay (mobile money multi-pays) — la clé API elle-même est dans
+  # miad-secrets (PAWAPAY_API_KEY). Ici : environnement + interrupteur.
+  # "sandbox" par défaut, "production" à basculer avant mise en ligne.
+  # PAWAPAY_ENABLED "true" pour activer (l'admin peut aussi le faire depuis
+  # Configuration Système sans redéploiement — priorité à la base).
+  PAWAPAY_ENVIRONMENT: "sandbox"
+  PAWAPAY_ENABLED: ""
   # Stockage objet des images (MinIO, voir 10-infra.yaml) — servi en HTTPS
   # sur son propre domaine img.miadmarket.ca (proxy Caddy vers minio:9000,
   # voir deploy/Caddyfile), jamais exposé directement par IP:9000 en clair.
@@ -90,6 +97,7 @@ stringData:
   PAYDUNYA_MASTER_KEY: ""
   PAYDUNYA_API_KEY_PUBLIC: ""
   PAYDUNYA_API_KEY_PRIVATE: ""
+  PAWAPAY_API_KEY: ""
   FIREBASE_WEB_CLIENT_ID: ""
   STOREFRONT_URL: ""
   SMS_PROVIDER_URL: ""

@@ -86,6 +86,29 @@ la nouvelle route, alors même que le service cible tourne parfaitement.
   `GET /orders/parent/{id}`. `POST /api/orders` renvoie les deux
   (`orderId` = sous-commande, `parentOrderId` = parent) : toujours utiliser
   `parentOrderId` pour construire une URL vers `/order-received`.
+- **PawaPay (mobile money multi-pays, `services/payment-svc/pawapay.go`,
+  ajouté le 2026-08-27)** — alternative à PayDunya, l'un OU l'autre actif
+  (interrupteur admin Configuration → onglet Paiements). Points sensibles :
+  - **Deposit = Payment Page hébergée (`POST /v2/paymentpage`), PAS
+    `/v2/deposits`** : ce dernier exige le MSISDN du payeur dans le corps ;
+    la Payment Page le laisse saisir sur la page PawaPay (comme PayDunya).
+    Réponse = `redirectUrl` où envoyer le navigateur.
+  - **`metadata` est un TABLEAU** `[{fieldName,fieldValue,isPII}]`, jamais
+    un objet plat `{orderId:"..."}` (→ erreur `DUPLICATE_METADATA_FIELD`).
+  - **Webhook (`POST /payments/webhook/pawapay`)** : une seule URL pour
+    deposits + payouts + refunds. Le corps n'est JAMAIS la source de
+    vérité — on en extrait l'id puis on rappelle `GET /v2/deposits/{id}`
+    (etc.) pour le statut authoritatif. Route déjà couverte par
+    `handle /payments/*` du Caddyfile, rien à ajouter côté passerelle.
+  - **Environnement** : `sandbox` vs `production` via le champ settings
+    `pawapay_environment` (PawaPay ne préfixe pas ses clés comme
+    Stripe/PayDunya — impossible de déduire le mode de la clé).
+  - **Devise** : conversion USD→devise locale via
+    `shipping-svc/exchange-rates` en priorité, table figée
+    `pawapayFallbackRates` (`pawapay.go`, datée) en secours. XOF/XAF
+    convertis aussi (le catalogue est en USD réel, pas de parité 1:1).
+  - **Exception Bénin (indicatif 229)** dans `normalizeMSISDN` : le `01`
+    initial fait partie du numéro (réforme 2021), ne pas le retirer.
 
 ---
 

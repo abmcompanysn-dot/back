@@ -55,7 +55,29 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   const shippingRatesConfig = useShippingRates()
   const [step, setStep] = useState<'form' | 'payment' | 'confirm'>('form')
   const [isProcessing, setIsProcessing] = useState(false)
-  const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'paydunya'>('paydunya')
+  // 'mobile_money' est le choix affiché au client ; il est résolu en
+  // 'paydunya' OU 'pawapay' à l'envoi selon le fournisseur actif côté
+  // backend (GET /api/payment-gateways → gateway.enabled). L'admin bascule
+  // entre les deux dans Configuration Système sans toucher au frontend.
+  const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'mobile_money'>('mobile_money')
+  // Fournisseur mobile money réellement actif — 'pawapay' si activé, sinon
+  // 'paydunya' (défaut). Rempli par l'effet ci-dessous.
+  const [mobileMoneyProvider, setMobileMoneyProvider] = useState<'paydunya' | 'pawapay'>('paydunya')
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/payment-gateways')
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return
+        const gw: Array<{ id: string; enabled: boolean }> = data?.gateways || []
+        const pawapayOn = gw.some((g) => g.id === 'pawapay' && g.enabled)
+        setMobileMoneyProvider(pawapayOn ? 'pawapay' : 'paydunya')
+      })
+      .catch(() => {
+        /* repli silencieux sur paydunya — valeur par défaut de l'état */
+      })
+    return () => { cancelled = true }
+  }, [])
   // Lire sessionStorage dans l'initialiseur useState produisait un mismatch
   // d'hydratation (Next.js error #418, même cause que WishlistContext.tsx
   // corrigé le 2026-08-26) : le SSR n'a jamais accès à window (toujours
@@ -307,7 +329,11 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   }
 
   const processFinalOrder = async () => {
-    trackEvent('payment_attempt', { cartValue: total, metadata: { paymentMethod } })
+    // Résout le choix client ('mobile_money') en fournisseur réel envoyé au
+    // backend. 'stripe' passe tel quel.
+    const resolvedMethod: 'stripe' | 'paydunya' | 'pawapay' =
+      paymentMethod === 'stripe' ? 'stripe' : mobileMoneyProvider
+    trackEvent('payment_attempt', { cartValue: total, metadata: { paymentMethod: resolvedMethod } })
     setIsProcessing(true)
     const token = localStorage.getItem('miad_token') || localStorage.getItem('token')
 
@@ -351,7 +377,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          payment_method: paymentMethod,
+          payment_method: resolvedMethod,
           amount: total,
           shipping_total: shippingTotal,
           shipping_method_id: domesticReady ? 'miad_domestic' : (shippingMethod === 'express' ? 'miad_express' : 'miad_standard'),
@@ -396,7 +422,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
       }
 
       // Si c'est Stripe, on affiche le formulaire de carte
-      if (paymentMethod === 'stripe' && data.clientSecret) {
+      if (resolvedMethod === 'stripe' && data.clientSecret) {
         setStripeClientSecret(data.clientSecret);
         setCreatedOrderId(data.orderId);
         setParentOrderIdForRedirect(data.parentOrderId ?? data.orderId);
@@ -406,9 +432,19 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
         // était long et le client scrollé en bas, le formulaire de carte
         // Stripe apparaissait hors écran.
         window.scrollTo(0, 0)
-        trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'payment', paymentMethod } })
+        trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'payment', paymentMethod: resolvedMethod } })
       }
-      else if (paymentMethod === 'paydunya' && data.paydunyaToken) {
+      // PawaPay : page de paiement hébergée — on quitte le site vers l'URL
+      // renvoyée (PawaPay y collecte opérateur + numéro mobile money et
+      // déclenche le push USSD). Le retour se fait sur /order-received
+      // (returnUrl construite côté payment-svc) qui confirme via le webhook.
+      else if (resolvedMethod === 'pawapay' && data.pawapayUrl) {
+        setCreatedOrderId(data.orderId);
+        setParentOrderIdForRedirect(data.parentOrderId ?? data.orderId);
+        trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'redirect', paymentMethod: 'pawapay' } })
+        window.location.href = data.pawapayUrl;
+      }
+      else if (resolvedMethod === 'paydunya' && data.paydunyaToken) {
         setCreatedOrderId(data.orderId);
         setParentOrderIdForRedirect(data.parentOrderId ?? data.orderId);
         // Ouverture de la modal PayDunya via le SDK chargé par Script
@@ -416,18 +452,18 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
           (window as any).PayDunyaCheckout.setup({
             token: data.paydunyaToken,
             onSuccess: () => {
-              trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod } })
+              trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod: 'paydunya' } })
               setStep('confirm');
               window.scrollTo(0, 0)
-              trackEvent('checkout_step', { checkoutStepNumber: 3, metadata: { step: 'confirm', paymentMethod } })
+              trackEvent('checkout_step', { checkoutStepNumber: 3, metadata: { step: 'confirm', paymentMethod: 'paydunya' } })
               setTimeout(onOrderComplete, 5000);
             },
             onFailure: () => {
-              trackEvent('payment_failed', { cartValue: total, paymentFailureReason: 'paydunya_failure', metadata: { paymentMethod } })
+              trackEvent('payment_failed', { cartValue: total, paymentFailureReason: 'paydunya_failure', metadata: { paymentMethod: 'paydunya' } })
               toast.error("Le paiement a échoué. Veuillez réessayer.");
             },
             onClose: () => {
-              trackEvent('cart_abandoned', { cartValue: total, metadata: { step: 'payment', paymentMethod } })
+              trackEvent('cart_abandoned', { cartValue: total, metadata: { step: 'payment', paymentMethod: 'paydunya' } })
               toast("Paiement annulé.");
             }
           });
@@ -438,8 +474,9 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
         }
       }
       else {
-        const methodLabel = paymentMethod === 'stripe' ? 'Stripe' : 'PayDunya';
-        console.error(`[Checkout] Token manquant pour ${methodLabel}`, data);
+        const methodLabel =
+          resolvedMethod === 'stripe' ? 'Stripe' : resolvedMethod === 'pawapay' ? 'PawaPay' : 'PayDunya';
+        console.error(`[Checkout] Réponse d'initialisation incomplète pour ${methodLabel}`, data);
         throw new Error(`Erreur d'initialisation du paiement ${methodLabel}. Veuillez vérifier la configuration serveur.`);
       }
     } catch (err: any) {
@@ -558,7 +595,7 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                   orderId={createdOrderId || 0}
                   redirectOrderId={parentOrderIdForRedirect || createdOrderId || 0}
                   onFallback={() => {
-                    setPaymentMethod('paydunya');
+                    setPaymentMethod('mobile_money');
                     setStep('form');
                     window.scrollTo(0, 0)
                     toast("Choisissez un autre mode de paiement ci-dessous.");
@@ -833,11 +870,15 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
 
                     {/* Options de paiement toujours visibles (pas de repli sur mobile) */}
                     <div className="space-y-3">
-                      {/* Option PayDunya (Mobile Money) */}
+                      {/* Option Mobile Money — le fournisseur réel (PawaPay ou
+                          PayDunya) est choisi côté admin ; le client voit juste
+                          "Mobile Money". Le choix de l'opérateur + la saisie du
+                          numéro se font sur la page/modal du fournisseur après
+                          ce bouton. */}
                       <button
                         type="button"
-                        onClick={() => setPaymentMethod('paydunya')}
-                        className={`w-full p-5 bg-white rounded-3xl border-2 transition-all flex items-center gap-4 ${paymentMethod === 'paydunya' ? 'border-accent shadow-md' : 'border-slate-100 hover:border-accent/30'}`}
+                        onClick={() => setPaymentMethod('mobile_money')}
+                        className={`w-full p-5 bg-white rounded-3xl border-2 transition-all flex items-center gap-4 ${paymentMethod === 'mobile_money' ? 'border-accent shadow-md' : 'border-slate-100 hover:border-accent/30'}`}
                       >
                         <div className="flex gap-1 shrink-0 flex-wrap max-w-[100px] justify-center">
                           <Image src="/logo/om.png" alt="OM" width={24} height={24} className="h-6 w-auto object-contain bg-white rounded-sm border border-border/20" />
@@ -848,10 +889,10 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                           <Image src="/logo/we.png" alt="WE" width={24} height={24} className="h-6 w-auto object-contain bg-white rounded-sm border border-border/20" />
                         </div>
                         <div className="text-left flex-1">
-                          <p className="font-black text-foreground text-xs uppercase tracking-tighter">Mobile Money (PayDunya)</p>
-                          <p className="text-[10px] text-muted-foreground mt-1 font-bold">Wave, Orange Money, MTN, Moov, Djamo...</p>
+                          <p className="font-black text-foreground text-xs uppercase tracking-tighter">Mobile Money</p>
+                          <p className="text-[10px] text-muted-foreground mt-1 font-bold">Wave, Orange Money, MTN, Moov, M-Pesa, Airtel...</p>
                         </div>
-                        {paymentMethod === 'paydunya' && (
+                        {paymentMethod === 'mobile_money' && (
                           <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center text-white shrink-0">
                             <CheckCircle size={16} />
                           </div>
@@ -862,10 +903,9 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                           arrière-plan pendant la validation du paiement, sinon
                           l'autorisation n'aboutit pas — pas nécessaire pour Wave et les
                           autres opérateurs (demandé le 2026-08-01). Le choix du sous-canal
-                          (Wave/OM/Maxit/...) se fait dans la modal PayDunya après ce
-                          bouton, donc le conseil couvre les deux cas plutôt qu'un
-                          sélecteur conditionnel ici. */}
-                      {paymentMethod === 'paydunya' && (
+                          se fait sur la page du fournisseur après ce bouton, donc le
+                          conseil couvre les deux cas plutôt qu'un sélecteur conditionnel. */}
+                      {paymentMethod === 'mobile_money' && (
                         <div className="flex items-start gap-2.5 px-4 py-3 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-800 font-bold leading-snug">
                           <AlertCircle size={15} className="shrink-0 mt-0.5 text-amber-600" />
                           <span>

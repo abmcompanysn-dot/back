@@ -41,6 +41,9 @@ const TABS: ServiceTab[] = [
       { key: 'paydunya_token', label: 'Token PayDunya', secret: true, hint: 'Dashboard PayDunya → Intégrez notre API → Token (obligatoire, distinct des 3 clés ci-dessus)' },
       { key: 'paydunya_api_base', label: 'URL de base API PayDunya' },
       { key: 'paydunya_enabled', label: 'PayDunya activé', hint: '"false" pour désactiver PayDunya côté site sans effacer la clé — toute autre valeur (ou vide) = activé' },
+      { key: 'pawapay_api_key', label: 'Clé API PawaPay', secret: true, hint: 'Bearer token PawaPay (mobile money multi-pays Afrique) — Dashboard PawaPay → API tokens' },
+      { key: 'pawapay_environment', label: 'Environnement PawaPay', hint: '"sandbox" (défaut, développement) ou "production" (argent réel) — bascule explicite avant mise en ligne' },
+      { key: 'pawapay_enabled', label: 'PawaPay activé', hint: '"true" pour activer PawaPay — désactivé par défaut. Sert d’interrupteur PawaPay ⇄ PayDunya (voir le sélecteur Mobile Money en haut de cet onglet)' },
       { key: 'storefront_url', label: 'URL du site public', hint: 'Utilisée pour les liens de retour après paiement' },
     ],
   },
@@ -129,6 +132,14 @@ const WEBHOOKS_BY_TAB: Record<string, { label: string; url: string; hint?: strin
   payment: [
     { label: 'Stripe', url: `${WEBHOOK_BASE}/payments/webhook/stripe`, hint: 'Dashboard Stripe → Developers → Webhooks → Add endpoint' },
     { label: 'PayDunya', url: `${WEBHOOK_BASE}/payments/webhook/paydunya`, hint: 'Dashboard PayDunya → configuration IPN/callback' },
+    // PawaPay expose TROIS réglages de callback distincts dans son
+    // dashboard (deposits / payouts / refunds) — mais la même URL va dans
+    // les trois : le handler route selon l'id présent dans le corps
+    // (depositId / payoutId / refundId). On liste les trois pour que
+    // l'admin sache qu'il faut coller l'URL aux trois endroits.
+    { label: 'PawaPay — Deposit callback', url: `${WEBHOOK_BASE}/payments/webhook/pawapay`, hint: 'Dashboard PawaPay → Settings → Callbacks → Deposit callback URL' },
+    { label: 'PawaPay — Payout callback', url: `${WEBHOOK_BASE}/payments/webhook/pawapay`, hint: 'Dashboard PawaPay → Settings → Callbacks → Payout callback URL (même URL)' },
+    { label: 'PawaPay — Refund callback', url: `${WEBHOOK_BASE}/payments/webhook/pawapay`, hint: 'Dashboard PawaPay → Settings → Callbacks → Refund callback URL (même URL)' },
   ],
   email: [
     { label: 'Resend (statuts d’envoi)', url: `${WEBHOOK_BASE}/webhooks/resend`, hint: 'Dashboard Resend → Webhooks' },
@@ -157,7 +168,7 @@ function WebhookUrls({ tab }: { tab: string }) {
       <h3 style={{ marginTop: 0, fontSize: 14 }}>URLs de webhook</h3>
       <div className="form-grid">
         {hooks.map((h) => (
-          <div className="form-field full" key={h.url}>
+          <div className="form-field full" key={h.label}>
             <label>{h.label}</label>
             <div style={{ display: 'flex', gap: 8 }}>
               <input type="text" readOnly value={h.url} style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }} />
@@ -169,6 +180,86 @@ function WebhookUrls({ tab }: { tab: string }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// MobileMoneyProviderSwitch — raccourci en haut de l'onglet Paiements :
+// un seul geste pour basculer entre PayDunya et PawaPay comme fournisseur
+// mobile money actif côté site, sans avoir à éditer les deux champs
+// "*_enabled" à la main. Écrit paydunya_enabled + pawapay_enabled en une
+// requête. Les clés API restent en place (rien n'est effacé).
+function MobileMoneyProviderSwitch({
+  snapshot,
+  onSaved,
+}: {
+  snapshot: Record<string, unknown> | null
+  onSaved: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  if (!snapshot) return null
+
+  // pawapay_enabled === "true" => PawaPay actif. Sinon => PayDunya
+  // (comportement par défaut historique, actif sauf "false" explicite).
+  const pawapayActive = String(snapshot['pawapay_enabled'] ?? '') === 'true'
+  const active: 'paydunya' | 'pawapay' = pawapayActive ? 'pawapay' : 'paydunya'
+
+  async function switchTo(provider: 'paydunya' | 'pawapay') {
+    if (provider === active || busy) return
+    setBusy(true)
+    setErr(null)
+    try {
+      await api.put(settingsPath('payment'), {
+        paydunya_enabled: provider === 'paydunya' ? 'true' : 'false',
+        pawapay_enabled: provider === 'pawapay' ? 'true' : 'false',
+      })
+      onSaved()
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'échec du changement')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="form-card" style={{ marginBottom: 16 }}>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Fournisseur Mobile Money actif</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Un seul fournisseur mobile money est proposé aux clients au paiement. Stripe (carte) n’est pas
+        concerné et reste géré séparément par « Stripe activé ».
+      </p>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          type="button"
+          className={active === 'paydunya' ? 'btn-primary' : 'btn-ghost'}
+          disabled={busy}
+          onClick={() => switchTo('paydunya')}
+        >
+          {active === 'paydunya' ? '● PayDunya (actif)' : 'Activer PayDunya'}
+        </button>
+        <button
+          type="button"
+          className={active === 'pawapay' ? 'btn-primary' : 'btn-ghost'}
+          disabled={busy}
+          onClick={() => switchTo('pawapay')}
+        >
+          {active === 'pawapay' ? '● PawaPay (actif)' : 'Activer PawaPay'}
+        </button>
+      </div>
+      {active === 'pawapay' && String(snapshot['pawapay_environment'] ?? 'sandbox') !== 'production' && (
+        <p className="hint" style={{ color: '#b45309', fontWeight: 600, marginBottom: 0 }}>
+          ⚠ PawaPay est en mode « sandbox » — aucun paiement réel ne sera encaissé. Passez
+          « pawapay_environment » à « production » ci-dessous avant la mise en ligne.
+        </p>
+      )}
+      {active === 'pawapay' && !snapshot['pawapay_api_key_configured'] && (
+        <p className="hint" style={{ color: '#b42318', fontWeight: 600, marginBottom: 0 }}>
+          ⚠ Aucune clé API PawaPay enregistrée — les paiements mobile money échoueront tant qu’elle
+          n’est pas renseignée ci-dessous.
+        </p>
+      )}
+      {err && <p className="error-text" style={{ marginBottom: 0 }}>{err}</p>}
     </div>
   )
 }
@@ -260,6 +351,16 @@ export function Configuration() {
 
       {error && <p className="error-text">{error}</p>}
       {notice && <p className="hint" style={{ color: '#1a7f37', fontWeight: 600 }}>{notice}</p>}
+
+      {tab === 'payment' && (
+        <MobileMoneyProviderSwitch
+          snapshot={snapshot}
+          onSaved={() => {
+            setNotice('Fournisseur mobile money mis à jour.')
+            api.get<Record<string, unknown>>(settingsPath('payment')).then(setSnapshot).catch(() => {})
+          }}
+        />
+      )}
 
       <WebhookUrls tab={tab} />
 

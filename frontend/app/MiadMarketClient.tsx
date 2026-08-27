@@ -394,6 +394,31 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     return () => controller.abort()
   }, [forcedView, forcedProductSlug, selectedProduct])
 
+  // Bascule FR/EN pendant qu'une fiche produit est affichée : sans ceci, le
+  // switcher du Header changeait `language` (état global) mais la fiche
+  // produit restait figée dans sa langue de chargement initial — le
+  // sélecteur "marchait" visuellement mais le produit affiché ne suivait
+  // jamais (signalé le 27/08). catalog-svc expose déjà `translationOfId`
+  // (voir linked.id dans getProduct, main.go) : un seul aller simple par
+  // ID, pas de nouvelle recherche par slug, la fiche ne disparaît jamais
+  // pendant le fetch (l'ancienne reste affichée jusqu'à ce que la nouvelle
+  // soit prête).
+  useEffect(() => {
+    if (currentView !== 'product' || !selectedProduct) return
+    if (selectedProduct.lang === language) return
+    const targetId = selectedProduct.translationOfId
+    if (!targetId) return
+    const controller = new AbortController()
+    fetch(`/api/products?id=${targetId}&lang=${language}`, { signal: controller.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const p = data?.products?.[0]
+        if (p) setSelectedProduct(p)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [language, currentView, selectedProduct])
+
   // --- RETOUR STRIPE 3D SECURE ---
   useEffect(() => {
     if (!stripeReturn?.orderId) return

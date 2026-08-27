@@ -62,6 +62,7 @@ interface Draft {
   low_stock_threshold: string
   backorders_allowed: boolean
   images: string[]
+  tags: string[]
   weight_kg: string
   length_cm: string
   width_cm: string
@@ -84,6 +85,7 @@ const EMPTY: Draft = {
   low_stock_threshold: '3',
   backorders_allowed: false,
   images: [],
+  tags: [],
   weight_kg: '',
   length_cm: '',
   width_cm: '',
@@ -169,6 +171,7 @@ export function ProductForm() {
         low_stock_threshold: String(p.low_stock_threshold ?? 3),
         backorders_allowed: !!p.backorders_allowed,
         images: (p.images || []).map((im: { src: string } | string) => (typeof im === 'string' ? im : im.src)),
+        tags: p.tags || [],
         weight_kg: p.weight_kg ? String(p.weight_kg) : '',
         length_cm: p.length_cm ? String(p.length_cm) : '',
         width_cm: p.width_cm ? String(p.width_cm) : '',
@@ -291,6 +294,7 @@ export function ProductForm() {
       low_stock_threshold: Number(draft.low_stock_threshold || 3),
       backorders_allowed: draft.backorders_allowed,
       images: draft.images,
+      tags: draft.tags,
       weight_kg: draft.weight_kg ? Number(draft.weight_kg) : undefined,
       length_cm: draft.length_cm ? Number(draft.length_cm) : undefined,
       width_cm: draft.width_cm ? Number(draft.width_cm) : undefined,
@@ -357,6 +361,7 @@ export function ProductForm() {
           barcode: draft.barcode,
           stock: Number(draft.stock || 0),
           images: draft.images,
+          tags: draft.tags,
           is_variable: draft.product_type === 'variable',
           variations: draft.product_type === 'variable'
             ? draft.variations.map((v) => ({
@@ -509,6 +514,23 @@ export function ProductForm() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="form-field full">
+              <label>Tags de recherche</label>
+              <input
+                value={draft.tags.join(', ')}
+                onChange={(e) =>
+                  set(
+                    'tags',
+                    e.target.value
+                      .split(',')
+                      .map((t) => t.trim())
+                      .filter(Boolean)
+                  )
+                }
+                placeholder="ex. bio, artisanal, fait main"
+              />
+              <span className="hint">Séparez les tags par une virgule — utilisés pour la recherche et le filtrage côté client.</span>
             </div>
           </div>
         )}
