@@ -292,7 +292,14 @@ export function AllProducts() {
                         )}
                       </td>
                       <td>
-                        <div className="cell-primary">{p.name}</div>
+                        <div className="cell-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {p.name}
+                          {p.type === 'variable' && (
+                            <span className="badge badge-blue" title="Ce produit a des variantes (couleur, taille…)">
+                              Variable
+                            </span>
+                          )}
+                        </div>
                         <div className="cell-secondary">{p.sku || '—'}</div>
                       </td>
                       <td>

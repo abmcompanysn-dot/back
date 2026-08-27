@@ -364,7 +364,14 @@ func main() {
 					continue
 				}
 
-				if isVariable && len(p.Variations) > 0 {
+				// Toujours interroger l'endpoint dédié pour un produit variable,
+				// sans se fier à p.Variations (liste d'IDs renvoyée par
+				// /products) : ce champ s'est révélé vide/absent pour environ
+				// un tiers des vrais produits variables lors de la migration
+				// réelle du 2026-08-27 (202 produits marqués is_variable=true
+				// mais 0 ligne product_variations), alors que l'endpoint
+				// wc/v3/products/{id}/variations renvoyait bien des données.
+				if isVariable {
 					variations, vErr := fetchVariations(p.ID, lang)
 					if vErr != nil {
 						log.Error("lecture variations", "product_id", p.ID, "err", vErr)
