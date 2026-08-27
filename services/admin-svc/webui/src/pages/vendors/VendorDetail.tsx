@@ -4,6 +4,7 @@ import { ApiError, api } from '../../lib/api'
 import { StatusBadge } from '../../components/StatusBadge'
 import { EmptyState } from '../../components/EmptyState'
 import { IconCatalog, IconOrders } from '../../components/Icons'
+import { ImageUploadField } from '../../components/ImageUploadField'
 
 interface VendorFull {
   id: number
@@ -218,16 +219,18 @@ export function VendorDetail() {
               <label>Adresse</label>
               <input defaultValue={vendor.address} onBlur={(e) => e.target.value !== vendor.address && patch({ address: e.target.value })} />
             </div>
-            <div className="form-field">
-              <label>Logo</label>
-              {vendor.logo_url && <img className="thumb" src={vendor.logo_url} alt="" style={{ marginBottom: 6 }} />}
-              <input defaultValue={vendor.logo_url} onBlur={(e) => e.target.value !== vendor.logo_url && patch({ logo_url: e.target.value })} />
-            </div>
-            <div className="form-field">
-              <label>Bannière</label>
-              {vendor.banner_url && <img className="thumb" src={vendor.banner_url} alt="" style={{ marginBottom: 6, width: 90 }} />}
-              <input defaultValue={vendor.banner_url} onBlur={(e) => e.target.value !== vendor.banner_url && patch({ banner_url: e.target.value })} />
-            </div>
+            <ImageUploadField
+              label="Logo"
+              value={vendor.logo_url}
+              prefix="vendors"
+              onChange={(url) => { patch({ logo_url: url }); setVendor({ ...vendor, logo_url: url }) }}
+            />
+            <ImageUploadField
+              label="Bannière"
+              value={vendor.banner_url}
+              prefix="vendors"
+              onChange={(url) => { patch({ banner_url: url }); setVendor({ ...vendor, banner_url: url }) }}
+            />
           </div>
         )}
 

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../../lib/api'
 import { VendorNav } from './VendorNav'
+import { ImageUploadField } from '../../components/ImageUploadField'
 
 const EMPTY = { name: '', email: '', phone: '', country: '', city: '', logo_url: '' }
 
@@ -59,10 +60,12 @@ export function NewVendor() {
             <label>Ville</label>
             <input value={draft.city} onChange={(e) => setDraft({ ...draft, city: e.target.value })} />
           </div>
-          <div className="form-field">
-            <label>Logo (URL)</label>
-            <input value={draft.logo_url} onChange={(e) => setDraft({ ...draft, logo_url: e.target.value })} placeholder="https://img.miadmarket.ca/..." />
-          </div>
+          <ImageUploadField
+            label="Logo"
+            value={draft.logo_url}
+            prefix="vendors"
+            onChange={(url) => setDraft({ ...draft, logo_url: url })}
+          />
         </div>
         <p className="hint" style={{ marginTop: 12 }}>
           Aucun compte client (identifiants de connexion) n'est créé automatiquement — utilisez la
