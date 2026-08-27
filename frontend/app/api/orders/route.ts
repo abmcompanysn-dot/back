@@ -52,8 +52,8 @@ export async function POST(request: Request) {
     if (!Array.isArray(lines) || lines.length === 0) {
       return NextResponse.json({ error: 'Le panier est vide' }, { status: 400 })
     }
-    if (payment_method !== 'stripe' && payment_method !== 'paydunya') {
-      return NextResponse.json({ error: 'payment_method doit être stripe ou paydunya' }, { status: 400 })
+    if (payment_method !== 'stripe' && payment_method !== 'paydunya' && payment_method !== 'pawapay') {
+      return NextResponse.json({ error: 'payment_method doit être stripe, paydunya ou pawapay' }, { status: 400 })
     }
 
     const orderRes = await fetch(`${ORDER_SVC_URL}/orders`, {
@@ -91,12 +91,23 @@ export async function POST(request: Request) {
     // chaque vendeur séparément). payments.order_id est désormais indexé
     // sur parentOrderId, donc l'appel se fait directement avec lui — plus
     // besoin d'itérer sur vendorOrders ici.
+    // PawaPay : payment-svc a besoin du pays de l'acheteur (devise + URL de
+    // retour) et, en valeur par défaut facultative, de son téléphone —
+    // repris de l'adresse de livraison déjà saisie au checkout. Ignorés
+    // pour Stripe/PayDunya.
+    const initBody: Record<string, unknown> = { order_id: parentOrderId }
+    if (payment_method === 'pawapay') {
+      initBody.buyer_country = shipping?.country || billing?.country || ''
+      initBody.buyer_phone = shipping?.phone || billing?.phone || ''
+      initBody.buyer_email = billing?.email || ''
+    }
+
     let payment: any = null
     for (let attempt = 0; attempt < 5; attempt++) {
       const res = await fetch(`${PAYMENT_SVC_URL}/payments/init`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_id: parentOrderId }),
+        body: JSON.stringify(initBody),
       })
       if (res.ok) {
         payment = await res.json()
@@ -118,6 +129,10 @@ export async function POST(request: Request) {
       // concept Stripe), paydunyaUrl = redirect_url.
       paydunyaToken: payment?.payment?.provider_ref,
       paydunyaUrl: payment?.redirect_url,
+      // PawaPay : page de paiement hébergée — on redirige simplement le
+      // navigateur vers cette URL (PawaPay y collecte l'opérateur + le
+      // numéro mobile money du client et déclenche le push USSD).
+      pawapayUrl: payment_method === 'pawapay' ? payment?.redirect_url : undefined,
     })
   } catch (error: any) {
     return NextResponse.json(

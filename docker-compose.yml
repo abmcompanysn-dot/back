@@ -100,6 +100,8 @@ services:
     environment:
       DATABASE_URL_PAYMENT: ${DATABASE_URL_PAYMENT}
       PORT_PAYMENT: "8084"
+    # STRIPE_*, PAYDUNYA_*, PAWAPAY_* : chargés via env_file (.env) de
+    # *service-defaults, comme les autres secrets tiers — pas listés ici.
     ports: ["127.0.0.1:8084:8084"]
 
   shipping-svc:
