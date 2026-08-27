@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Trigger embeddings sync
         run: |
-          curl -sf --max-time 300 -X POST "https://miadmarket.com/api/admin/embeddings" \
+          curl -sf --max-time 300 -X POST "https://miadmarket.ca/api/admin/embeddings" \
             -H "X-Internal-Secret: ${{ secrets.INTERNAL_API_SECRET }}" \
             -H "Content-Type: application/json" \
             -d '{"all": true}'
