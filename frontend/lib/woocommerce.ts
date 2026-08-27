@@ -294,6 +294,14 @@ export interface WooProduct {
   tags?: string[]
   weight?: number
   dimensions?: any
+  // weightKg/lengthCm/widthCm/heightCm — champs réels catalog-svc, relayés
+  // par /api/products depuis le 2026-08-27 (distincts de weight/dimensions
+  // ci-dessus, jamais câblés). Utilisés par la section "Caractéristiques"
+  // de ProductDetail.tsx.
+  weightKg?: number
+  lengthCm?: number
+  widthCm?: number
+  heightCm?: number
   salesCount?: number
   rating?: number
   reviewsCount?: number

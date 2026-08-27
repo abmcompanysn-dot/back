@@ -976,21 +976,46 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
                   <h3 className="font-black text-sm uppercase tracking-widest">Caractéristiques</h3>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {product.attributes && product.attributes.length > 0 ? (
+                  {/* Le message de repli ne s'affiche que si TOUT est vide —
+                      avant, il s'affichait dès que product.attributes était
+                      vide même si Origine/Boutique/Poids/Dimensions avaient
+                      quelque chose à montrer juste en dessous (incohérent). */}
+                  {!(product.attributes && product.attributes.length > 0) &&
+                    !product.country && !product.vendor?.name &&
+                    product.weightKg == null && product.lengthCm == null &&
+                    product.widthCm == null && product.heightCm == null && !product.sku && (
+                      <p className="text-muted-foreground col-span-full">Aucune spécification technique disponible.</p>
+                    )}
+                  {product.attributes && product.attributes.length > 0 &&
                     product.attributes.map((attr) => (
                       <div key={attr.name} className="flex justify-between py-3 border-b">
                         <span className="text-muted-foreground">{attr.name}</span>
                         <span className="font-medium">{attr.options.join(', ')}</span>
                       </div>
-                    ))
-                  ) : (
-                    <p className="text-muted-foreground col-span-full">Aucune spécification technique disponible.</p>
-                  )}
+                    ))}
                   {product.country && (
                     <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Origine</span><span className="font-medium">{product.country}</span></div>
                   )}
                   {product.vendor?.name && (
                     <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">{t.soldBy || 'Boutique'}</span><span className="font-medium">{product.vendor.name}</span></div>
+                  )}
+                  {/* Poids/dimensions — renseignés par le vendeur (onglet
+                      Livraison de la fiche produit admin), jamais affichés
+                      côté client avant le 2026-08-27 (le champ n'était même
+                      pas relayé par /api/products). */}
+                  {product.weightKg != null && (
+                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Poids</span><span className="font-medium">{product.weightKg} kg</span></div>
+                  )}
+                  {(product.lengthCm != null || product.widthCm != null || product.heightCm != null) && (
+                    <div className="flex justify-between py-3 border-b">
+                      <span className="text-muted-foreground">Dimensions</span>
+                      <span className="font-medium">
+                        {[product.lengthCm, product.widthCm, product.heightCm].filter((v) => v != null).join(' × ')} cm
+                      </span>
+                    </div>
+                  )}
+                  {product.sku && (
+                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Référence</span><span className="font-medium">{product.sku}</span></div>
                   )}
                 </div>
               </div>

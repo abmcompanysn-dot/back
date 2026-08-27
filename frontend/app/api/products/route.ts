@@ -337,6 +337,15 @@ export async function GET(req: Request) {
         stock: p.stock ?? 0,
         inStock: (p.stock ?? 0) > 0 || p.status === 'active',
         manageStock: true,
+        // weight_kg/length_cm/width_cm/height_cm — exposés par GET
+        // /products/{id} (catalog-svc) mais jamais relayés ici jusqu'au
+        // 2026-08-27 : la section "Caractéristiques" de ProductDetail.tsx
+        // n'affichait donc jamais ces specs pour aucun produit, même
+        // quand elles étaient bien renseignées en base côté vendeur.
+        weightKg: p.weight_kg ?? undefined,
+        lengthCm: p.length_cm ?? undefined,
+        widthCm: p.width_cm ?? undefined,
+        heightCm: p.height_cm ?? undefined,
         rating: 0,
         salesCount: 0,
         lang: (lang || p.lang || 'fr') as 'fr' | 'en',
