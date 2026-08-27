@@ -220,6 +220,7 @@ func main() {
 		mux.HandleFunc("PATCH /customer/{id}/address", s.updateCustomerAddress)          // secret interne exigé
 		mux.HandleFunc("GET /admins", s.listAdmins)                                      // role admin exigé
 		mux.HandleFunc("GET /internal/admin-emails", s.listAdminEmails)                  // secret interne exigé
+		mux.HandleFunc("GET /internal/customer-emails", s.listCustomerEmails)            // secret interne exigé
 		mux.HandleFunc("POST /admins", s.createAdmin)                                    // role admin exigé
 		mux.HandleFunc("PATCH /admins/{id}/active", s.setAdminActive)                    // role admin exigé
 		mux.HandleFunc("PATCH /admins/{id}/role", s.setAdminRole)                        // role admin exigé
@@ -1061,6 +1062,53 @@ func (s *server) listCustomers(w http.ResponseWriter, r *http.Request) {
 			item["vendor_id"] = *vendorID
 		}
 		items = append(items, item)
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
+// listCustomerEmails — GET /internal/customer-emails?page=&page_size=,
+// surface minimale (juste l'email, comme listAdminEmails) pour qu'
+// email-svc puisse diffuser un message à tous les clients (module
+// broadcast admin) sans JWT admin — c'est un appel service-à-service.
+// Protégé exclusivement par le secret interne, jamais de repli JWT
+// (aucun humain n'appelle cette route).
+func (s *server) listCustomerEmails(w http.ResponseWriter, r *http.Request) {
+	if s.internalAPISecretStr == "" || r.Header.Get("X-Internal-Secret") != s.internalAPISecretStr {
+		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
+		return
+	}
+	page, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page_size"), "100"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 100
+	}
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM customers WHERE email IS NOT NULL AND email != ''").Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT email FROM customers WHERE email IS NOT NULL AND email != ''
+		ORDER BY id LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize))
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{"email": email})
 	}
 	kit.JSON(w, 200, map[string]any{
 		"items": items, "page": page, "page_size": pageSize,
