@@ -178,7 +178,7 @@ export function CartPage({
   }
 
   return (
-    <main className="min-h-screen bg-muted/30 py-8">
+    <main className="min-h-screen bg-muted/30 py-8 pb-28 lg:pb-8">
       <div className="container mx-auto px-4">
         <button
           type="button"
@@ -421,6 +421,11 @@ export function CartPage({
                 </div>
               </div>
 
+              {/* Desktop uniquement (lg+) — sur mobile le bouton est dans la
+                  barre fixe ci-dessous, pas ici, sinon il faut défiler toute
+                  la carte résumé (sous-total + livraison + ville) pour
+                  l'atteindre. Signalé le 2026-08-27 : "on doit défiler tout
+                  en bas pour confirmer". */}
               <Button
                 onClick={() => {
                   if (typeof window !== 'undefined') {
@@ -428,16 +433,41 @@ export function CartPage({
                   }
                   onCheckout()
                 }}
-                className="w-full py-6 bg-accent text-accent-foreground hover:bg-accent/90 font-bold"
+                className="hidden lg:flex w-full py-6 bg-accent text-accent-foreground hover:bg-accent/90 font-bold"
               >
                 Procéder au paiement
               </Button>
 
-              <p className="text-xs text-muted-foreground text-center mt-3">
+              <p className="hidden lg:block text-xs text-muted-foreground text-center mt-3">
                 Paiement sécurisé · Wave · Orange Money · Carte
               </p>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Barre de paiement fixe (mobile/tablette uniquement) — toujours
+          visible sans avoir à défiler, contrairement au bouton dans la
+          carte résumé ci-dessus (masqué sur cette taille d'écran). pb-24
+          sur le conteneur principal (voir plus haut) réserve la place pour
+          ne pas que cette barre recouvre le bas du contenu. */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-card border-t border-border px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-[10px] text-muted-foreground font-medium">Total</p>
+            <p className="text-lg font-black text-accent">{fp(total)}</p>
+          </div>
+          <Button
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                sessionStorage.setItem('miad_shipping_method', shippingMethod)
+              }
+              onCheckout()
+            }}
+            className="flex-1 py-6 bg-accent text-accent-foreground hover:bg-accent/90 font-bold"
+          >
+            Procéder au paiement
+          </Button>
         </div>
       </div>
     </main>
