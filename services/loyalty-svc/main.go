@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/json"
@@ -136,6 +137,7 @@ type server struct {
 	kafka     sarama.SyncProducer
 	vendorURL string
 	orderURL  string
+	emailURL  string
 
 	settings *kit.SettingsStore
 	// Champs pointés par settings (voir NewSettingsStore) — mêmes garanties
@@ -191,6 +193,7 @@ func main() {
 		kafka:     kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
 		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		emailURL:  kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
 
 		twilioAccountSID:   kit.Env("TWILIO_ACCOUNT_SID", ""),
 		twilioAuthToken:    kit.Env("TWILIO_AUTH_TOKEN", ""),
@@ -1157,18 +1160,21 @@ func (s *server) notifyOrderProcessing(ctx context.Context, log *slog.Logger, or
 	totalFmt := fmt.Sprintf("%.2f $", order.TotalUSD)
 
 	// ---------- Représentant(s) du pays + super-représentants ----------
-	if s.twilioEnableRep == "yes" {
-		rows, err := s.db.Query(ctx,
-			"SELECT whatsapp FROM representatives WHERE (country = $1 AND is_super_rep = FALSE) OR is_super_rep = TRUE",
-			vendor.Country)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var wa *string
-				_ = rows.Scan(&wa)
-				if wa == nil || *wa == "" {
-					continue
-				}
+	// Email et WhatsApp partagent la même résolution (même destinataires,
+	// mêmes variables déjà calculées ci-dessus) — envoyés indépendamment
+	// l'un de l'autre : un échec WhatsApp ne doit jamais bloquer l'email
+	// et vice-versa.
+	rows, err := s.db.Query(ctx,
+		"SELECT whatsapp, email, is_super_rep FROM representatives WHERE (country = $1 AND is_super_rep = FALSE) OR is_super_rep = TRUE",
+		vendor.Country)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var wa, email *string
+			var isSuper bool
+			_ = rows.Scan(&wa, &email, &isSuper)
+
+			if s.twilioEnableRep == "yes" && wa != nil && *wa != "" {
 				fallback := fmt.Sprintf("🛒 *Nouvelle commande #%s*\nBoutique : %s\nClient : %s\nMontant : *%s*\nAdresse : %s\nProduits : %s",
 					order.Reference, vendor.Name, addr.fullName(), totalFmt, addr.oneLine(), productsSummary)
 				s.sendWhatsApp(ctx, *wa, "representative", &orderID, s.twilioTemplateRepNewOrder, map[string]string{
@@ -1179,6 +1185,21 @@ func (s *server) notifyOrderProcessing(ctx context.Context, log *slog.Logger, or
 					"5": addr.oneLine(),
 					"6": productsSummary,
 				}, fallback)
+			}
+
+			if email != nil && *email != "" {
+				zone := vendor.Country
+				if isSuper {
+					zone = "toutes zones"
+				}
+				s.sendRepEmail(ctx, log, *email, order.Reference, zone, map[string]any{
+					"order_id":         order.Reference,
+					"rep_zone":         zone,
+					"vendor_name":      vendor.Name,
+					"total_usd":        totalFmt,
+					"customer_name":    addr.fullName(),
+					"shipping_summary": addr.oneLine(),
+				})
 			}
 		}
 	}
@@ -1199,6 +1220,34 @@ func (s *server) notifyOrderProcessing(ctx context.Context, log *slog.Logger, or
 				"5": addr.oneLine(),
 			}, fallback)
 		}
+	}
+}
+
+// sendRepEmail — POST /emails/send sur email-svc (endpoint public générique,
+// même pattern qu'auth-svc.sendOTPEmail), template "rep_new_order" déjà
+// seedé côté email-svc. Best effort : jamais bloquant pour le reste du
+// traitement Kafka — une erreur est journalisée, jamais propagée.
+func (s *server) sendRepEmail(ctx context.Context, log *slog.Logger, to, orderRef, zone string, payload map[string]any) {
+	body, _ := json.Marshal(map[string]any{
+		"to":       to,
+		"subject":  fmt.Sprintf("Nouvelle commande #%s — %s", orderRef, zone),
+		"template": "rep_new_order",
+		"payload":  payload,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.emailURL+"/emails/send", bytes.NewReader(body))
+	if err != nil {
+		log.Error("email représentant: requête invalide", "err", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Error("email représentant: email-svc injoignable", "err", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Error("email représentant: refusé par email-svc", "status", resp.StatusCode)
 	}
 }
 
