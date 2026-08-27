@@ -47,10 +47,10 @@ CREATE TABLE IF NOT EXISTS payments (
   -- commandes à la confirmation, et creditVendorWallet (plus bas) est
   -- toujours appelé une fois par sous-commande avec SON propre montant.
   order_id     BIGINT NOT NULL,
-  provider     TEXT NOT NULL CHECK (provider IN ('stripe','paydunya')),
-  provider_ref TEXT DEFAULT '',
-  client_secret TEXT DEFAULT '', -- Stripe PaymentIntent uniquement (Elements embarqué) ; jamais rempli pour PayDunya
-  redirect_url TEXT DEFAULT '',
+  provider     TEXT NOT NULL CHECK (provider IN ('stripe','paydunya','pawapay')),
+  provider_ref TEXT DEFAULT '', -- Stripe: pi_... | PayDunya: token facture | PawaPay: depositId (UUID v4, aussi clé d'idempotence + corrélation webhook)
+  client_secret TEXT DEFAULT '', -- Stripe PaymentIntent uniquement (Elements embarqué) ; jamais rempli pour PayDunya/PawaPay
+  redirect_url TEXT DEFAULT '', -- PayDunya (URL facture) ET PawaPay (URL Payment Page hébergée) ; jamais rempli pour Stripe
   amount_usd   DOUBLE PRECISION NOT NULL DEFAULT 0, -- USD réel (voir catalog-svc) ; converti en XOF uniquement à l'appel PayDunya
   currency     TEXT NOT NULL DEFAULT 'USD',
   status       TEXT NOT NULL DEFAULT 'initiated',
@@ -90,6 +90,36 @@ CREATE TABLE IF NOT EXISTS payout_requests (
   processed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_payout_status ON payout_requests (status, created_at DESC);
+
+-- Colonnes PawaPay pour le versement sortant (module Finances). Un
+-- payout_request peut être exécuté via PawaPay (transfert mobile money
+-- automatique) OU traité manuellement par l'admin (Wave/RIB, comportement
+-- historique) : ces colonnes ne sont remplies que dans le premier cas.
+ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS pawapay_payout_id TEXT DEFAULT '';
+ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS pawapay_status    TEXT DEFAULT '';
+ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS recipient_country TEXT DEFAULT ''; -- ISO2
+ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS recipient_phone   TEXT DEFAULT '';
+
+-- Remboursements PawaPay (et, à terme, autres fournisseurs). Un refund
+-- référence le paiement d'origine par son order_id (jamais de FK SQL,
+-- cohérent avec payments.order_id) et le provider_ref d'origine
+-- (depositId PawaPay / pi_ Stripe). status suit le vocabulaire PawaPay :
+-- pending | accepted | completed | rejected | failed.
+CREATE TABLE IF NOT EXISTS refunds (
+  id             BIGSERIAL PRIMARY KEY,
+  order_id       BIGINT NOT NULL,
+  provider       TEXT NOT NULL CHECK (provider IN ('stripe','paydunya','pawapay')),
+  provider_ref   TEXT DEFAULT '',        -- refundId PawaPay (UUID v4) une fois créé
+  source_ref     TEXT DEFAULT '',        -- provider_ref du paiement remboursé (depositId, pi_...)
+  amount_usd     DOUBLE PRECISION NOT NULL DEFAULT 0,
+  status         TEXT NOT NULL DEFAULT 'pending',
+  reason         TEXT DEFAULT '',
+  created_by     TEXT DEFAULT '',        -- admin à l'origine du remboursement
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_refunds_order ON refunds (order_id);
+CREATE INDEX IF NOT EXISTS idx_refunds_ref ON refunds (provider_ref);
 `
 
 // getSettings/putSettings — Configuration Système (page admin), portage
@@ -169,6 +199,9 @@ type server struct {
 	paydunyaToken          string
 	paydunyaAPIBase        string
 	paydunyaEnabledStr     string
+	pawapayAPIKey          string
+	pawapayEnvironment     string // "sandbox" (défaut) | "production"
+	pawapayEnabledStr      string
 	storefrontURL          string
 }
 
@@ -177,8 +210,14 @@ type server struct {
 // effacer sa clé). Stocké comme string ("true"/"false", vide = activé par
 // défaut) car kit.SettingsField ne supporte que *string — pas de nouveau
 // type à ajouter à kit pour ce seul besoin.
-func (s *server) stripeEnabled() bool  { return s.stripeEnabledStr != "false" }
+func (s *server) stripeEnabled() bool   { return s.stripeEnabledStr != "false" }
 func (s *server) paydunyaEnabled() bool { return s.paydunyaEnabledStr != "false" }
+
+// pawapayEnabled — désactivé par DÉFAUT (contrairement à Stripe/PayDunya
+// activés par défaut) : l'intégration part en sandbox, l'admin l'active
+// explicitement depuis Configuration Système une fois la clé saisie et le
+// bon environnement choisi. Vide = désactivé ; "true" = activé.
+func (s *server) pawapayEnabled() bool { return s.pawapayEnabledStr == "true" }
 
 const settingsTable = "payment_settings"
 
@@ -194,6 +233,9 @@ func (s *server) settingsFields() []kit.SettingsField {
 		{Key: "paydunya_token", Ptr: &s.paydunyaToken, Secret: true, Description: "Token PayDunya (Dashboard → Intégrez notre API → Token) — obligatoire en header PAYDUNYA-TOKEN sur checkout-invoice/create"},
 		{Key: "paydunya_api_base", Ptr: &s.paydunyaAPIBase, Description: "URL de base de l'API PayDunya"},
 		{Key: "paydunya_enabled", Ptr: &s.paydunyaEnabledStr, Description: "Activer PayDunya comme moyen de paiement (\"false\" pour désactiver sans effacer la clé) — vide ou toute autre valeur = activé"},
+		{Key: "pawapay_api_key", Ptr: &s.pawapayAPIKey, Secret: true, Description: "Clé API PawaPay (mobile money multi-pays Afrique) — Bearer token, côté serveur uniquement"},
+		{Key: "pawapay_environment", Ptr: &s.pawapayEnvironment, Description: "Environnement PawaPay : \"sandbox\" (défaut, pour le développement) ou \"production\" (bascule explicite avant mise en ligne réelle)"},
+		{Key: "pawapay_enabled", Ptr: &s.pawapayEnabledStr, Description: "Activer PawaPay comme moyen de paiement mobile money (\"true\" pour activer — désactivé par défaut). Sert d'interrupteur PawaPay ⇄ PayDunya : activer l'un, mettre l'autre à \"false\""},
 		{Key: "storefront_url", Ptr: &s.storefrontURL, Description: "URL du site public, utilisée pour les liens de retour après paiement"},
 	}
 }
@@ -245,6 +287,9 @@ func main() {
 		paydunyaAPIKeyPublic:   kit.Env("PAYDUNYA_API_KEY_PUBLIC", ""),
 		paydunyaMasterKey:      kit.Env("PAYDUNYA_MASTER_KEY", ""),
 		paydunyaAPIBase:        kit.Env("PAYDUNYA_API_BASE", "https://app.paydunya.com"),
+		pawapayAPIKey:          kit.Env("PAWAPAY_API_KEY", ""),
+		pawapayEnvironment:     kit.Env("PAWAPAY_ENVIRONMENT", "sandbox"),
+		pawapayEnabledStr:      kit.Env("PAWAPAY_ENABLED", ""),
 		storefrontURL:          kit.Env("STOREFRONT_URL", "http://localhost:3000"),
 	}
 	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
@@ -270,6 +315,12 @@ func main() {
 		}
 		return nil
 	})
+	health.Add("pawapay_key", func(ctx context.Context) error {
+		if s.pawapayEnabled() && s.pawapayAPIKey == "" {
+			return fmt.Errorf("PawaPay activé mais PAWAPAY_API_KEY absente — paiements mobiles inopérants")
+		}
+		return nil
+	})
 
 	kit.Run("payment-svc", kit.Env("PORT_PAYMENT", "8084"), log, health, func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /settings", s.getSettings)
@@ -280,12 +331,17 @@ func main() {
 		mux.HandleFunc("GET /payment-methods", s.listPaymentMethods)
 		mux.HandleFunc("POST /payments/webhook/stripe", s.stripeWebhook)
 		mux.HandleFunc("POST /payments/webhook/paydunya", s.paydunyaCallback)
+		mux.HandleFunc("POST /payments/webhook/pawapay", s.pawapayWebhook)
+		mux.HandleFunc("GET /pawapay/countries", s.listPawapayCountries)
 		mux.HandleFunc("GET /wallet/{vendor_id}", s.getWallet)
 		mux.HandleFunc("GET /wallet/{vendor_id}/transactions", s.listWalletTransactions)
 		mux.HandleFunc("POST /payout-requests", s.createPayoutRequest)
 		mux.HandleFunc("GET /payout-requests", s.listPayoutRequests)
 		mux.HandleFunc("POST /payout-requests/{id}/approve", s.approvePayout)
 		mux.HandleFunc("POST /payout-requests/{id}/reject", s.rejectPayout)
+		mux.HandleFunc("POST /payout-requests/{id}/pawapay", s.executePayoutViaPawapay)
+		mux.HandleFunc("POST /refunds", s.createRefund)
+		mux.HandleFunc("GET /refunds", s.listRefunds)
 		mux.HandleFunc("GET /finance/overview", s.financeOverview)
 		mux.HandleFunc("GET /finance/transactions", s.financeTransactions)
 	})
@@ -323,8 +379,27 @@ func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
 			"id": "paydunya", "title": "Mobile Money / PayDunya", "method_title": "PayDunya",
 			"enabled": s.paydunyaAPIKeyPrivate != "" && s.paydunyaEnabled(),
 		},
+		{
+			"id": "pawapay", "title": "Mobile Money", "method_title": "PawaPay",
+			"enabled": s.pawapayAPIKey != "" && s.pawapayEnabled(),
+			"mode":    s.pawapayEnvironment,
+		},
 	}
 	kit.JSON(w, 200, map[string]any{"gateways": gateways})
+}
+
+// listPawapayCountries — table pays/opérateurs exposée au frontend pour le
+// sélecteur de pays du checkout PawaPay. Statique, dérivée de
+// pawapayCountries (voir pawapay.go).
+func (s *server) listPawapayCountries(w http.ResponseWriter, r *http.Request) {
+	out := make([]map[string]any, 0, len(pawapayCountries))
+	for _, c := range pawapayCountries {
+		out = append(out, map[string]any{
+			"iso2": c.ISO2, "iso3": c.ISO3, "name": c.Name,
+			"currency": c.Currency, "dial_code": c.DialCode, "providers": c.Providers,
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"countries": out, "default_iso2": "SN"})
 }
 
 /* ---------- Finances : agrégation (module Finances) ---------- */
@@ -730,6 +805,255 @@ func (s *server) rejectPayout(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{"id": id, "status": "rejected"})
 }
 
+// executePayoutViaPawapay — exécute une demande de retrait vendeur via un
+// transfert mobile money PawaPay automatique, en alternative au traitement
+// manuel d'approvePayout (Wave/RIB). Débite le wallet dans la MÊME
+// transaction que le déclenchement du payout (comme approvePayout), puis
+// appelle PawaPay. Le statut final arrive par webhook (pawapayHandlePayoutWebhook).
+//
+// Corps : { "recipient_country": "SN", "recipient_phone": "77...", "admin_note": "" }
+//
+// Si PawaPay REJETTE immédiatement (solde marchand insuffisant, numéro
+// invalide...), la transaction est annulée (rollback) — le wallet vendeur
+// n'est pas débité et la demande reste 'pending' pour retenter autrement.
+func (s *server) executePayoutViaPawapay(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("id"))
+	var body struct {
+		RecipientCountry string `json:"recipient_country"` // ISO2
+		RecipientPhone   string `json:"recipient_phone"`
+		AdminNote        string `json:"admin_note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.RecipientCountry == "" || body.RecipientPhone == "" {
+		kit.Fail(w, 400, "missing_fields", "recipient_country (ISO2) et recipient_phone requis")
+		return
+	}
+	if !s.pawapayEnabled() || s.pawapayAPIKey == "" {
+		kit.Fail(w, 409, "pawapay_disabled", "PawaPay n'est pas activé — utilisez l'approbation manuelle")
+		return
+	}
+
+	var vendorID int64
+	var amount float64
+	var status string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT vendor_id, amount_usd, status FROM payout_requests WHERE id = $1", id,
+	).Scan(&vendorID, &amount, &status); err != nil {
+		kit.Fail(w, 404, "payout_not_found", fmt.Sprintf("demande %d introuvable", id))
+		return
+	}
+	if status != "pending" {
+		kit.Fail(w, 409, "already_processed", fmt.Sprintf("demande déjà au statut %q", status))
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Débit wallet + ledger, comme approvePayout.
+	if _, err := tx.Exec(ctx,
+		"UPDATE vendor_wallets SET balance_usd = balance_usd - $2, updated_at = now() WHERE vendor_id = $1",
+		vendorID, amount); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if _, err := tx.Exec(ctx,
+		"INSERT INTO wallet_transactions (vendor_id, type, amount_usd, note) VALUES ($1,'payout',$2,$3)",
+		vendorID, -amount, fmt.Sprintf("payout PawaPay #%d", id)); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+
+	payoutID, initialStatus, err := s.createPawaPayPayout(ctx, id, vendorID, amount, body.RecipientCountry, body.RecipientPhone)
+	if err != nil {
+		// Rollback implicite (defer) : wallet non débité, demande reste pending.
+		slog.Error("executePayoutViaPawapay: PawaPay a rejeté/échoué", "payout_request_id", id, "err", err)
+		kit.Fail(w, 502, "pawapay_payout_failed", err.Error())
+		return
+	}
+
+	// 'approved' (pas 'paid') : le versement est LANCÉ, la confirmation
+	// finale viendra du webhook. pawapay_status garde le statut initial
+	// (ACCEPTED/ENQUEUED/PROCESSING).
+	if _, err := tx.Exec(ctx, `
+		UPDATE payout_requests
+		SET status='approved', admin_note=$2, pawapay_payout_id=$3, pawapay_status=$4,
+		    recipient_country=$5, recipient_phone=$6, processed_at=now()
+		WHERE id=$1`,
+		id, body.AdminNote, payoutID, initialStatus, strings.ToUpper(body.RecipientCountry), body.RecipientPhone); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	slog.Info("payout PawaPay lancé", "payout_request_id", id, "vendor_id", vendorID, "pawapay_payout_id", payoutID, "initial_status", initialStatus)
+	kit.Publish(s.producer, "payout_request.approved", fmt.Sprint(id), map[string]any{
+		"payout_id": id, "vendor_id": vendorID, "amount_usd": amount, "provider": "pawapay",
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
+	kit.JSON(w, 200, map[string]any{"id": id, "status": "approved", "pawapay_payout_id": payoutID, "pawapay_status": initialStatus})
+}
+
+// createRefund — rembourse (tout ou partie) le paiement d'une commande via
+// PawaPay. Réservé aux paiements provider='pawapay' au statut 'confirmed'.
+//
+// Corps : { "order_id": 123, "amount_usd": 0, "reason": "...", "created_by": "admin@..." }
+// amount_usd=0 ou absent = remboursement TOTAL.
+func (s *server) createRefund(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OrderID   int64   `json:"order_id"`
+		AmountUSD float64 `json:"amount_usd"`
+		Reason    string  `json:"reason"`
+		CreatedBy string  `json:"created_by"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrderID == 0 {
+		kit.Fail(w, 400, "invalid_body", "order_id obligatoire")
+		return
+	}
+	ctx := r.Context()
+
+	var provider, providerRef, payStatus string
+	var paidUSD float64
+	if err := s.db.QueryRow(ctx,
+		"SELECT provider, provider_ref, status, amount_usd FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1", body.OrderID,
+	).Scan(&provider, &providerRef, &payStatus, &paidUSD); err != nil {
+		kit.Fail(w, 404, "payment_not_found", fmt.Sprintf("aucun paiement pour la commande %d", body.OrderID))
+		return
+	}
+	if provider != "pawapay" {
+		kit.Fail(w, 409, "unsupported_provider", fmt.Sprintf("remboursement automatique disponible pour PawaPay uniquement (paiement %q)", provider))
+		return
+	}
+	if payStatus != "confirmed" {
+		kit.Fail(w, 409, "not_refundable", fmt.Sprintf("le paiement doit être confirmé (statut actuel %q)", payStatus))
+		return
+	}
+	refundUSD := body.AmountUSD
+	if refundUSD <= 0 || refundUSD > paidUSD {
+		refundUSD = paidUSD // total
+	}
+
+	// Montant en devise locale : PawaPay attend le remboursement dans la
+	// devise du deposit d'origine. On reconvertit USD→local avec le même
+	// mécanisme que le deposit. Le pays du deposit n'est pas stocké — on le
+	// relit depuis PawaPay via le statut (payer.accountDetails.provider →
+	// suffixe pays), sinon repli sur remboursement total (amount omis).
+	var amountLocal string
+	if country := s.pawapayCountryForDeposit(ctx, providerRef); country != nil && (body.AmountUSD > 0 && body.AmountUSD < paidUSD) {
+		if rate, err := s.pawapayResolveRate(ctx, country.Currency); err == nil {
+			amountLocal = pawapayLocalAmount(refundUSD, rate, country.Currency)
+		}
+	}
+
+	refundID, status, err := s.createPawaPayRefund(ctx, providerRef, amountLocal)
+	if err != nil {
+		slog.Error("createRefund: PawaPay a rejeté le remboursement", "order_id", body.OrderID, "err", err)
+		kit.Fail(w, 502, "pawapay_refund_failed", err.Error())
+		return
+	}
+	var newID int64
+	if err := s.db.QueryRow(ctx, `
+		INSERT INTO refunds (order_id, provider, provider_ref, source_ref, amount_usd, status, reason, created_by)
+		VALUES ($1,'pawapay',$2,$3,$4,$5,$6,$7) RETURNING id`,
+		body.OrderID, refundID, providerRef, refundUSD, strings.ToLower(status), body.Reason, body.CreatedBy,
+	).Scan(&newID); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.Publish(s.producer, "refund.created", fmt.Sprint(body.OrderID), map[string]any{
+		"refund_id": newID, "order_id": body.OrderID, "amount_usd": refundUSD, "provider": "pawapay",
+		"status": status, "at": time.Now().UTC().Format(time.RFC3339),
+	})
+	slog.Info("remboursement PawaPay créé", "refund_id", newID, "order_id", body.OrderID, "amount_usd", refundUSD, "pawapay_refund_id", refundID, "status", status)
+	kit.JSON(w, 201, map[string]any{"id": newID, "status": status, "pawapay_refund_id": refundID, "amount_usd": refundUSD})
+}
+
+// pawapayCountryForDeposit — retrouve le pays PawaPay d'un deposit à partir
+// du suffixe ISO3 du code provider (ex. "MTN_MOMO_CIV" → CIV). Best-effort :
+// renvoie nil si indéterminable (le remboursement se fera alors en total).
+func (s *server) pawapayCountryForDeposit(ctx context.Context, depositID string) *pawapayCountry {
+	code, raw, err := s.pawapayHTTP(ctx, http.MethodGet, "/v2/deposits/"+depositID, nil)
+	if err != nil || code != http.StatusOK {
+		return nil
+	}
+	var doc struct {
+		Data struct {
+			Country string `json:"country"` // ISO3
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || doc.Data.Country == "" {
+		return nil
+	}
+	return findPawapayCountryByISO3(doc.Data.Country)
+}
+
+func (s *server) listRefunds(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(kit.EnvOr(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(q.Get("page_size"), "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	where := "WHERE 1=1"
+	args := []any{}
+	if v := q.Get("order_id"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND order_id = $%d", len(args))
+	}
+	if v := q.Get("status"); v != "" {
+		args = append(args, v)
+		where += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM refunds "+where, args...).Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT id, order_id, provider, provider_ref, source_ref, amount_usd, status, reason, created_by, created_at, updated_at
+		FROM refunds %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, orderID int64
+		var amount float64
+		var provider, providerRef, sourceRef, status, reason, createdBy string
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &orderID, &provider, &providerRef, &sourceRef, &amount, &status, &reason, &createdBy, &createdAt, &updatedAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "order_id": orderID, "provider": provider, "provider_ref": providerRef,
+			"source_ref": sourceRef, "amount_usd": amount, "status": status, "reason": reason,
+			"created_by": createdBy, "created_at": createdAt.UTC().Format(time.RFC3339),
+			"updated_at": updatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{
+		"items": items, "page": page, "page_size": pageSize,
+		"total": total, "has_more": int64(page*pageSize) < total,
+	})
+}
+
 /* ---------- Consommation order.created ---------- */
 
 type orderCreatedEvent struct {
@@ -813,7 +1137,13 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 		return
 	}
 	if provider != "paydunya" {
-		return // Stripe : PaymentIntent créé à la demande via POST /payments/init
+		// Stripe : PaymentIntent créé à la demande via POST /payments/init.
+		// PawaPay : la Payment Page hébergée a besoin du PAYS et du TÉLÉPHONE
+		// de l'acheteur (choix du client / adresse de livraison) — absents de
+		// l'event Kafka order.created. La session est donc créée à la demande
+		// dans POST /payments/init (même raison que Stripe : le frontend a
+		// besoin du redirect_url tout de suite après /api/orders), pas ici.
+		return
 	}
 
 	// Même verrou anti-doublon que initPayment (voir son commentaire) :
@@ -974,8 +1304,8 @@ func (s *server) createPayDunyaInvoice(ctx context.Context, ev orderCreatedEvent
 			// avec order_id + token", voir app/order-received/page.tsx) —
 			// jamais branchée côté payment-svc jusqu'ici. Pas de page
 			// "cancel" dédiée : /checkout est le seul repli existant.
-			"return_url":   front + "/order-received?order_id=" + strconv.FormatInt(redirectOrderID(ev), 10),
-			"cancel_url":   front + "/checkout",
+			"return_url": front + "/order-received?order_id=" + strconv.FormatInt(redirectOrderID(ev), 10),
+			"cancel_url": front + "/checkout",
 		},
 		"custom_data": map[string]any{"order_id": ev.OrderID},
 	}
@@ -1201,6 +1531,157 @@ func parsePayDunyaCallbackForm(body []byte) (status, token string) {
 	return values.Get("data[status]"), values.Get("data[invoice][token]")
 }
 
+// pawapayWebhook — callback PawaPay (deposits, payouts, refunds). PawaPay
+// POST un JSON à cette URL quand une opération atteint un statut final.
+//
+// RÈGLE DE SÉCURITÉ NON NÉGOCIABLE (spec §5) : le corps du webhook n'est
+// JAMAIS la source de vérité. On n'en extrait QUE l'identifiant de la
+// transaction (depositId / payoutId / refundId), puis on RAPPELLE l'API
+// PawaPay (GET /v2/deposits/{id} etc.) pour obtenir le statut authoritatif,
+// et on ne traite que celui-là. Sans cette re-vérification, quiconque
+// connaît cette URL pourrait simuler un paiement réussi en postant un faux
+// corps {"status":"COMPLETED"}.
+//
+// Répond toujours 200 rapidement (PawaPay retente sinon) — même en cas de
+// statut transitoire ou d'id inconnu, sauf erreur interne réelle.
+func (s *server) pawapayWebhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		kit.Fail(w, 400, "body_unreadable", err.Error())
+		return
+	}
+	// On ne lit QUE les identifiants — jamais le statut du corps.
+	var envelope struct {
+		DepositID string `json:"depositId"`
+		PayoutID  string `json:"payoutId"`
+		RefundID  string `json:"refundId"`
+		// PawaPay v2 peut aussi imbriquer sous "data"
+		Data struct {
+			DepositID string `json:"depositId"`
+			PayoutID  string `json:"payoutId"`
+			RefundID  string `json:"refundId"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		slog.Error("pawapayWebhook: corps illisible", "err", err, "body_prefix", string(body[:min(200, len(body))]))
+		kit.Fail(w, 400, "invalid_body", "JSON attendu")
+		return
+	}
+	depositID := firstNonEmpty(envelope.DepositID, envelope.Data.DepositID)
+	payoutID := firstNonEmpty(envelope.PayoutID, envelope.Data.PayoutID)
+	refundID := firstNonEmpty(envelope.RefundID, envelope.Data.RefundID)
+
+	ctx := r.Context()
+	switch {
+	case depositID != "":
+		s.pawapayHandleDepositWebhook(ctx, w, r, depositID)
+	case payoutID != "":
+		s.pawapayHandlePayoutWebhook(ctx, w, payoutID)
+	case refundID != "":
+		s.pawapayHandleRefundWebhook(ctx, w, refundID)
+	default:
+		slog.Error("pawapayWebhook: aucun identifiant reconnu dans le corps", "body_prefix", string(body[:min(200, len(body))]))
+		kit.JSON(w, 200, map[string]string{"received": "ignored"})
+	}
+}
+
+// pawapayHandleDepositWebhook — re-vérifie le statut du deposit auprès de
+// PawaPay puis confirme/échoue la commande. orderID retrouvé via
+// payments.provider_ref = depositId.
+func (s *server) pawapayHandleDepositWebhook(ctx context.Context, w http.ResponseWriter, r *http.Request, depositID string) {
+	var orderID int64
+	if err := s.db.QueryRow(ctx, "SELECT order_id FROM payments WHERE provider_ref=$1 AND provider='pawapay'", depositID).Scan(&orderID); err != nil {
+		slog.Error("pawapayWebhook: depositId inconnu", "deposit_id", depositID)
+		kit.JSON(w, 200, map[string]string{"received": "unknown_deposit"})
+		return
+	}
+	status, failureCode, err := s.pawapayDepositStatus(ctx, depositID)
+	if err != nil {
+		slog.Error("pawapayWebhook: re-vérification statut deposit impossible", "deposit_id", depositID, "order_id", orderID, "err", err)
+		kit.Fail(w, 502, "pawapay_verify_failed", err.Error())
+		return
+	}
+	slog.Info("pawapayWebhook deposit re-vérifié", "order_id", orderID, "deposit_id", depositID, "authoritative_status", status, "failure_code", failureCode)
+	switch {
+	case pawapayIsFinalSuccess(status):
+		s.confirmPayment(w, r, orderID, "pawapay", depositID)
+	case pawapayIsFinalFailure(status):
+		s.markFailed(w, r, orderID, "pawapay")
+	default:
+		// ACCEPTED / PROCESSING / IN_RECONCILIATION — pas encore final,
+		// on attend un webhook ultérieur. 200 pour ne pas faire retenter
+		// PawaPay en boucle.
+		kit.JSON(w, 200, map[string]string{"received": "pending", "status": status})
+	}
+}
+
+// pawapayHandlePayoutWebhook — re-vérifie le statut du payout et met à jour
+// payout_requests. Un payout COMPLETED confirme le versement au vendeur ;
+// FAILED laisse la demande en 'approved' avec pawapay_status='FAILED' pour
+// relance manuelle (pas de retry automatique aveugle, spec §7.4).
+func (s *server) pawapayHandlePayoutWebhook(ctx context.Context, w http.ResponseWriter, payoutID string) {
+	var reqID, vendorID int64
+	if err := s.db.QueryRow(ctx,
+		"SELECT id, vendor_id FROM payout_requests WHERE pawapay_payout_id=$1", payoutID).Scan(&reqID, &vendorID); err != nil {
+		slog.Error("pawapayWebhook: payoutId inconnu", "payout_id", payoutID)
+		kit.JSON(w, 200, map[string]string{"received": "unknown_payout"})
+		return
+	}
+	status, failureCode, err := s.pawapayPayoutStatus(ctx, payoutID)
+	if err != nil {
+		slog.Error("pawapayWebhook: re-vérification statut payout impossible", "payout_id", payoutID, "err", err)
+		kit.Fail(w, 502, "pawapay_verify_failed", err.Error())
+		return
+	}
+	slog.Info("pawapayWebhook payout re-vérifié", "payout_request_id", reqID, "payout_id", payoutID, "authoritative_status", status, "failure_code", failureCode)
+	_, _ = s.db.Exec(ctx, "UPDATE payout_requests SET pawapay_status=$2 WHERE id=$1", reqID, status)
+	if pawapayIsFinalSuccess(status) {
+		// Le wallet a déjà été débité au moment de l'approbation (voir
+		// executePayoutViaPawapay) — ici on marque juste la demande 'paid'.
+		_, _ = s.db.Exec(ctx, "UPDATE payout_requests SET status='paid', processed_at=now() WHERE id=$1 AND status != 'paid'", reqID)
+		kit.Publish(s.producer, "payout_request.paid", fmt.Sprint(reqID), map[string]any{
+			"payout_id": reqID, "vendor_id": vendorID, "provider": "pawapay",
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
+	} else if pawapayIsFinalFailure(status) {
+		slog.Warn("pawapayWebhook: payout échoué — relance manuelle requise", "payout_request_id", reqID, "failure_code", failureCode)
+		kit.Publish(s.producer, "payout_request.failed", fmt.Sprint(reqID), map[string]any{
+			"payout_id": reqID, "vendor_id": vendorID, "provider": "pawapay", "failure_code": failureCode,
+			"at": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]string{"received": "true", "status": status})
+}
+
+// pawapayHandleRefundWebhook — re-vérifie le statut du refund et met à jour
+// la table refunds.
+func (s *server) pawapayHandleRefundWebhook(ctx context.Context, w http.ResponseWriter, refundID string) {
+	var id int64
+	if err := s.db.QueryRow(ctx, "SELECT id FROM refunds WHERE provider_ref=$1", refundID).Scan(&id); err != nil {
+		slog.Error("pawapayWebhook: refundId inconnu", "refund_id", refundID)
+		kit.JSON(w, 200, map[string]string{"received": "unknown_refund"})
+		return
+	}
+	status, err := s.pawapayRefundStatus(ctx, refundID)
+	if err != nil {
+		slog.Error("pawapayWebhook: re-vérification statut refund impossible", "refund_id", refundID, "err", err)
+		kit.Fail(w, 502, "pawapay_verify_failed", err.Error())
+		return
+	}
+	slog.Info("pawapayWebhook refund re-vérifié", "refund_id", refundID, "authoritative_status", status)
+	_, _ = s.db.Exec(ctx, "UPDATE refunds SET status=$2, updated_at=now() WHERE id=$1", id, strings.ToLower(status))
+	kit.JSON(w, 200, map[string]string{"received": "true", "status": status})
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 /* ---------- Mutations ---------- */
 
 // confirmPayment — orderID ici est désormais le PARENT_ORDER_ID (voir
@@ -1405,6 +1886,14 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		OrderID   int64  `json:"order_id"`
 		Reference string `json:"reference"`
+		// PawaPay uniquement : la Payment Page hébergée a besoin du pays de
+		// l'acheteur (devise + return_url) et, en valeur par défaut
+		// facultative, de son téléphone. Renseignés par le frontend depuis
+		// l'adresse de livraison déjà saisie au checkout. Ignorés pour
+		// Stripe/PayDunya.
+		BuyerCountry string `json:"buyer_country"` // ISO2 (ex. "sn")
+		BuyerPhone   string `json:"buyer_phone"`   // format libre, normalisé côté serveur
+		BuyerEmail   string `json:"buyer_email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrderID == 0 {
 		kit.Fail(w, 400, "invalid_body", "order_id obligatoire")
@@ -1510,13 +1999,51 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		ref, redirect = pdRef, pdRedirect
 	}
 
+	// PawaPay : même principe que PayDunya juste au-dessus — session de
+	// Payment Page hébergée créée à la demande ici (initiateFor ne peut pas
+	// la créer, il n'a ni le pays ni le téléphone de l'acheteur). Même
+	// verrou anti-doublon 'creating'. depositId (UUID v4) stocké en
+	// provider_ref : c'est la clé de corrélation du webhook pawapayWebhook.
+	if provider == "pawapay" && redirect == "" && (status == "initiated" || status == "failed") {
+		locked, err := s.db.Exec(ctx,
+			"UPDATE payments SET status='creating' WHERE id=$1 AND status IN ('initiated','failed')", id)
+		if err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		if locked.RowsAffected() == 0 {
+			kit.Fail(w, 409, "pawapay_creating", "création de la page de paiement PawaPay déjà en cours — réessayez dans un instant")
+			return
+		}
+		reference := body.Reference
+		if reference == "" {
+			reference = fmt.Sprintf("MIAD-%d", body.OrderID)
+		}
+		depositID, ppRedirect, err := s.createPawaPayPaymentPage(ctx,
+			orderCreatedEvent{OrderID: body.OrderID, ParentOrderID: body.OrderID, Reference: reference, TotalUSD: amount},
+			body.BuyerCountry, body.BuyerPhone, body.BuyerEmail)
+		if err != nil {
+			_, _ = s.db.Exec(ctx, "UPDATE payments SET status='failed' WHERE id=$1", id)
+			slog.Error("initPayment: création de la page PawaPay impossible", "order_id", body.OrderID, "err", err)
+			kit.Fail(w, 502, "pawapay_error", fmt.Sprintf("création de la page de paiement PawaPay impossible: %v", err))
+			return
+		}
+		if _, err := s.db.Exec(ctx,
+			"UPDATE payments SET provider_ref=$2, redirect_url=$3, status='initiated' WHERE id=$1",
+			id, depositID, ppRedirect); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		ref, redirect = depositID, ppRedirect
+	}
+
 	kit.JSON(w, 200, map[string]any{
 		"payment": map[string]any{
 			"order_id": body.OrderID, "provider": provider, "provider_ref": ref,
 			"amount_usd": amount, "currency": "USD", "status": status,
 		},
-		"client_secret": clientSecret, // Stripe Elements (vide pour PayDunya)
-		"redirect_url":  redirect,     // PayDunya uniquement
+		"client_secret": clientSecret, // Stripe Elements (vide pour PayDunya/PawaPay)
+		"redirect_url":  redirect,     // PayDunya (facture) ou PawaPay (Payment Page)
 	})
 }
 

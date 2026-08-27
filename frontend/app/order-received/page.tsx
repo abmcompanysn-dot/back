@@ -39,7 +39,7 @@ interface PurchasedItem {
  * besoin de revérifier nous-mêmes auprès de PayDunya/Stripe depuis le front.
  */
 type ConfirmState = 'loading' | 'completed' | 'pending' | 'failed'
-type PaymentMethod = 'paydunya' | 'stripe'
+type PaymentMethod = 'paydunya' | 'stripe' | 'pawapay'
 
 const BANNER: Record<Exclude<ConfirmState, 'loading'>, { bg: string; text: string }> = {
   completed: { bg: 'bg-green-600', text: "Paiement réussi ! Votre commande sera traitée sous 24h." },
@@ -56,8 +56,16 @@ function OrderReceivedContent() {
   // cas de succès immédiat, sans redirection navigateur).
   const paymentIntentId = searchParams.get('payment_intent')
   const redirectStatus = searchParams.get('redirect_status')
+  // PawaPay redirige ici avec ?provider=pawapay (voir returnUrl construite
+  // dans payment-svc/pawapay.go). Pas de token dans l'URL : le statut vient
+  // de la commande, confirmée par le webhook serveur-à-serveur PawaPay.
+  const providerParam = searchParams.get('provider')
 
-  const method: PaymentMethod = paymentIntentId ? 'stripe' : 'paydunya'
+  const method: PaymentMethod = paymentIntentId
+    ? 'stripe'
+    : providerParam === 'pawapay'
+      ? 'pawapay'
+      : 'paydunya'
 
   const [state, setState] = useState<ConfirmState>('loading')
   const [total, setTotal] = useState<string | null>(null)
@@ -68,6 +76,7 @@ function OrderReceivedContent() {
       setState('failed')
       return
     }
+    // PawaPay : pas de token à vérifier — seul order_id est requis.
     // Stripe : redirect_status='failed' signifie que 3D Secure a échoué,
     // inutile d'appeler confirm-stripe dans ce cas.
     if (method === 'stripe' && redirectStatus === 'failed') {
@@ -77,8 +86,10 @@ function OrderReceivedContent() {
     }
 
     let cancelled = false
-    const endpoint = method === 'stripe' ? 'confirm-stripe' : 'confirm-paydunya'
-    const payload = method === 'stripe' ? { payment_intent_id: paymentIntentId } : { token }
+    const endpoint =
+      method === 'stripe' ? 'confirm-stripe' : method === 'pawapay' ? 'confirm-pawapay' : 'confirm-paydunya'
+    const payload =
+      method === 'stripe' ? { payment_intent_id: paymentIntentId } : method === 'pawapay' ? {} : { token }
     // Le webhook Stripe/PayDunya qui confirme réellement la commande est
     // asynchrone et peut arriver quelques secondes APRÈS que le navigateur
     // ait atterri sur cette page (redirection immédiate après paiement) —
@@ -168,7 +179,7 @@ function OrderReceivedContent() {
             {isCompleted && `Votre commande #${orderId} est confirmée. Nous préparons vos articles pour l'expédition.`}
             {isPending && (method === 'stripe'
               ? `Votre commande #${orderId} a été enregistrée. La vérification de votre carte est encore en cours — vous recevrez un email de confirmation sous peu.`
-              : `Votre commande #${orderId} a été enregistrée. PayDunya finalise encore la transaction Mobile Money — vous recevrez un email de confirmation sous peu.`)}
+              : `Votre commande #${orderId} a été enregistrée. La transaction Mobile Money est en cours de finalisation — vous recevrez un email de confirmation sous peu.`)}
             {isFailed && `Nous n'avons pas pu confirmer le paiement de la commande${orderId ? ` #${orderId}` : ''}. Si le montant a été débité, contactez le support avant de réessayer.`}
           </p>
         </div>
@@ -202,7 +213,7 @@ function OrderReceivedContent() {
                     <div className="flex items-center gap-2 text-[10px] font-black uppercase text-muted-foreground tracking-widest">
                       <CreditCard size={12} className="text-accent" /> Paiement
                     </div>
-                    <p className="text-sm font-bold">{method === 'stripe' ? 'Carte Bancaire (Stripe)' : 'Mobile Money (PayDunya)'}</p>
+                    <p className="text-sm font-bold">{method === 'stripe' ? 'Carte Bancaire (Stripe)' : 'Mobile Money'}</p>
                     <p className="text-[10px] text-muted-foreground">Sécurisé</p>
                   </div>
                 </div>
