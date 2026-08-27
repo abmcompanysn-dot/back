@@ -675,10 +675,18 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     if (scrollToTop) window.scrollTo(0, 0)
   }, [currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, router])
 
+  // searchQuery n'est volontairement pas dans le snapshot (une recherche ne
+  // définit pas d'entrée d'historique dédiée) — mais retomber sur l'accueil
+  // pile vide sans le nettoyer laissait `filterActive` (renderMainContent,
+  // case 'home') bloqué à true indéfiniment : homeSections restait ignoré
+  // au profit du fallback HomePage, qui masque les produits en navigation
+  // libre. Même bug que onHomeClick/onHome ci-dessous, signalé le 27/08
+  // ("l'accueil normal ne revient plus").
   const restoreFromStack = useCallback(() => {
     const snapshot = navStack.current.pop()
     if (!snapshot) {
       setCurrentView('home')
+      setSearchQuery('')
       window.scrollTo(0, 0)
       return
     }
@@ -693,6 +701,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   const navigateBack = useCallback(() => {
     if (navStack.current.length === 0) {
       setCurrentView('home')
+      setSearchQuery('')
       window.scrollTo(0, 0)
       return
     }
@@ -711,6 +720,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       } else {
         // Pile vide : on est a l'accueil (ou a l'entree-garde initiale)
         setCurrentView('home')
+        setSearchQuery('')
         window.scrollTo(0, 0)
       }
     }
@@ -830,6 +840,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       setTimeout(() => navigateTo('login'), 1500)
     } else {
       setCurrentView('home')
+      setSearchQuery('')
     }
   }, [navigateTo])
 
@@ -1079,19 +1090,27 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
 
   // Anti-skeleton infini : si on est sur category/store mais que les données manquent → retour accueil
   // Placé ici car nécessite categoriesLoading et categories (déclarés au-dessus)
+  // setSearchQuery('') ajouté aux 3 branches (27/08) : c'est le chemin le
+  // plus probable du bug "l'accueil normal ne revient plus" — rechercher un
+  // produit, l'ouvrir, puis revenir déclenche fréquemment l'une de ces
+  // gardes, et sans ce nettoyage searchQuery restait rempli indéfiniment,
+  // bloquant `filterActive` à true (voir renderMainContent, case 'home').
   useEffect(() => {
     if (currentView === 'category' && !categoriesLoading && categories.length > 0 && selectedCategory) {
       const found = categories.find((c: WooCategory) => c.slug === selectedCategory)
       if (!found) {
         setSelectedCategory(null)
         setCurrentView('home')
+        setSearchQuery('')
       }
     }
     if (currentView === 'store' && !selectedVendor) {
       setCurrentView('home')
+      setSearchQuery('')
     }
     if (currentView === 'product' && !selectedProduct && !pendingProductFetch.current) {
       setCurrentView('home')
+      setSearchQuery('')
     }
   }, [currentView, categoriesLoading, categories, selectedCategory, selectedVendor, selectedProduct, productFetchSettled])
 
@@ -1374,7 +1393,14 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     language,
     onLanguageChange: handleLanguageChange,
     onCartClick: () => { navigateTo('cart'); setIsSidebarOpen(false); },
-    onHomeClick: () => { setSelectedCategory(null); navigateTo('home', true, '/'); },
+    // setSearchQuery('') manquait ici : une recherche active empêchait
+    // `filterActive` (voir renderMainContent, case 'home') de redevenir
+    // false même après un retour à l'accueil, donc homeSections restait
+    // ignoré au profit du fallback HomePage — qui masque les produits en
+    // navigation libre. C'est le "l'accueil normal ne revient plus" signalé
+    // le 27/08 : reproductible dès qu'une recherche précédait le clic sur
+    // le logo/icône Accueil.
+    onHomeClick: () => { setSelectedCategory(null); setSearchQuery(''); navigateTo('home', true, '/'); },
     onCategoryClick: (slug: string) => { setSelectedCategory(slug); navigateTo('category'); },
     onCountryClick: undefined,
     onSearch: handleSearch,
@@ -1774,7 +1800,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
           isLoggedIn={isLoggedIn}
           userType={userType}
           language={language}
-          onHome={() => { setSelectedCategory(null); navigateTo('home', true, '/'); }}
+          onHome={() => { setSelectedCategory(null); setSearchQuery(''); navigateTo('home', true, '/'); }}
           onNavigate={navigateTo}
           onAccount={() => {
             if (!isLoggedIn) { prevView.current = currentView; navigateTo('login'); }
