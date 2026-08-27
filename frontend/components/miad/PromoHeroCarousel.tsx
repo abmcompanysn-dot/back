@@ -14,9 +14,24 @@ interface CouponData {
   minimumAmount?: string
 }
 
+interface BannerData {
+  id: string
+  image: string
+  href?: string
+}
+
 type Slide =
   | { kind: 'product'; product: any }
   | { kind: 'coupon'; coupon: CouponData }
+  | { kind: 'banner'; banner: BannerData }
+
+// Bannières promotionnelles statiques (pas de backend dédié — juste une
+// image déposée dans public/promo/) : ajoutée le 2026-08-27 à la demande
+// du fondateur, insérée en tête du carrousel avant les slides produit/
+// coupon dynamiques.
+const STATIC_BANNERS: BannerData[] = [
+  { id: 'miad-delivery', image: '/promo/miad-delivery-banner.webp' },
+]
 
 function copyCode(code: string) {
   navigator.clipboard.writeText(code).then(() => {
@@ -32,8 +47,8 @@ function couponLabel(c: CouponData): string {
 // Alterne produit / coupon tant qu'il en reste des deux côtés, puis
 // continue avec ce qu'il reste — évite un carrousel à sens unique si l'un
 // des deux lots est plus court que l'autre.
-function buildSlides(products: any[], coupons: CouponData[]): Slide[] {
-  const slides: Slide[] = []
+function buildSlides(products: any[], coupons: CouponData[], banners: BannerData[]): Slide[] {
+  const slides: Slide[] = banners.map(banner => ({ kind: 'banner', banner }))
   const maxLen = Math.max(products.length, coupons.length)
   for (let i = 0; i < maxLen; i++) {
     if (products[i]) slides.push({ kind: 'product', product: products[i] })
@@ -43,7 +58,10 @@ function buildSlides(products: any[], coupons: CouponData[]): Slide[] {
 }
 
 export function PromoHeroCarousel({ products, coupons }: { products: any[]; coupons: CouponData[] }) {
-  const slides = useMemo(() => buildSlides(products.slice(0, 5), coupons.slice(0, 4)), [products, coupons])
+  const slides = useMemo(
+    () => buildSlides(products.slice(0, 5), coupons.slice(0, 4), STATIC_BANNERS),
+    [products, coupons]
+  )
   const [index, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
 
@@ -75,8 +93,10 @@ export function PromoHeroCarousel({ products, coupons }: { products: any[]; coup
       <div className="relative min-h-[280px] sm:min-h-[320px]">
         {slide.kind === 'product' ? (
           <ProductSlide product={slide.product} />
-        ) : (
+        ) : slide.kind === 'coupon' ? (
           <CouponSlide coupon={slide.coupon} onCopy={copyCode} />
+        ) : (
+          <BannerSlide banner={slide.banner} />
         )}
       </div>
 
@@ -84,7 +104,7 @@ export function PromoHeroCarousel({ products, coupons }: { products: any[]; coup
         <div className="relative flex items-center justify-center gap-2 pb-5">
           {slides.map((s, i) => (
             <button
-              key={s.kind === 'product' ? `p-${s.product.id}` : `c-${s.coupon.code}`}
+              key={s.kind === 'product' ? `p-${s.product.id}` : s.kind === 'coupon' ? `c-${s.coupon.code}` : `b-${s.banner.id}`}
               type="button"
               aria-label={`Voir l'offre ${i + 1}`}
               onClick={() => setIndex(i)}
@@ -93,6 +113,24 @@ export function PromoHeroCarousel({ products, coupons }: { products: any[]; coup
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function BannerSlide({ banner }: { banner: BannerData }) {
+  const img = (
+    <Image
+      src={banner.image}
+      alt=""
+      fill
+      className="object-cover"
+      sizes="(max-width: 640px) 100vw, 1200px"
+      priority
+    />
+  )
+  return (
+    <div className="relative w-full h-[280px] sm:h-[320px]">
+      {banner.href ? <Link href={banner.href}>{img}</Link> : img}
     </div>
   )
 }
