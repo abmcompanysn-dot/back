@@ -74,6 +74,11 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS hs_code TEXT DEFAULT '';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS origin_country TEXT DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products (sku) WHERE sku <> '';
 CREATE INDEX IF NOT EXISTS idx_products_brand ON products (brand_id);
+-- Tags de recherche/filtrage client (ex. "bio", "artisanal", "fait main") —
+-- tableau JSONB de strings, même pattern que "images". Index GIN pour que
+-- le filtre ?tags=x,y et la recherche ?q= restent rapides sur 1700+ produits.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS idx_products_tags ON products USING GIN (tags);
 
 CREATE TABLE IF NOT EXISTS brands (
   id          BIGSERIAL PRIMARY KEY,
@@ -295,12 +300,26 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		args = append(args, atoi(v))
 	}
 	if v := q.Get("q"); v != "" {
-		where += fmt.Sprintf(" AND (name ILIKE $%d OR sku ILIKE $%d)", len(args)+1, len(args)+1)
+		where += fmt.Sprintf(" AND (name ILIKE $%d OR sku ILIKE $%d OR tags::text ILIKE $%d)", len(args)+1, len(args)+1, len(args)+1)
 		args = append(args, "%"+v+"%")
 	}
 	if v := q.Get("slug"); v != "" {
 		where += fmt.Sprintf(" AND slug = $%d", len(args)+1)
 		args = append(args, v)
+	}
+	// ?tags=bio,artisanal : produits ayant AU MOINS un des tags listés
+	// (opérateur JSONB ?| — "existe une des clés du tableau à droite").
+	if v := q.Get("tags"); v != "" {
+		var wanted []string
+		for _, t := range strings.Split(v, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				wanted = append(wanted, t)
+			}
+		}
+		if len(wanted) > 0 {
+			where += fmt.Sprintf(" AND tags ?| $%d", len(args)+1)
+			args = append(args, wanted)
+		}
 	}
 	if v := q.Get("on_sale"); v == "true" {
 		where += " AND sale_price_usd IS NOT NULL AND sale_price_usd < price_usd"
@@ -334,7 +353,7 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, sale_price_usd, status, is_variable, images, sku, stock, low_stock_threshold, brand_id
+	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, sale_price_usd, status, is_variable, images, sku, stock, low_stock_threshold, brand_id, tags
 	          FROM products ` + where + " ORDER BY id"
 	if includeIDs == nil {
 		query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
@@ -354,9 +373,9 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		var salePrice *float64
 		var trid, l, name, slug, status, sku string
 		var isVar bool
-		var images []byte
+		var images, tagsJSON []byte
 		var stock, lowStockThreshold int
-		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &salePrice, &status, &isVar, &images, &sku, &stock, &lowStockThreshold, &brandID); err != nil {
+		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &salePrice, &status, &isVar, &images, &sku, &stock, &lowStockThreshold, &brandID, &tagsJSON); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -365,6 +384,9 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		item["stock"] = stock
 		item["low_stock_threshold"] = lowStockThreshold
 		item["brand_id"] = brandID
+		var tags []string
+		_ = json.Unmarshal(tagsJSON, &tags)
+		item["tags"] = tags
 		items = append(items, item)
 	}
 
@@ -440,7 +462,7 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 		       p.description, p.short_description, p.price_usd, p.sale_price_usd, p.status, p.images, p.is_variable,
 		       p.sku, p.barcode, p.stock, p.low_stock_threshold, p.backorders_allowed,
 		       p.weight_kg, p.length_cm, p.width_cm, p.height_cm, p.shipping_class,
-		       p.meta_title, p.meta_description, p.hs_code, p.origin_country
+		       p.meta_title, p.meta_description, p.hs_code, p.origin_country, p.tags
 		FROM products p WHERE p.id = $1 AND p.lang = $2`, id, lang)
 
 	var pID, vendorID, catID int64
@@ -450,12 +472,12 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	var trid, l, name, slug, desc, shortDesc, status, sku, barcode, shippingClass, metaTitle, metaDesc, hsCode, originCountry string
 	var stock, lowStockThreshold int
 	var backordersAllowed bool
-	var images []byte
+	var images, tagsJSON []byte
 	var isVar bool
 	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &brandID, &name, &slug, &desc, &shortDesc, &price, &salePrice, &status, &images, &isVar,
 		&sku, &barcode, &stock, &lowStockThreshold, &backordersAllowed,
 		&weightKg, &lengthCm, &widthCm, &heightCm, &shippingClass,
-		&metaTitle, &metaDesc, &hsCode, &originCountry); err != nil {
+		&metaTitle, &metaDesc, &hsCode, &originCountry, &tagsJSON); err != nil {
 		if err == pgx.ErrNoRows {
 			kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable en lang=%s — erreur explicite, pas de page vide silencieuse", id, lang))
 			return
@@ -511,6 +533,9 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	out["meta_description"] = metaDesc
 	out["hs_code"] = hsCode
 	out["origin_country"] = originCountry
+	var tags []string
+	_ = json.Unmarshal(tagsJSON, &tags)
+	out["tags"] = tags
 	out["linked"] = map[string]any{"id": linkedID, "lang": linkedLang}
 	// Compat WPML : le frontend lit p.translations pour le switch FR/EN.
 	if linkedID != 0 {
@@ -1403,6 +1428,7 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 		Barcode    string           `json:"barcode"`
 		Stock      int              `json:"stock"`
 		Images     []string         `json:"images"`
+		Tags       []string         `json:"tags"`
 		IsVariable bool             `json:"is_variable"`
 		Variations []map[string]any `json:"variations"`
 	}
@@ -1417,6 +1443,7 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 
 	trid := fmt.Sprintf("tr-%d", time.Now().UnixNano())
 	imagesJSON, _ := json.Marshal(body.Images)
+	tagsJSON, _ := json.Marshal(body.Tags)
 	ctx := r.Context()
 
 	// Modération : un produit créé par un vendeur avec require_moderation=true
@@ -1441,9 +1468,9 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	insertLang := func(lang, name string) (int64, error) {
 		var id int64
 		err := tx.QueryRow(ctx, `
-			INSERT INTO products (trid, lang, vendor_id, category_id, brand_id, name, slug, price_usd, images, is_variable, sku, barcode, stock, status)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-			trid, lang, body.VendorID, body.CategoryID, nullIfZero(body.BrandID), name, slugify(name), body.PriceUSD, imagesJSON, body.IsVariable,
+			INSERT INTO products (trid, lang, vendor_id, category_id, brand_id, name, slug, price_usd, images, tags, is_variable, sku, barcode, stock, status)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+			trid, lang, body.VendorID, body.CategoryID, nullIfZero(body.BrandID), name, slugify(name), body.PriceUSD, imagesJSON, tagsJSON, body.IsVariable,
 			body.SKU, body.Barcode, body.Stock, initialStatus,
 		).Scan(&id)
 		return id, err
@@ -1639,6 +1666,7 @@ func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
 		MetaTitle         *string   `json:"meta_title"`
 		MetaDescription   *string   `json:"meta_description"`
 		Images            *[]string `json:"images"`
+		Tags              *[]string `json:"tags"`
 		Status            *string   `json:"status"`
 		HSCode            *string   `json:"hs_code"`
 		OriginCountry     *string   `json:"origin_country"`
@@ -1720,6 +1748,10 @@ func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	if body.Images != nil {
 		imagesJSON, _ := json.Marshal(*body.Images)
 		add("images", imagesJSON)
+	}
+	if body.Tags != nil {
+		tagsJSON, _ := json.Marshal(*body.Tags)
+		add("tags", tagsJSON)
 	}
 	if body.Status != nil {
 		add("status", *body.Status)
