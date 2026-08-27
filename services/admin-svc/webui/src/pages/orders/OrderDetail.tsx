@@ -16,6 +16,7 @@ interface OrderFull {
   reference: string
   customer_id: number
   vendor_id: number
+  parent_order_id: number
   status: string
   lines: OrderLine[]
   subtotal_usd: number
@@ -23,6 +24,43 @@ interface OrderFull {
   total_usd: number
   coupon_code: string
   created_at: string
+}
+
+// GroupedLineItem — un article de la commande groupée (GET /admin/api/
+// orders/parent/{id}), enrichi côté order-svc (image, vendor_name) depuis
+// le 2026-08-27 — auparavant ni l'un ni l'autre n'existait sur cet endpoint.
+interface GroupedLineItem {
+  product_id: number
+  vendor_id: number
+  vendor_name: string
+  name: string
+  quantity: number
+  price: string
+  total: string
+  image: string
+}
+
+interface ShippingAddress {
+  first_name?: string
+  last_name?: string
+  address_1?: string
+  city?: string
+  postcode?: string
+  country?: string
+  phone?: string
+}
+
+interface GroupedOrder {
+  id: number
+  number: string
+  reference: string
+  status: string
+  total: string
+  currency: string
+  shipping_total: string
+  line_items: GroupedLineItem[]
+  date_created: string
+  shipping_address?: ShippingAddress
 }
 
 interface OrderEvent {
@@ -54,6 +92,7 @@ export function OrderDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [order, setOrder] = useState<OrderFull | null>(null)
+  const [grouped, setGrouped] = useState<GroupedOrder | null>(null)
   const [events, setEvents] = useState<OrderEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -77,6 +116,18 @@ export function OrderDetail() {
       setNewStatus(o.status)
       const ev = await api.get<{ items: OrderEvent[] }>(`/admin/api/order-events/${id}`)
       setEvents(ev.items || [])
+      // Vue groupée (commande unique côté acheteur, avec le détail par
+      // boutique) — chargée séparément via parent_order_id, les actions
+      // (statut/annulation/étape) continuent d'opérer sur la sous-commande
+      // ${id} elle-même, jamais sur le groupe.
+      if (o.parent_order_id) {
+        try {
+          const g = await api.get<GroupedOrder>(`/admin/api/orders/parent/${o.parent_order_id}`)
+          setGrouped(g)
+        } catch {
+          setGrouped(null) // best effort — l'affichage retombe sur la vue mono-commande
+        }
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'échec du chargement')
     } finally {
@@ -136,6 +187,17 @@ export function OrderDetail() {
   const commission = order.total_usd * commissionRate / 100
   const net = order.total_usd - commission
 
+  // Regroupement par boutique de la vue commande groupée (une section par
+  // vendeur, comme demandé) — vide si la vue groupée n'a pas pu charger,
+  // auquel cas on retombe silencieusement sur order.lines mono-commande.
+  const byVendor = new Map<number, { vendor_name: string; items: GroupedLineItem[] }>()
+  for (const li of grouped?.line_items || []) {
+    const g = byVendor.get(li.vendor_id) || { vendor_name: li.vendor_name || `Boutique #${li.vendor_id}`, items: [] }
+    g.items.push(li)
+    byVendor.set(li.vendor_id, g)
+  }
+  const shipping = grouped?.shipping_address
+
   return (
     <div>
       <div className="page-header">
@@ -156,37 +218,89 @@ export function OrderDetail() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20 }}>
         <div>
-          <div className="form-card" style={{ marginBottom: 16 }}>
-            <h3 style={{ marginTop: 0 }}>Articles &amp; répartition</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Produit</th>
-                  <th>Qté</th>
-                  <th>Prix unitaire</th>
-                  <th>Sous-total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {order.lines.map((l, i) => (
-                  <tr key={i}>
-                    <td className="cell-primary">{l.name}</td>
-                    <td>{l.quantity}</td>
-                    <td>${l.unit_price_usd.toFixed(2)}</td>
-                    <td>${(l.unit_price_usd * l.quantity).toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ marginTop: 12, fontSize: 13, color: '#555' }}>
-              <div>Sous-total : ${order.subtotal_usd.toFixed(2)}</div>
-              <div>Livraison : ${order.shipping_usd.toFixed(2)}</div>
-              <div className="cell-primary">Total TTC : ${order.total_usd.toFixed(2)}</div>
-              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #eee' }}>
-                Commission plateforme ({commissionRate}%) : ${commission.toFixed(2)} — Net vendeur : ${net.toFixed(2)}
+          {byVendor.size > 0 ? (
+            <div className="form-card" style={{ marginBottom: 16 }}>
+              <h3 style={{ marginTop: 0 }}>Articles par boutique</h3>
+              {Array.from(byVendor.entries()).map(([vendorId, g]) => (
+                <div key={vendorId} style={{ marginBottom: 20 }}>
+                  <p className="cell-primary" style={{ marginBottom: 8 }}>{g.vendor_name}</p>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Produit</th>
+                        <th>Qté</th>
+                        <th>Prix unitaire</th>
+                        <th>Sous-total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {g.items.map((l, i) => (
+                        <tr key={i}>
+                          <td style={{ width: 44 }}>
+                            {l.image && <img src={l.image} alt={l.name} className="thumb" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 6 }} />}
+                          </td>
+                          <td className="cell-primary">{l.name}</td>
+                          <td>{l.quantity}</td>
+                          <td>${l.price}</td>
+                          <td>${l.total}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+              <div style={{ marginTop: 12, fontSize: 13, color: '#555' }}>
+                <div>Livraison : ${grouped?.shipping_total ?? order.shipping_usd.toFixed(2)}</div>
+                <div className="cell-primary">Total TTC : ${grouped?.total ?? order.total_usd.toFixed(2)}</div>
               </div>
             </div>
+          ) : (
+            <div className="form-card" style={{ marginBottom: 16 }}>
+              <h3 style={{ marginTop: 0 }}>Articles &amp; répartition</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Produit</th>
+                    <th>Qté</th>
+                    <th>Prix unitaire</th>
+                    <th>Sous-total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {order.lines.map((l, i) => (
+                    <tr key={i}>
+                      <td className="cell-primary">{l.name}</td>
+                      <td>{l.quantity}</td>
+                      <td>${l.unit_price_usd.toFixed(2)}</td>
+                      <td>${(l.unit_price_usd * l.quantity).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 12, fontSize: 13, color: '#555' }}>
+                <div>Sous-total : ${order.subtotal_usd.toFixed(2)}</div>
+                <div>Livraison : ${order.shipping_usd.toFixed(2)}</div>
+                <div className="cell-primary">Total TTC : ${order.total_usd.toFixed(2)}</div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginBottom: 16, fontSize: 13, color: '#555' }}>
+            Commission plateforme ({commissionRate}%) : ${commission.toFixed(2)} — Net vendeur : ${net.toFixed(2)}
           </div>
+
+          {shipping && (
+            <div className="form-card" style={{ marginBottom: 16 }}>
+              <h3 style={{ marginTop: 0 }}>Adresse de livraison</h3>
+              <p style={{ fontSize: 14, color: '#333', lineHeight: 1.6, margin: 0 }}>
+                {shipping.first_name} {shipping.last_name}<br />
+                {shipping.address_1}<br />
+                {shipping.city}{shipping.postcode ? ` ${shipping.postcode}` : ''}, {shipping.country}<br />
+                {shipping.phone}
+              </p>
+            </div>
+          )}
 
           <div className="form-card">
             <h3 style={{ marginTop: 0 }}>Journal d'événements</h3>

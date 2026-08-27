@@ -1126,57 +1126,82 @@ func (s *server) sendWhatsApp(ctx context.Context, to, recipientType string, ord
 
 /* ---------- Déclenchement : commande confirmée → représentant(s) + admin ---------- */
 
-// notifyOrderProcessing — reproduit miad_notify_rep_new_order (PHP) :
-// résout le pays du vendeur (vendor-svc), notifie le(s) représentant(s) du
-// pays + tous les super-représentants, puis les numéros admin configurés.
-func (s *server) notifyOrderProcessing(ctx context.Context, log *slog.Logger, orderID int64) {
+// notifyOrderPaid — reproduit miad_notify_rep_new_order (PHP), mais
+// déclenché sur payment.confirmed (paiement réel) plutôt que sur
+// order.status_changed/processing (confirmation vendeur, avant paiement) —
+// décision actée le 2026-08-27. L'orderID reçu sur ce topic est le
+// PARENT_ORDER_ID (commande groupée, "paiement unique par commande
+// groupée") : on lit le format agrégé GET /orders/parent/{id} (line_items
+// avec vendor_id par ligne, PAS un seul vendeur comme l'ancienne version
+// mono-commande) et on regroupe par vendeur distinct, pour notifier
+// chaque pays concerné UNE seule fois même si plusieurs vendeurs du même
+// pays sont dans le panier — plus le pays du vendeur unique le cas
+// échéant, correction du bug où un panier à 3 vendeurs déclenchait 3
+// notifications représentant au lieu d'une par pays réellement concerné.
+func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID int64) {
 	var order struct {
-		Reference       string          `json:"reference"`
-		VendorID        int64           `json:"vendor_id"`
-		TotalUSD        float64         `json:"total_usd"`
-		Lines           json.RawMessage `json:"lines"`
-		ShippingAddress json.RawMessage `json:"shipping_address"`
-		BillingAddress  json.RawMessage `json:"billing_address"`
+		Reference      string `json:"reference"`
+		TotalUSD       string `json:"total"`
+		ShippingTotal  string `json:"shipping_total"`
+		LineItems      []struct {
+			VendorID int64  `json:"vendor_id"`
+			Name     string `json:"name"`
+			Quantity int    `json:"quantity"`
+		} `json:"line_items"`
 	}
-	if err := fetchJSONInto(ctx, fmt.Sprintf("%s/orders/%d", s.orderURL, orderID), &order); err != nil {
-		log.Error("whatsapp: commande introuvable", "order_id", orderID, "err", err)
+	if err := fetchJSONInto(ctx, fmt.Sprintf("%s/orders/parent/%d", s.orderURL, orderID), &order); err != nil {
+		log.Error("notif représentant: commande groupée introuvable", "order_id", orderID, "err", err)
+		return
+	}
+	if len(order.LineItems) == 0 {
 		return
 	}
 
-	var vendor struct {
-		Name    string `json:"store_name"`
-		Country string `json:"country"`
-	}
-	if err := fetchJSONInto(ctx, fmt.Sprintf("%s/vendors/%d", s.vendorURL, order.VendorID), &vendor); err != nil {
-		log.Error("whatsapp: boutique introuvable", "vendor_id", order.VendorID, "err", err)
-		return
+	// Adresse de livraison — le format parent (getParentOrder) n'expose pas
+	// encore shipping_address (limitation connue, à ajouter séparément côté
+	// order-svc si besoin) : les templates représentant l'affichent via
+	// {{.5}}/shipping_summary, laissés vides pour l'instant plutôt que de
+	// bloquer la notification sur un appel supplémentaire non garanti.
+	var addr parsedAddress
+	productsSummary := summarizeVendorLines(order.LineItems)
+	totalFmt := order.TotalUSD + " $"
+
+	// ---------- Regroupement par vendeur distinct ----------
+	vendorIDs := map[int64]bool{}
+	for _, li := range order.LineItems {
+		if li.VendorID > 0 {
+			vendorIDs[li.VendorID] = true
+		}
 	}
 
-	addr := parseAddress(order.ShippingAddress)
-	if addr.empty() {
-		addr = parseAddress(order.BillingAddress)
-	}
-	productsSummary := summarizeLines(order.Lines)
-	totalFmt := fmt.Sprintf("%.2f $", order.TotalUSD)
+	notifiedPhones := map[string]bool{}
+	notifiedEmails := map[string]bool{}
 
-	// ---------- Représentant(s) du pays + super-représentants ----------
-	// Email et WhatsApp partagent la même résolution (même destinataires,
-	// mêmes variables déjà calculées ci-dessus) — envoyés indépendamment
-	// l'un de l'autre : un échec WhatsApp ne doit jamais bloquer l'email
-	// et vice-versa.
-	rows, err := s.db.Query(ctx,
-		"SELECT whatsapp, email, is_super_rep FROM representatives WHERE (country = $1 AND is_super_rep = FALSE) OR is_super_rep = TRUE",
-		vendor.Country)
-	if err == nil {
-		defer rows.Close()
+	for vendorID := range vendorIDs {
+		var vendor struct {
+			Name    string `json:"store_name"`
+			Country string `json:"country"`
+		}
+		if err := fetchJSONInto(ctx, fmt.Sprintf("%s/vendors/%d", s.vendorURL, vendorID), &vendor); err != nil {
+			log.Error("notif représentant: boutique introuvable", "vendor_id", vendorID, "err", err)
+			continue
+		}
+
+		rows, err := s.db.Query(ctx,
+			"SELECT whatsapp, email, is_super_rep FROM representatives WHERE (country = $1 AND is_super_rep = FALSE) OR is_super_rep = TRUE",
+			vendor.Country)
+		if err != nil {
+			continue
+		}
 		for rows.Next() {
 			var wa, email *string
 			var isSuper bool
 			_ = rows.Scan(&wa, &email, &isSuper)
 
-			if s.twilioEnableRep == "yes" && wa != nil && *wa != "" {
-				fallback := fmt.Sprintf("🛒 *Nouvelle commande #%s*\nBoutique : %s\nClient : %s\nMontant : *%s*\nAdresse : %s\nProduits : %s",
-					order.Reference, vendor.Name, addr.fullName(), totalFmt, addr.oneLine(), productsSummary)
+			if s.twilioEnableRep == "yes" && wa != nil && *wa != "" && !notifiedPhones[*wa] {
+				notifiedPhones[*wa] = true
+				fallback := fmt.Sprintf("🛒 *Nouvelle commande #%s*\nBoutique : %s\nMontant total : *%s*\nProduits : %s",
+					order.Reference, vendor.Name, totalFmt, productsSummary)
 				s.sendWhatsApp(ctx, *wa, "representative", &orderID, s.twilioTemplateRepNewOrder, map[string]string{
 					"1": order.Reference + " — " + productsSummary,
 					"2": vendor.Name,
@@ -1187,7 +1212,8 @@ func (s *server) notifyOrderProcessing(ctx context.Context, log *slog.Logger, or
 				}, fallback)
 			}
 
-			if email != nil && *email != "" {
+			if email != nil && *email != "" && !notifiedEmails[*email] {
+				notifiedEmails[*email] = true
 				zone := vendor.Country
 				if isSuper {
 					zone = "toutes zones"
@@ -1202,6 +1228,7 @@ func (s *server) notifyOrderProcessing(ctx context.Context, log *slog.Logger, or
 				})
 			}
 		}
+		rows.Close()
 	}
 
 	// ---------- Admin ----------
@@ -1298,7 +1325,7 @@ func (s *server) notifyDeliveryStage(ctx context.Context, log *slog.Logger, orde
 
 /* ---------- Consumer Kafka ---------- */
 
-var whatsappWatchedTopics = []string{"order.status_changed", "shipment.delivery_stage_changed"}
+var whatsappWatchedTopics = []string{"payment.confirmed", "shipment.delivery_stage_changed"}
 
 // consumeWhatsappEvents — même pattern que notification-svc.consume :
 // retry/backoff sur Kafka indisponible, jamais fatal pour le service.
@@ -1339,13 +1366,18 @@ func (c whatsappConsumer) Cleanup(sarama.ConsumerGroupSession) error { return ni
 func (c whatsappConsumer) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for msg := range claim.Messages() {
 		switch msg.Topic {
-		case "order.status_changed":
+		case "payment.confirmed":
+			// order_id ici EST le parent_order_id (paiement unique par
+			// commande groupée, voir payment-svc) — remplace l'ancien
+			// déclencheur order.status_changed/processing (2026-08-27) :
+			// notifie au paiement réel, pas à la confirmation vendeur, et
+			// une seule fois par commande groupée au lieu d'une fois par
+			// sous-commande vendeur.
 			var payload struct {
-				OrderID int64  `json:"order_id"`
-				Status  string `json:"status"`
+				OrderID int64 `json:"order_id"`
 			}
-			if json.Unmarshal(msg.Value, &payload) == nil && payload.Status == "processing" && payload.OrderID > 0 {
-				c.s.notifyOrderProcessing(sess.Context(), c.log, payload.OrderID)
+			if json.Unmarshal(msg.Value, &payload) == nil && payload.OrderID > 0 {
+				c.s.notifyOrderPaid(sess.Context(), c.log, payload.OrderID)
 			}
 		case "shipment.delivery_stage_changed":
 			var payload struct {
@@ -1409,14 +1441,15 @@ func (s *server) listWhatsappLogs(w http.ResponseWriter, r *http.Request) {
 
 // resendWhatsappForOrder — équivalent du testeur PHP ("Renvoyer la
 // notification") : rejoue la même logique que le déclencheur Kafka
-// "processing", sans changer le statut de la commande.
+// payment.confirmed, sans re-confirmer le paiement. order_id attendu ici
+// est le parent_order_id (commande groupée), comme pour le déclencheur réel.
 func (s *server) resendWhatsappForOrder(w http.ResponseWriter, r *http.Request) {
 	orderID, err := strconv.ParseInt(r.PathValue("order_id"), 10, 64)
 	if err != nil {
 		kit.Fail(w, 400, "invalid_order_id", "order_id invalide")
 		return
 	}
-	s.notifyOrderProcessing(r.Context(), slog.Default(), orderID)
+	s.notifyOrderPaid(r.Context(), slog.Default(), orderID)
 	kit.JSON(w, 200, map[string]any{"order_id": orderID, "resent": true})
 }
 
@@ -1506,6 +1539,25 @@ type orderLine struct {
 func summarizeLines(raw json.RawMessage) string {
 	var lines []orderLine
 	_ = json.Unmarshal(raw, &lines)
+	if len(lines) == 0 {
+		return "N/A"
+	}
+	parts := make([]string, 0, len(lines))
+	for _, l := range lines {
+		parts = append(parts, fmt.Sprintf("%s x%d", l.Name, l.Quantity))
+	}
+	return strings.Join(parts, " | ")
+}
+
+// summarizeVendorLines — même résumé que summarizeLines, mais pour les
+// line_items déjà décodés du format parent (GET /orders/parent/{id}),
+// qui portent en plus un vendor_id par ligne (non utilisé ici, juste le
+// nom/quantité comme pour l'ancien résumé mono-commande).
+func summarizeVendorLines(lines []struct {
+	VendorID int64  `json:"vendor_id"`
+	Name     string `json:"name"`
+	Quantity int    `json:"quantity"`
+}) string {
 	if len(lines) == 0 {
 		return "N/A"
 	}

@@ -168,6 +168,7 @@ var seedTemplates = []EmailTemplate{
 	{Name: "vendor_disabled", Label: "Boutique suspendue", Subject: "Votre boutique a été suspendue", BodyHTML: vendorDisabledHTML},
 	{Name: "vendor_enabled", Label: "Boutique réactivée", Subject: "Votre boutique a été réactivée", BodyHTML: vendorEnabledHTML},
 	{Name: "address_updated", Label: "Adresse modifiée", Subject: "Votre adresse a été mise à jour", BodyHTML: addressUpdatedHTML},
+	{Name: "broadcast", Label: "Message diffusé (admin)", Subject: "Message MIAD Market", BodyHTML: broadcastHTML},
 }
 
 // getSettings/putSettings — Configuration Système (page admin).
@@ -276,6 +277,7 @@ func main() {
 		mux.HandleFunc("PUT /settings", s.putSettings)
 		mux.HandleFunc("GET /emails/stats", s.stats)
 		mux.HandleFunc("POST /emails/send", s.sendEmail)
+		mux.HandleFunc("POST /emails/broadcast", s.broadcastEmail)
 		mux.HandleFunc("GET /email-templates", s.listTemplates)
 		mux.HandleFunc("GET /email-templates/{name}", s.getTemplate)
 		mux.HandleFunc("PUT /email-templates/{name}", s.updateTemplate)
@@ -323,7 +325,15 @@ func (s *server) handleKafkaEvent(ctx context.Context, log *slog.Logger, msg *sa
 	case "customer.registered":
 		s.queueWelcomeEmail(ctx, log, payload)
 	case "order.created":
-		s.queueOrderConfirmation(ctx, log, payload)
+		// Le client n'est PLUS notifié ici (2026-08-27) : order.created est
+		// publié une fois PAR SOUS-COMMANDE VENDEUR (pas pour le groupe),
+		// donc un panier multi-boutique envoyait un email par boutique, et
+		// ce avant même que le paiement soit confirmé. La confirmation
+		// client se fait désormais uniquement sur payment.confirmed
+		// (queuePaymentConfirmed, ci-dessous), publié une seule fois par
+		// commande groupée (order_id = parent_order_id depuis "paiement
+		// unique par commande groupée"). Vendeur et admin restent notifiés
+		// ici : ils doivent être prévenus tôt, avant paiement, pour préparer.
 		s.queueVendorNewOrder(ctx, log, payload)
 		s.queueAdminNewOrder(ctx, log, payload)
 	case "payment.confirmed":
@@ -655,16 +665,6 @@ func fetchJSONWithHeaders(ctx context.Context, url string, headers map[string]st
 		return fmt.Errorf("statut %d: %s", resp.StatusCode, string(body))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func (s *server) queueOrderConfirmation(ctx context.Context, log *slog.Logger, payload map[string]any) {
-	email, err := s.resolveOrderContact(ctx, payload)
-	if err != nil {
-		log.Warn("email client introuvable pour confirmation commande", "err", err)
-		return
-	}
-	subject := fmt.Sprintf("Confirmation de commande #%v", payload["order_id"])
-	s.queueEmail(ctx, log, email, "order_confirmation", subject, payload)
 }
 
 func (s *server) queuePaymentConfirmed(ctx context.Context, log *slog.Logger, payload map[string]any) {
@@ -1371,6 +1371,152 @@ func (s *server) sendEmail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// broadcastEmail — POST /emails/broadcast {audience, subject, body}, calqué
+// sur notification-svc.pushBroadcast (même forme de réponse sent/failed/
+// total). "body" est du texte brut saisi par l'admin (pas de HTML libre à
+// faire confiance) : échappé puis converti en <br> pour les retours à la
+// ligne, jamais interprété comme balisage — voir template "broadcast"
+// (BodyHTML: broadcastHTML) qui l'insère via {{.body_html}} en tant que
+// template.HTML (donc SANS ré-échappement, sûr uniquement parce que le
+// texte a déjà été échappé ici avant la conversion en <br>).
+func (s *server) broadcastEmail(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Audience string `json:"audience"` // "vendors" | "admins" | "customers"
+		Subject  string `json:"subject"`
+		Body     string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.Subject == "" || body.Body == "" {
+		kit.Fail(w, 400, "missing_fields", "subject et body obligatoires")
+		return
+	}
+	recipients, err := s.resolveBroadcastAudience(r.Context(), body.Audience)
+	if err != nil {
+		kit.Fail(w, 400, "invalid_audience", err.Error())
+		return
+	}
+	if len(recipients) == 0 {
+		kit.Fail(w, 404, "no_recipients", "aucun destinataire trouvé pour cette audience")
+		return
+	}
+
+	bodyHTML := template.HTML(strings.ReplaceAll(template.HTMLEscapeString(body.Body), "\n", "<br>"))
+	payload := map[string]any{"subject": body.Subject, "body_html": bodyHTML}
+
+	log := kit.Logger("email-svc")
+	sent, failed := 0, 0
+	for _, to := range recipients {
+		if to == "" {
+			continue
+		}
+		if _, err := s.db.Exec(r.Context(), `
+			INSERT INTO emails (to_addr, from_addr, subject, template, payload, status)
+			VALUES ($1, $2, $3, 'broadcast', $4, 'queued')`,
+			to, s.fromEmail, body.Subject, mustMarshal(payload)); err != nil {
+			log.Error("broadcast: échec mise en file", "to", to, "err", err)
+			failed++
+			continue
+		}
+		sent++
+	}
+	kit.JSON(w, 200, map[string]any{"sent": sent, "failed": failed, "total": len(recipients)})
+}
+
+// resolveBroadcastAudience — réutilise les listes déjà exposées par les
+// autres services (aucune nouvelle route de lecture) : vendor-svc/GET
+// /vendors (paginé, itéré entièrement), auth-svc/GET /internal/admin-emails
+// (déjà créé pour queueAdminNewOrder), auth-svc/GET /customers (paginé,
+// protégé par X-Internal-Secret comme le reste des appels internes).
+func (s *server) resolveBroadcastAudience(ctx context.Context, audience string) ([]string, error) {
+	switch audience {
+	case "admins":
+		headers := map[string]string{}
+		if s.internalAPISecret != "" {
+			headers["X-Internal-Secret"] = s.internalAPISecret
+		}
+		var resp struct {
+			Items []struct {
+				Email string `json:"email"`
+			} `json:"items"`
+		}
+		if err := fetchJSONWithHeaders(ctx, s.authURL+"/internal/admin-emails", headers, &resp); err != nil {
+			return nil, err
+		}
+		emails := make([]string, 0, len(resp.Items))
+		for _, a := range resp.Items {
+			emails = append(emails, a.Email)
+		}
+		return emails, nil
+
+	case "vendors":
+		emails := []string{}
+		page := 1
+		for {
+			var resp struct {
+				Items []struct {
+					Email string `json:"email"`
+				} `json:"items"`
+				HasMore bool `json:"has_more"`
+			}
+			url := fmt.Sprintf("%s/vendors?page=%d&page_size=100", s.vendorURL, page)
+			if err := fetchJSON(ctx, url, &resp); err != nil {
+				return nil, err
+			}
+			for _, v := range resp.Items {
+				if v.Email != "" {
+					emails = append(emails, v.Email)
+				}
+			}
+			if !resp.HasMore || len(resp.Items) == 0 {
+				break
+			}
+			page++
+		}
+		return emails, nil
+
+	case "customers":
+		emails := []string{}
+		page := 1
+		headers := map[string]string{}
+		if s.internalAPISecret != "" {
+			headers["X-Internal-Secret"] = s.internalAPISecret
+		}
+		for {
+			var resp struct {
+				Items []struct {
+					Email string `json:"email"`
+				} `json:"items"`
+				HasMore bool `json:"has_more"`
+			}
+			url := fmt.Sprintf("%s/internal/customer-emails?page=%d&page_size=100", s.authURL, page)
+			if err := fetchJSONWithHeaders(ctx, url, headers, &resp); err != nil {
+				return nil, err
+			}
+			for _, c := range resp.Items {
+				if c.Email != "" {
+					emails = append(emails, c.Email)
+				}
+			}
+			if !resp.HasMore || len(resp.Items) == 0 {
+				break
+			}
+			page++
+		}
+		return emails, nil
+
+	default:
+		return nil, fmt.Errorf("audience %q inconnue — attendu: vendors, admins, customers", audience)
+	}
+}
+
+func mustMarshal(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
 func (s *server) resendWebhook(w http.ResponseWriter, r *http.Request) {
 	// Webhook pour les événements Resend (delivered, opened, clicked, bounced, complained)
 	var event struct {
@@ -1623,7 +1769,7 @@ const paymentConfirmedHTML = `
               <h1 style="color:#005826;font-size:1.3rem;font-weight:800;margin:0 0 6px;">Paiement confirmé !</h1>
               <p style="color:#888888;font-size:13px;margin:0 0 20px;">Commande #{{.order_id}}</p>
               <p style="font-size:14px;color:#333333;margin-bottom:20px;">
-                Votre paiement a été traité avec succès.
+                Votre paiement a été traité avec succès. Nous préparons votre commande.
               </p>
 
               <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0;">
@@ -1634,8 +1780,37 @@ const paymentConfirmedHTML = `
                 </tr>
               </table>
 
+              {{if .Items}}
+              <h3 style="color:#005826;font-size:14px;margin:28px 0 12px;">Articles commandés :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;">
+                {{range .Items}}
+                <tr>
+                  <td style="padding:10px 0;border-bottom:1px solid #eeeeee;width:52px;">
+                    {{if .Image}}<img src="{{.Image}}" alt="{{.Name}}" width="44" height="44" style="width:44px;height:44px;border-radius:6px;object-fit:cover;display:block;">{{end}}
+                  </td>
+                  <td style="padding:10px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
+                  <td align="right" style="padding:10px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
+                </tr>
+                {{end}}
+              </table>
+              {{end}}
+
+              {{if .Shipping}}
+              <h3 style="color:#005826;font-size:14px;margin:28px 0 12px;">Adresse de livraison :</h3>
+              <table role="presentation" style="width:100%;border-collapse:collapse;background-color:#f9fafb;border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;font-size:14px;color:#333333;line-height:1.5;">
+                    {{.Shipping.FullName}}<br>
+                    {{.Shipping.Address1}}<br>
+                    {{.Shipping.City}}{{if .Shipping.Postcode}} {{.Shipping.Postcode}}{{end}}, {{.Shipping.Country}}<br>
+                    {{if .Shipping.Phone}}{{.Shipping.Phone}}{{end}}
+                  </td>
+                </tr>
+              </table>
+              {{end}}
+
               <p style="font-size:13px;color:#888888;margin-top:24px;">
-                Votre commande est maintenant en préparation.
+                Vous recevrez un email lorsque votre commande sera expédiée.
               </p>
             </td>
           </tr>
@@ -2880,6 +3055,47 @@ const vendorEnabledHTML = `
           <tr>
             <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
               <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — Notification vendeur.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+// broadcastHTML — {{.body_html}} est du HTML de confiance (déjà échappé/
+// mis en forme côté broadcastEmail avant d'être inséré ici, voir
+// nl2brEscaped), passé comme template.HTML pour ne pas être ré-échappé par
+// html/template — jamais de contenu utilisateur brut non filtré ailleurs
+// dans ce fichier ne suit ce chemin, uniquement ce template dédié.
+const broadcastHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MIAD Market</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f0f0f0;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.12);">
+          <tr>
+            <td style="background-color:#005826;padding:20px 28px;text-align:center;">
+              <img src="https://miadmarket.ca/logo/logo.png" alt="MIAD Market" style="max-height:40px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 28px;font-size:14px;color:#333333;line-height:1.6;">
+              {{.body_html}}
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
+              <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
             </td>
           </tr>
         </table>

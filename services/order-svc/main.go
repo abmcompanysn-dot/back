@@ -624,6 +624,16 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// shipping_address — la même pour toutes les sous-commandes d'un même
+	// panier (un seul acheteur, une seule adresse de livraison saisie au
+	// checkout) : lue depuis n'importe laquelle, la première suffit.
+	// Absente jusqu'ici de cet endpoint (admin/frontend groupé ne
+	// l'affichaient pas), ajoutée pour la vue admin commande groupée.
+	var shippingAddr []byte
+	_ = s.db.QueryRow(r.Context(),
+		`SELECT shipping_address FROM orders WHERE parent_order_id = $1 ORDER BY id LIMIT 1`, parentID,
+	).Scan(&shippingAddr)
+
 	rows, err := s.db.Query(r.Context(), `
 		SELECT vendor_id, status, lines, shipping_usd, total_usd
 		FROM orders WHERE parent_order_id = $1 ORDER BY id`, parentID)
@@ -636,6 +646,7 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 	var totalUSD, shippingUSD float64
 	lineItems := []map[string]any{}
 	statuses := map[string]bool{}
+	vendorIDs := map[int64]bool{}
 	found := false
 
 	for rows.Next() {
@@ -651,6 +662,7 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 		totalUSD += total
 		shippingUSD += shipping
 		statuses[status] = true
+		vendorIDs[vendorID] = true
 
 		var vendorLines []line
 		_ = json.Unmarshal(lines, &vendorLines)
@@ -673,14 +685,106 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kit.JSON(w, 200, map[string]any{
+	// Images produits + noms de boutique — best effort, deux appels batch
+	// (pas un par ligne/vendeur) vers catalog-svc et vendor-svc. Ajoutés
+	// pour la vue admin commande groupée ET la vue client (email de
+	// confirmation, historique) qui en manquaient toutes deux. Un produit
+	// ou vendeur introuvable/supprimé ne bloque jamais la réponse.
+	images := s.fetchProductImagesForLines(r.Context(), lineItems)
+	vendorNames := s.fetchVendorNames(r.Context(), vendorIDs)
+	for _, li := range lineItems {
+		if pid, ok := li["product_id"].(int64); ok {
+			li["image"] = images[pid]
+		}
+		if vid, ok := li["vendor_id"].(int64); ok {
+			li["vendor_name"] = vendorNames[vid]
+		}
+	}
+
+	out := map[string]any{
 		"id": parentID, "number": reference, "reference": reference,
 		"status": aggregateStatus(statuses),
 		"total":  strconv.FormatFloat(totalUSD, 'f', 2, 64), "currency": "USD",
 		"shipping_total": strconv.FormatFloat(shippingUSD, 'f', 2, 64),
 		"line_items":     lineItems,
 		"date_created":   createdAt.UTC().Format(time.RFC3339),
-	})
+	}
+	if len(shippingAddr) > 0 {
+		out["shipping_address"] = json.RawMessage(shippingAddr)
+	}
+	kit.JSON(w, 200, out)
+}
+
+// fetchProductImagesForLines — même pattern que email-svc.fetchProductImages
+// (un seul appel batch GET /products?include=id1,id2,... plutôt qu'un par
+// ligne). Best effort : catalog-svc injoignable ou produit supprimé →
+// image absente pour cette ligne, jamais une erreur bloquante.
+func (s *server) fetchProductImagesForLines(ctx context.Context, lineItems []map[string]any) map[int64]string {
+	images := map[int64]string{}
+	seen := map[int64]bool{}
+	ids := make([]string, 0, len(lineItems))
+	for _, li := range lineItems {
+		pid, ok := li["product_id"].(int64)
+		if !ok || pid <= 0 || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		ids = append(ids, strconv.FormatInt(pid, 10))
+	}
+	if len(ids) == 0 {
+		return images
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.catalogURL+"/products?include="+strings.Join(ids, ","), nil)
+	if err != nil {
+		return images
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return images
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return images
+	}
+	var body struct {
+		Items []struct {
+			ID    int64  `json:"id"`
+			Image string `json:"image"`
+		} `json:"items"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&body) != nil {
+		return images
+	}
+	for _, p := range body.Items {
+		images[p.ID] = p.Image
+	}
+	return images
+}
+
+// fetchVendorNames — un appel GET /vendors/{id} par vendeur distinct (peu
+// de vendeurs par commande en pratique, contrairement aux N produits).
+// Best effort : vendeur introuvable → nom absent pour ce vendor_id.
+func (s *server) fetchVendorNames(ctx context.Context, vendorIDs map[int64]bool) map[int64]string {
+	names := map[int64]string{}
+	for vendorID := range vendorIDs {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendors/%d", s.vendorURL, vendorID), nil)
+		if err != nil {
+			continue
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			continue
+		}
+		var vendor struct {
+			StoreName string `json:"store_name"`
+		}
+		if resp.StatusCode == http.StatusOK {
+			_ = json.NewDecoder(resp.Body).Decode(&vendor)
+			names[vendorID] = vendor.StoreName
+		}
+		resp.Body.Close()
+	}
+	return names
 }
 
 // aggregateStatus — un seul statut affichable pour l'acheteur à partir

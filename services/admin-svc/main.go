@@ -204,6 +204,9 @@ func main() {
 			forwardWithBody(w, r, http.MethodPost, s.orderURL+"/orders/"+r.PathValue("id")+"/cancel")
 		}))
 		mux.HandleFunc("GET /admin/api/returns", s.requireAdmin(s.proxy(func() string { return s.orderURL + "/returns" })))
+		mux.HandleFunc("POST /admin/api/emails/broadcast", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.emailURL+"/emails/broadcast")
+		}))
 		mux.HandleFunc("PATCH /admin/api/returns/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPatch, s.orderURL+"/returns/"+r.PathValue("id"))
 		}))
