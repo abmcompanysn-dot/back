@@ -273,8 +273,8 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 		kit.Fail(w, 400, "missing_fields", "customer_id et au moins une ligne sont obligatoires")
 		return
 	}
-	if body.PaymentMethod != "stripe" && body.PaymentMethod != "paydunya" {
-		kit.Fail(w, 400, "invalid_payment_method", "payment_method doit être stripe ou paydunya")
+	if body.PaymentMethod != "stripe" && body.PaymentMethod != "paydunya" && body.PaymentMethod != "pawapay" {
+		kit.Fail(w, 400, "invalid_payment_method", "payment_method doit être stripe, paydunya ou pawapay")
 		return
 	}
 
