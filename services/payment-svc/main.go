@@ -816,6 +816,22 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 		return // Stripe : PaymentIntent créé à la demande via POST /payments/init
 	}
 
+	// Même verrou anti-doublon que initPayment (voir son commentaire) :
+	// entre cet INSERT (ligne posée en 'initiated') et l'appel réseau
+	// PayDunya ci-dessous, POST /payments/init peut arriver entre-temps
+	// (le frontend appelle /api/orders juste après avoir créé la commande,
+	// à quelques centaines de ms de cet event Kafka) et lire lui aussi
+	// status='initiated' — les deux chemins appelleraient alors PayDunya
+	// en parallèle pour la même commande sans ce verrou.
+	locked, err := s.db.Exec(ctx, "UPDATE payments SET status='creating' WHERE id=$1 AND status='initiated'", id)
+	if err != nil {
+		log.Error("verrou création facture PayDunya impossible", "order_id", groupOrderID, "err", err)
+		return
+	}
+	if locked.RowsAffected() == 0 {
+		log.Info("facture PayDunya déjà en cours de création ailleurs", "order_id", groupOrderID)
+		return
+	}
 	// groupOrderID/totalUSD (pas ev.OrderID/ev.TotalUSD) : la facture doit
 	// porter sur le total agrégé du groupe, avec le parent en métadonnée
 	// (metadata[order_id] côté PayDunya), pas une sous-commande.
@@ -1443,6 +1459,30 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 	// Stripe juste au-dessus, élimine la race condition à la racine plutôt
 	// que de rallonger un retry côté frontend.
 	if provider == "paydunya" && redirect == "" && (status == "initiated" || status == "failed") {
+		// Verrou anti-doublon (2026-08-27) : ce chemin ET initiateFor
+		// (consommateur Kafka order.created) peuvent tenter de créer la
+		// facture PayDunya pour LA MÊME commande quasi simultanément — le
+		// frontend appelle POST /payments/init immédiatement après avoir
+		// créé la commande, souvent à quelques centaines de ms de l'event
+		// Kafka. Sans verrou, les deux font un appel réseau réel vers
+		// PayDunya en parallèle pour rien (constaté en logs : un appel via
+		// initiateFor échoue "Too many connections" à 00:47:17.311, suivi
+		// 400ms après d'un POST /payments/init de 522ms — durée cohérente
+		// avec un DEUXIÈME appel réseau vers PayDunya, jamais loggé car
+		// kit.Fail ne loggue rien). Ce UPDATE conditionnel fait office de
+		// verrou : seule LA requête qui gagne la course passe status à
+		// 'creating' et a le droit d'appeler PayDunya ; l'autre voit
+		// RowsAffected()=0 et repart sans jamais toucher le réseau.
+		locked, err := s.db.Exec(ctx,
+			"UPDATE payments SET status='creating' WHERE id=$1 AND status IN ('initiated','failed')", id)
+		if err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		if locked.RowsAffected() == 0 {
+			kit.Fail(w, 409, "paydunya_creating", "création de la facture PayDunya déjà en cours — réessayez dans un instant")
+			return
+		}
 		reference := body.Reference
 		if reference == "" {
 			reference = fmt.Sprintf("MIAD-%d", body.OrderID)
@@ -1456,6 +1496,8 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 			OrderID: body.OrderID, ParentOrderID: body.OrderID, Reference: reference, TotalUSD: amount,
 		})
 		if err != nil {
+			_, _ = s.db.Exec(ctx, "UPDATE payments SET status='failed' WHERE id=$1", id)
+			slog.Error("initPayment: création de facture PayDunya impossible", "order_id", body.OrderID, "err", err)
 			kit.Fail(w, 502, "paydunya_error", fmt.Sprintf("création de la facture PayDunya impossible: %v", err))
 			return
 		}

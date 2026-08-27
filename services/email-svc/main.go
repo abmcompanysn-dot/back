@@ -424,39 +424,107 @@ type emailShippingAddress struct {
 	Phone    string
 }
 
+// orderLine — shape interne commun, alimenté soit par GET /orders/{id}
+// (sous-commande, un vendeur), soit par GET /orders/parent/{id} (commande
+// groupée, formats JSON différents — voir plus bas).
+type orderLine struct {
+	ProductID int64
+	Name      string
+	Quantity  int
+	UnitPrice float64
+}
+
 func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any) (email string, err error) {
 	orderID := fmt.Sprint(payload["order_id"])
 	if orderID == "" || orderID == "<nil>" {
 		return "", fmt.Errorf("order_id manquant dans le payload")
 	}
-	var order struct {
-		CustomerID int64   `json:"customer_id"`
-		TotalUSD   float64 `json:"total_usd"`
-		Lines      []struct {
-			ProductID int64   `json:"product_id"`
-			Name      string  `json:"name"`
-			Quantity  int     `json:"quantity"`
-			UnitPrice float64 `json:"unit_price_usd"`
-		} `json:"lines"`
-		ShippingAddress map[string]any `json:"shipping_address"`
+	var customerID int64
+	var totalUSD float64
+	var lines []orderLine
+	var shippingAddress map[string]any
+
+	// payment.confirmed/payment.failed portent désormais le PARENT_ORDER_ID
+	// (paiement unique par commande groupée depuis le 2026-08-26, voir
+	// payment-svc) — un parent a status='group', customer_id correct mais
+	// lines=[] (les vrais articles sont dans les sous-commandes). Sans ce
+	// double chemin, l'email de confirmation de paiement partait bien au
+	// bon client mais sans AUCUN article/image (lines toujours vide sur un
+	// parent) — c'est justement ce que le fondateur a signalé le
+	// 2026-08-27. order.created/order.status_changed continuent de porter
+	// un id de sous-commande (order-svc publie ces events par vendeur),
+	// donc GET /orders/{id} reste le bon chemin pour eux.
+	var probe struct {
+		Status string `json:"status"`
 	}
-	if err := fetchJSON(ctx, s.orderURL+"/orders/"+orderID, &order); err != nil {
-		return "", fmt.Errorf("order-svc: %w", err)
+	isParent := fetchJSON(ctx, s.orderURL+"/orders/"+orderID, &probe) == nil && probe.Status == "group"
+
+	if isParent {
+		var parent struct {
+			LineItems []struct {
+				ProductID int64  `json:"product_id"`
+				Name      string `json:"name"`
+				Quantity  int    `json:"quantity"`
+				Price     string `json:"price"`
+			} `json:"line_items"`
+			Total string `json:"total"`
+		}
+		if err := fetchJSON(ctx, s.orderURL+"/orders/parent/"+orderID, &parent); err != nil {
+			return "", fmt.Errorf("order-svc (parent): %w", err)
+		}
+		if t, err := strconv.ParseFloat(parent.Total, 64); err == nil {
+			totalUSD = t
+		}
+		for _, l := range parent.LineItems {
+			price, _ := strconv.ParseFloat(l.Price, 64)
+			lines = append(lines, orderLine{ProductID: l.ProductID, Name: l.Name, Quantity: l.Quantity, UnitPrice: price})
+		}
+		// Le parent (status='group') porte le bon customer_id malgré des
+		// lines vides — pas besoin d'un appel supplémentaire pour ça.
+		var parentOrder struct {
+			CustomerID      int64          `json:"customer_id"`
+			ShippingAddress map[string]any `json:"shipping_address"`
+		}
+		if err := fetchJSON(ctx, s.orderURL+"/orders/"+orderID, &parentOrder); err == nil {
+			customerID = parentOrder.CustomerID
+			shippingAddress = parentOrder.ShippingAddress
+		}
+	} else {
+		var order struct {
+			CustomerID int64   `json:"customer_id"`
+			TotalUSD   float64 `json:"total_usd"`
+			Lines      []struct {
+				ProductID int64   `json:"product_id"`
+				Name      string  `json:"name"`
+				Quantity  int     `json:"quantity"`
+				UnitPrice float64 `json:"unit_price_usd"`
+			} `json:"lines"`
+			ShippingAddress map[string]any `json:"shipping_address"`
+		}
+		if err := fetchJSON(ctx, s.orderURL+"/orders/"+orderID, &order); err != nil {
+			return "", fmt.Errorf("order-svc: %w", err)
+		}
+		customerID = order.CustomerID
+		totalUSD = order.TotalUSD
+		shippingAddress = order.ShippingAddress
+		for _, l := range order.Lines {
+			lines = append(lines, orderLine{ProductID: l.ProductID, Name: l.Name, Quantity: l.Quantity, UnitPrice: l.UnitPrice})
+		}
 	}
-	payload["total_usd"] = order.TotalUSD
+	payload["total_usd"] = totalUSD
 
 	// Images produits — un seul appel batch à catalog-svc (GET
 	// /products?include=id1,id2,...) plutôt qu'un appel par ligne. Best
 	// effort : un produit introuvable/supprimé ne doit jamais faire
 	// échouer l'email, juste laisser Image vide pour cette ligne.
-	images := s.fetchProductImages(ctx, order.Lines)
+	images := s.fetchProductImages(ctx, lines)
 
 	// Détails de la commande — utilisés par order_confirmation ET
 	// order_shipped (le fondateur a explicitement demandé que l'email
 	// d'expédition affiche lui aussi les articles, pas seulement le
 	// numéro de suivi).
-	items := make([]emailOrderLine, 0, len(order.Lines))
-	for _, l := range order.Lines {
+	items := make([]emailOrderLine, 0, len(lines))
+	for _, l := range lines {
 		items = append(items, emailOrderLine{
 			Name: l.Name, Quantity: l.Quantity,
 			Price: fmt.Sprintf("%.2f $", l.UnitPrice),
@@ -467,22 +535,22 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 
 	// Adresse de livraison — jamais transmise avant ce correctif, alors que
 	// order-svc l'expose depuis le début (order.shipping_address).
-	if order.ShippingAddress != nil {
+	if shippingAddress != nil {
 		addr := emailShippingAddress{
-			FullName: strings.TrimSpace(strAt(order.ShippingAddress, "first_name") + " " + strAt(order.ShippingAddress, "last_name")),
-			Address1: strAt(order.ShippingAddress, "address_1"),
-			City:     strAt(order.ShippingAddress, "city"),
-			Postcode: strAt(order.ShippingAddress, "postcode"),
-			Country:  strAt(order.ShippingAddress, "country"),
-			Phone:    strAt(order.ShippingAddress, "phone"),
+			FullName: strings.TrimSpace(strAt(shippingAddress, "first_name") + " " + strAt(shippingAddress, "last_name")),
+			Address1: strAt(shippingAddress, "address_1"),
+			City:     strAt(shippingAddress, "city"),
+			Postcode: strAt(shippingAddress, "postcode"),
+			Country:  strAt(shippingAddress, "country"),
+			Phone:    strAt(shippingAddress, "phone"),
 		}
 		if addr.FullName == "" {
-			addr.FullName = strAt(order.ShippingAddress, "full_name")
+			addr.FullName = strAt(shippingAddress, "full_name")
 		}
 		payload["Shipping"] = addr
 	}
 
-	if order.CustomerID == 0 {
+	if customerID == 0 {
 		return "", fmt.Errorf("commande %s sans customer_id", orderID)
 	}
 	var customer struct {
@@ -495,11 +563,11 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 	if s.internalAPISecret != "" {
 		headers["X-Internal-Secret"] = s.internalAPISecret
 	}
-	if err := fetchJSONWithHeaders(ctx, s.authURL+"/customer/"+fmt.Sprint(order.CustomerID), headers, &customer); err != nil {
+	if err := fetchJSONWithHeaders(ctx, s.authURL+"/customer/"+fmt.Sprint(customerID), headers, &customer); err != nil {
 		return "", fmt.Errorf("auth-svc: %w", err)
 	}
 	if customer.Email == "" {
-		return "", fmt.Errorf("client %d inscrit par téléphone, sans email", order.CustomerID)
+		return "", fmt.Errorf("client %d inscrit par téléphone, sans email", customerID)
 	}
 	return customer.Email, nil
 }
@@ -509,12 +577,7 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 // appel par ligne. Best effort : renvoie une map partielle (voire vide) si
 // catalog-svc est injoignable ou qu'un produit a été supprimé depuis —
 // l'email doit toujours partir, avec ou sans images.
-func (s *server) fetchProductImages(ctx context.Context, lines []struct {
-	ProductID int64   `json:"product_id"`
-	Name      string  `json:"name"`
-	Quantity  int     `json:"quantity"`
-	UnitPrice float64 `json:"unit_price_usd"`
-}) map[int64]string {
+func (s *server) fetchProductImages(ctx context.Context, lines []orderLine) map[int64]string {
 	images := map[int64]string{}
 	ids := make([]string, 0, len(lines))
 	for _, l := range lines {
