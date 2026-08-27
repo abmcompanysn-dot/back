@@ -290,7 +290,8 @@ export interface WooProduct {
   description: string
   lang: 'fr' | 'en'
   variations?: WooProductVariation[]
-  translationOfId?: string 
+  translationOfId?: string
+  tags?: string[]
   weight?: number
   dimensions?: any
   salesCount?: number

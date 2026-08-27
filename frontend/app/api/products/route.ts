@@ -323,9 +323,17 @@ export async function GET(req: Request) {
         onSale: !!p.on_sale,
         image: p.image || p.images?.[0]?.src || '/placeholder.svg',
         images: (p.images || []).map((img: any) => img.src || img),
-        categories: p.category_id ? [{ name: '', slug: '' }] : [],
-        category: 'Général',
-        categorySlug: '',
+        categories: p.category_id ? [{ name: p.category_name || '', slug: p.category_slug || '' }] : [],
+        category: p.category_name || 'Général',
+        categorySlug: p.category_slug || '',
+        tags: p.tags || [],
+        // linked.id — l'ID de la version dans l'autre langue (même trid côté
+        // catalog-svc), exposé par GET /products/{id} mais jusqu'ici jamais
+        // lu ici. Permet au frontend de retrouver la fiche EN/FR jumelle
+        // sans un second aller-retour par slug (voir handleLanguageChange
+        // dans MiadMarketClient.tsx, qui l'utilise pour ne pas figer la
+        // fiche produit affichée dans son ancienne langue).
+        translationOfId: p.linked?.id ? String(p.linked.id) : undefined,
         stock: p.stock ?? 0,
         inStock: (p.stock ?? 0) > 0 || p.status === 'active',
         manageStock: true,

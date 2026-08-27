@@ -366,6 +366,7 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	items := []map[string]any{}
+	categoryIDs := map[int64]bool{}
 	for rows.Next() {
 		var id, vendorID, categoryID int64
 		var brandID *int64
@@ -387,7 +388,41 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		var tags []string
 		_ = json.Unmarshal(tagsJSON, &tags)
 		item["tags"] = tags
+		if categoryID != 0 {
+			categoryIDs[categoryID] = true
+		}
 		items = append(items, item)
+	}
+
+	// Résolution batch category_id -> {name, slug} : évite un aller-retour
+	// GET /categories séparé côté frontend, qui affichait "Général" en dur
+	// faute de ce champ (bug trouvé le 27/08, même pattern que vendorsById
+	// côté app/api/products/route.ts).
+	if len(categoryIDs) > 0 {
+		ids := make([]int64, 0, len(categoryIDs))
+		for id := range categoryIDs {
+			ids = append(ids, id)
+		}
+		catRows, err := s.db.Query(r.Context(), "SELECT id, name, slug FROM categories WHERE id = ANY($1)", ids)
+		if err == nil {
+			defer catRows.Close()
+			names := map[int64]map[string]string{}
+			for catRows.Next() {
+				var cid int64
+				var cname, cslug string
+				if catRows.Scan(&cid, &cname, &cslug) == nil {
+					names[cid] = map[string]string{"name": cname, "slug": cslug}
+				}
+			}
+			for _, item := range items {
+				if cid, ok := item["category_id"].(int64); ok {
+					if c, found := names[cid]; found {
+						item["category_name"] = c["name"]
+						item["category_slug"] = c["slug"]
+					}
+				}
+			}
+		}
 	}
 
 	kit.JSON(w, 200, map[string]any{
@@ -541,6 +576,13 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	var tags []string
 	_ = json.Unmarshal(tagsJSON, &tags)
 	out["tags"] = tags
+	if catID != 0 {
+		var catName, catSlug string
+		if s.db.QueryRow(r.Context(), "SELECT name, slug FROM categories WHERE id = $1", catID).Scan(&catName, &catSlug) == nil {
+			out["category_name"] = catName
+			out["category_slug"] = catSlug
+		}
+	}
 	out["linked"] = map[string]any{"id": linkedID, "lang": linkedLang}
 	// Compat WPML : le frontend lit p.translations pour le switch FR/EN.
 	if linkedID != 0 {
