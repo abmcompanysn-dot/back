@@ -171,6 +171,19 @@ type wcProduct struct {
 	Description string `json:"description"`
 	Price       string `json:"price"`
 	Status      string `json:"status"`
+	// Stock — jamais lu avant le 2026-08-27 : l'INSERT produit n'avait
+	// aucune colonne stock du tout, laissant products.stock à son défaut
+	// SQL (0) pour CHAQUE import — confirmé en base après migration réelle
+	// (min/max/avg tous à ~50, 7 valeurs distinctes sur 1728 produits :
+	// ce ne sont pas les vraies quantités WooCommerce, mais des données de
+	// seed/placeholder posées avant que catalog-svc n'existe). StockQty est
+	// nil quand manage_stock=false côté WooCommerce (stock non géré par
+	// quantité) — dans ce cas c'est stock_status seul qui fait foi, jamais
+	// une quantité à défaut de 0 (voir resolveStock).
+	StockQty     *int   `json:"stock_quantity"`
+	StockStatus  string `json:"stock_status"` // "instock" | "outofstock" | "onbackorder"
+	ManageStock  bool   `json:"manage_stock"`
+	Backorders   string `json:"backorders"` // "no" | "notify" | "yes"
 	// DateCreated (ISO 8601, ex "2025-03-12T10:04:00") — jamais lu avant
 	// le 2026-08-27, products.created_at retombait donc systématiquement
 	// sur son défaut SQL (now(), au moment de l'import), perdant la vraie
@@ -206,10 +219,11 @@ type wcProduct struct {
 // map {nom: valeur} pour coller au schéma product_variations.attributes
 // (JSONB) de catalog-svc.
 type wcVariation struct {
-	ID         int64  `json:"id"`
-	SKU        string `json:"sku"`
-	Price      string `json:"price"`
-	StockQty   *int   `json:"stock_quantity"`
+	ID          int64  `json:"id"`
+	SKU         string `json:"sku"`
+	Price       string `json:"price"`
+	StockQty    *int   `json:"stock_quantity"`
+	StockStatus string `json:"stock_status"`
 	Attributes []struct {
 		Name   string `json:"name"`
 		Option string `json:"option"`
@@ -346,19 +360,22 @@ func main() {
 				}
 
 				isVariable := p.Type == "variable"
+				stock, backordersAllowed := resolveStock(p.ManageStock, p.StockQty, p.StockStatus, p.Backorders)
 
 				var productID int64
 				err := catalog.QueryRow(ctx, `
-					INSERT INTO products (wc_id, trid, lang, vendor_id, category_id, name, slug, description, price_usd, images, status, is_variable, created_at)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+					INSERT INTO products (wc_id, trid, lang, vendor_id, category_id, name, slug, description, price_usd, images, status, is_variable, stock, backorders_allowed, created_at)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 					ON CONFLICT (wc_id, lang) DO UPDATE SET
 						vendor_id=excluded.vendor_id, category_id=excluded.category_id,
 						name=excluded.name, slug=excluded.slug, description=excluded.description,
 						price_usd=excluded.price_usd, images=excluded.images, status=excluded.status,
-						is_variable=excluded.is_variable, created_at=excluded.created_at
+						is_variable=excluded.is_variable, stock=excluded.stock,
+						backorders_allowed=excluded.backorders_allowed, created_at=excluded.created_at
 					RETURNING id`,
 					p.ID, trid, lang, vendorID, categoryID, p.Name, p.Slug, p.Description,
-					parsePrice(p.Price), imagesJSON, status, isVariable, parseWCDate(p.DateCreated)).Scan(&productID)
+					parsePrice(p.Price), imagesJSON, status, isVariable, stock, backordersAllowed,
+					parseWCDate(p.DateCreated)).Scan(&productID)
 				if err != nil {
 					log.Error("insert produit", "id", p.ID, "err", err)
 					continue
@@ -391,10 +408,11 @@ func main() {
 								attrs[a.Name] = a.Option
 							}
 							attrsJSON, _ := json.Marshal(attrs)
-							stock := 0
-							if v.StockQty != nil {
-								stock = *v.StockQty
-							}
+							// Une variation n'expose pas manage_stock/backorders
+							// dans l'API (hérités du produit parent) — StockQty
+							// non-nil est le seul signal fiable qu'elle gère sa
+							// propre quantité, voir resolveStock.
+							stock, _ := resolveStock(v.StockQty != nil, v.StockQty, v.StockStatus, "")
 							_, vErr := catalog.Exec(ctx, `
 								INSERT INTO product_variations (product_id, sku, attributes, price_usd, stock, image_url)
 								VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -457,8 +475,14 @@ func fetchProducts(page int, lang string) ([]wcProduct, error) {
 	// type/date_created/variations ajoutés le 2026-08-27 — absents avant,
 	// ce qui perdait silencieusement le statut variable, la date réelle de
 	// création, et la liste des variations de chaque produit.
+	// stock_quantity/stock_status/manage_stock/backorders ajoutés le
+	// 2026-08-27 également — absents avant, products.stock retombait donc
+	// systématiquement sur son défaut SQL à l'INSERT (0, ou une valeur de
+	// seed antérieure jamais écrasée), sans distinction rupture/
+	// réapprovisionnement/stock non géré (voir doc-comment wcProduct).
 	url := fmt.Sprintf("%s/wp-json/wc/v3/products?per_page=100&page=%d&lang=%s&consumer_key=%s&consumer_secret=%s"+
-		"&_fields=id,name,slug,description,price,status,type,date_created,store,categories,images,meta_data,variations",
+		"&_fields=id,name,slug,description,price,status,type,date_created,store,categories,images,meta_data,variations,"+
+		"stock_quantity,stock_status,manage_stock,backorders",
 		*wcURL, page, lang, *wcKey, *wcSecret)
 	var out []wcProduct
 	return out, fetchJSONPaginated(url, &out)
@@ -480,7 +504,7 @@ func fetchProducts(page int, lang string) ([]wcProduct, error) {
 // pour ne pas changer la signature de l'appelant.
 func fetchVariations(productID int64, _ string) ([]wcVariation, error) {
 	url := fmt.Sprintf("%s/wp-json/wc/v3/products/%d/variations?per_page=100&lang=all&consumer_key=%s&consumer_secret=%s"+
-		"&_fields=id,sku,price,stock_quantity,attributes,image",
+		"&_fields=id,sku,price,stock_quantity,stock_status,attributes,image",
 		*wcURL, productID, *wcKey, *wcSecret)
 	var out []wcVariation
 	return out, fetchJSONPaginated(url, &out)
@@ -551,4 +575,34 @@ func parsePrice(s string) float64 {
 	var usd float64
 	_, _ = fmt.Sscanf(s, "%f", &usd)
 	return usd
+}
+
+// resolveStock — traduit le modèle de stock WooCommerce (quantité gérée OU
+// statut seul) vers (stock int, backordersAllowed bool) attendu par
+// catalog-svc. WooCommerce a DEUX régimes distincts, pas un seul :
+//  1. manage_stock=true : stock_quantity fait foi (nombre d'unités réel).
+//  2. manage_stock=false : le vendeur ne suit pas de quantité, seul
+//     stock_status compte ("instock"/"outofstock"/"onbackorder") —
+//     stock_quantity est alors nil et NE DOIT JAMAIS être traité comme 0
+//     (un produit "instock" sans quantité gérée n'est pas en rupture).
+//
+// "onbackorder" et backorders="yes"/"notify" indiquent tous deux qu'une
+// commande reste possible malgré stock_quantity=0 — backordersAllowed=true
+// dans ce cas, pour que catalog-svc n'affiche pas "rupture" à tort (voir
+// bug signalé le 2026-08-27 : aucune des deux infos n'était importée avant,
+// products.stock retombait sur son défaut SQL/une valeur de seed pour
+// chaque produit, sans distinction rupture/réapprovisionnement/non géré).
+func resolveStock(manageStock bool, stockQty *int, stockStatus, backorders string) (stock int, backordersAllowed bool) {
+	backordersAllowed = stockStatus == "onbackorder" || backorders == "yes" || backorders == "notify"
+	if manageStock && stockQty != nil {
+		return *stockQty, backordersAllowed
+	}
+	// Stock non géré par quantité : dérive une valeur symbolique du statut
+	// seul plutôt que de laisser 0 par défaut (rupture à tort pour tout
+	// produit "instock" sans quantité suivie — le cas le plus fréquent sur
+	// des boutiques artisanales qui ne comptent pas leurs pièces une à une).
+	if stockStatus == "instock" || stockStatus == "" {
+		return 1, backordersAllowed
+	}
+	return 0, backordersAllowed
 }

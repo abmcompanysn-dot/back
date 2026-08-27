@@ -510,7 +510,12 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 				variations = append(variations, map[string]any{
 					"id": vid, "sku": sku, "attributes": json.RawMessage(attrs),
 					"price": strconv.FormatFloat(vprice, 'f', 2, 64), "price_usd": vprice,
-					"stock": stock, "in_stock": stock > 0, "image_url": img,
+					// backordersAllowed hérité du produit parent (pas de colonne
+					// propre sur product_variations) — sans ça, une variation
+					// en réapprovisionnement (stock=0, backorders_allowed=true
+					// côté produit) s'affichait à tort comme épuisée. Bug
+					// signalé le 2026-08-27.
+					"stock": stock, "in_stock": stock > 0 || backordersAllowed, "image_url": img,
 				})
 			}
 		}
@@ -574,9 +579,15 @@ func (s *server) listVariationsBatch(w http.ResponseWriter, r *http.Request) {
 		ids = ids[:200]
 	}
 
+	// JOIN products pour backorders_allowed — sans ça, une variation en
+	// réapprovisionnement (stock=0 mais backorders_allowed=true côté
+	// produit parent) s'affichait à tort comme épuisée sur cet endpoint
+	// batch aussi (même bug que listProducts/getProduct, signalé le
+	// 2026-08-27).
 	rows, err := s.db.Query(r.Context(),
-		`SELECT id, product_id, sku, attributes, price_usd, stock, image_url
-		 FROM product_variations WHERE product_id = ANY($1) ORDER BY product_id, id`, ids)
+		`SELECT v.id, v.product_id, v.sku, v.attributes, v.price_usd, v.stock, v.image_url, p.backorders_allowed
+		 FROM product_variations v JOIN products p ON p.id = v.product_id
+		 WHERE v.product_id = ANY($1) ORDER BY v.product_id, v.id`, ids)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -590,7 +601,8 @@ func (s *server) listVariationsBatch(w http.ResponseWriter, r *http.Request) {
 		var sku, img string
 		var attrs []byte
 		var stock int
-		if err := rows.Scan(&vid, &productID, &sku, &attrs, &vprice, &stock, &img); err != nil {
+		var backordersAllowed bool
+		if err := rows.Scan(&vid, &productID, &sku, &attrs, &vprice, &stock, &img, &backordersAllowed); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -598,7 +610,7 @@ func (s *server) listVariationsBatch(w http.ResponseWriter, r *http.Request) {
 		out[key] = append(out[key], map[string]any{
 			"id": vid, "sku": sku, "attributes": json.RawMessage(attrs),
 			"price": strconv.FormatFloat(vprice, 'f', 2, 64), "price_usd": vprice,
-			"stock": stock, "in_stock": stock > 0, "image_url": img,
+			"stock": stock, "in_stock": stock > 0 || backordersAllowed, "image_url": img,
 		})
 	}
 	kit.JSON(w, 200, map[string]any{"variations": out})
