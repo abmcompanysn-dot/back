@@ -343,7 +343,23 @@ export async function GET(req: Request) {
         countryCode: store?.country || '',
         shippingPrice: DEFAULT_SHIPPING_PRICE,
         meta_data: [],
-        attributes: [],
+        // attributes — dérivé des vraies variations (nom d'attribut -> toutes
+        // les valeurs vues), PAS envoyé tel quel par catalog-svc (qui n'a pas
+        // de notion d'attribut de produit séparée des variations). Avant ce
+        // correctif, ce champ était toujours [], ce qui empêchait
+        // ProductVariations.tsx (availableAttributes) d'afficher le moindre
+        // sélecteur couleur/taille sur la fiche produit — bug trouvé le
+        // 27/08 : le prix total s'affichait déjà pré-calculé sur une
+        // variation, mais sans aucun bouton pour que le client choisisse.
+        attributes: Object.values(
+          (variationsMap[p.id] || []).reduce((acc: Record<string, { name: string; options: Set<string> }>, v: any) => {
+            for (const [name, option] of Object.entries(v.attributes || {})) {
+              if (!acc[name]) acc[name] = { name, options: new Set() }
+              acc[name].options.add(String(option))
+            }
+            return acc
+          }, {})
+        ).map((a: any, i: number) => ({ id: i, name: a.name, slug: a.name, variation: true, options: Array.from(a.options) })),
         defaultAttributes: [],
         vendor: store ? {
           id: String(p.vendor_id),
