@@ -159,12 +159,23 @@ type wcCategory struct {
 }
 
 type wcProduct struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Slug        string `json:"slug"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	// "type" distingue simple/variable — jamais lu avant le 2026-08-27
+	// (absent de l'ancien _fields), ce qui faisait atterrir TOUT produit
+	// WooCommerce variable comme un produit simple côté catalog-svc
+	// (is_variable toujours FALSE par défaut, aucune ligne
+	// product_variations créée).
+	Type        string `json:"type"`
 	Description string `json:"description"`
 	Price       string `json:"price"`
 	Status      string `json:"status"`
+	// DateCreated (ISO 8601, ex "2025-03-12T10:04:00") — jamais lu avant
+	// le 2026-08-27, products.created_at retombait donc systématiquement
+	// sur son défaut SQL (now(), au moment de l'import), perdant la vraie
+	// date de création du produit côté WooCommerce.
+	DateCreated string `json:"date_created"`
 	// "author" (post_author WordPress) n'existe pas du tout dans le
 	// schéma REST wc/v3/products, avec ou sans plugin Dokan — confirmé en
 	// migration réelle le 2026-08-24 (absent même en le demandant
@@ -184,6 +195,28 @@ type wcProduct struct {
 		Key   string `json:"key"`
 		Value any    `json:"value"`
 	} `json:"meta_data"`
+	// IDs des variations enfants (WooCommerce ne les développe jamais
+	// inline sur /products — un appel séparé par produit est nécessaire,
+	// voir fetchVariations) — vide pour un produit simple.
+	Variations []int64 `json:"variations"`
+}
+
+// wcVariation — une ligne wc/v3/products/{id}/variations. Les attributs
+// (couleur, taille…) arrivent en liste plate WooCommerce ; reconstruits en
+// map {nom: valeur} pour coller au schéma product_variations.attributes
+// (JSONB) de catalog-svc.
+type wcVariation struct {
+	ID         int64  `json:"id"`
+	SKU        string `json:"sku"`
+	Price      string `json:"price"`
+	StockQty   *int   `json:"stock_quantity"`
+	Attributes []struct {
+		Name   string `json:"name"`
+		Option string `json:"option"`
+	} `json:"attributes"`
+	Image struct {
+		Src string `json:"src"`
+	} `json:"image"`
 }
 
 func main() {
@@ -312,17 +345,58 @@ func main() {
 					categoryID = wcCatIDToCatalogID[fmt.Sprintf("%s:%d", lang, p.Categories[0].ID)]
 				}
 
-				_, err := catalog.Exec(ctx, `
-					INSERT INTO products (wc_id, trid, lang, vendor_id, category_id, name, slug, description, price_usd, images, status)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				isVariable := p.Type == "variable"
+
+				var productID int64
+				err := catalog.QueryRow(ctx, `
+					INSERT INTO products (wc_id, trid, lang, vendor_id, category_id, name, slug, description, price_usd, images, status, is_variable, created_at)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 					ON CONFLICT (wc_id, lang) DO UPDATE SET
 						vendor_id=excluded.vendor_id, category_id=excluded.category_id,
 						name=excluded.name, slug=excluded.slug, description=excluded.description,
-						price_usd=excluded.price_usd, images=excluded.images, status=excluded.status`,
+						price_usd=excluded.price_usd, images=excluded.images, status=excluded.status,
+						is_variable=excluded.is_variable
+					RETURNING id`,
 					p.ID, trid, lang, vendorID, categoryID, p.Name, p.Slug, p.Description,
-					parsePrice(p.Price), imagesJSON, status)
+					parsePrice(p.Price), imagesJSON, status, isVariable, parseWCDate(p.DateCreated)).Scan(&productID)
 				if err != nil {
 					log.Error("insert produit", "id", p.ID, "err", err)
+					continue
+				}
+
+				if isVariable && len(p.Variations) > 0 {
+					variations, vErr := fetchVariations(p.ID, lang)
+					if vErr != nil {
+						log.Error("lecture variations", "product_id", p.ID, "err", vErr)
+					} else {
+						// Le script est relançable (ON CONFLICT sur products
+						// ci-dessus) — sans ce DELETE, relancer l'import sur
+						// un produit déjà importé dupliquerait ses variations
+						// à chaque passage (product_variations n'a pas de
+						// contrainte d'unicité par wc_id, WooCommerce n'en
+						// fournit pas de stable côté schéma catalog-svc).
+						if _, dErr := catalog.Exec(ctx, `DELETE FROM product_variations WHERE product_id=$1`, productID); dErr != nil {
+							log.Error("purge anciennes variations", "product_id", p.ID, "err", dErr)
+						}
+						for _, v := range variations {
+							attrs := map[string]string{}
+							for _, a := range v.Attributes {
+								attrs[a.Name] = a.Option
+							}
+							attrsJSON, _ := json.Marshal(attrs)
+							stock := 0
+							if v.StockQty != nil {
+								stock = *v.StockQty
+							}
+							_, vErr := catalog.Exec(ctx, `
+								INSERT INTO product_variations (product_id, sku, attributes, price_usd, stock, image_url)
+								VALUES ($1,$2,$3,$4,$5,$6)`,
+								productID, v.SKU, attrsJSON, parsePrice(v.Price), stock, v.Image.Src)
+							if vErr != nil {
+								log.Error("insert variation", "product_id", p.ID, "variation_id", v.ID, "err", vErr)
+							}
+						}
+					}
 				}
 			}
 			log.Info("page importée", "lang", lang, "page", page, "n", len(prods))
@@ -373,11 +447,42 @@ func fetchCategories(lang string) ([]wcCategory, error) {
 func fetchProducts(page int, lang string) ([]wcProduct, error) {
 	// _fields limite la réponse aux champs réellement utilisés (store.id
 	// est le champ Dokan qui porte le vendeur — voir wcProduct.Store).
+	// type/date_created/variations ajoutés le 2026-08-27 — absents avant,
+	// ce qui perdait silencieusement le statut variable, la date réelle de
+	// création, et la liste des variations de chaque produit.
 	url := fmt.Sprintf("%s/wp-json/wc/v3/products?per_page=100&page=%d&lang=%s&consumer_key=%s&consumer_secret=%s"+
-		"&_fields=id,name,slug,description,price,status,store,categories,images,meta_data",
+		"&_fields=id,name,slug,description,price,status,type,date_created,store,categories,images,meta_data,variations",
 		*wcURL, page, lang, *wcKey, *wcSecret)
 	var out []wcProduct
 	return out, fetchJSONPaginated(url, &out)
+}
+
+// fetchVariations — un produit "variable" ne développe jamais ses
+// variations inline sur /products (juste leurs IDs, voir wcProduct.
+// Variations) : un appel dédié par produit est nécessaire. lang est
+// nécessaire pour rester cohérent avec la paire WPML du produit parent
+// (une variation peut avoir un nom/attributs traduits différemment).
+func fetchVariations(productID int64, lang string) ([]wcVariation, error) {
+	url := fmt.Sprintf("%s/wp-json/wc/v3/products/%d/variations?per_page=100&lang=%s&consumer_key=%s&consumer_secret=%s"+
+		"&_fields=id,sku,price,stock_quantity,attributes,image",
+		*wcURL, productID, lang, *wcKey, *wcSecret)
+	var out []wcVariation
+	return out, fetchJSONPaginated(url, &out)
+}
+
+// parseWCDate — WooCommerce renvoie "2025-03-12T10:04:00" (heure locale du
+// site, sans fuseau) sur date_created ; time.Now() en repli si le format
+// est inattendu ou le champ vide, plutôt que de faire échouer tout l'import
+// pour une date manquante sur un seul produit.
+func parseWCDate(s string) time.Time {
+	if s == "" {
+		return time.Now()
+	}
+	t, err := time.Parse("2006-01-02T15:04:05", s)
+	if err != nil {
+		return time.Now()
+	}
+	return t
 }
 
 func extractTrid(p wcProduct) string {

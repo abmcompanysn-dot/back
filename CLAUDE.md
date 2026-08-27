@@ -28,6 +28,65 @@ correspond à l'**ancienne** architecture, avant la migration. Ne plus s'y
 fier pour ce dépôt — voir [README.md section 8](README.md#8-migration-woocommerce-plan-en-6-phases)
 pour le plan de migration et son état d'avancement.
 
+**Documentation complémentaire (produite le 27 août 2026, hors dépôt)** :
+un guide d'accès opérationnel (qui a accès à quoi — VPS, GitHub, Cloudflare,
+Stripe, console admin) et un document d'architecture multi-pages (comment
+le produit fonctionne — parcours d'achat, modèle vendeur, livraison,
+notifications), tous deux écrits pour rester lisibles sans être
+développeur. Publiés comme artifacts Claude, pas commités dans ce dépôt —
+demander leurs liens si besoin de les retrouver ou de les mettre à jour.
+
+---
+
+## Domaines et routage (Caddy + Cloudflare)
+
+Trois domaines, tous proxiés par **Cloudflare** puis routés par **Caddy**
+(`deploy/Caddyfile`) vers le bon service à l'intérieur du cluster k3s :
+
+- `origin.miadmarket.ca` → toute l'API backend (catalogue, commandes,
+  paiements, auth, etc.)
+- `kante.miadmarket.ca` → uniquement la console d'administration (`/admin*`)
+- `img.miadmarket.ca` → images produits/vendeurs (bucket MinIO public en
+  lecture)
+
+**Piège connu (a causé un vrai 502 en prod le 26 août 2026)** : `deploy/
+Caddyfile` n'est **pas auto-synchronisé** avec le cluster — éditer ce
+fichier ne suffit pas. Après toute modification, il faut explicitement :
+
+```bash
+kubectl -n miad create configmap caddyfile --from-file=Caddyfile=deploy/Caddyfile \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n miad rollout restart deployment/caddy
+```
+
+Oublier cette étape après avoir ajouté une route = 404/502 silencieux sur
+la nouvelle route, alors même que le service cible tourne parfaitement.
+
+---
+
+## Pièges de debug déjà rencontrés (à ne pas re-découvrir)
+
+- **`kit.Fail()` (`internal/kit/kit.go`) ne logue JAMAIS rien côté
+  serveur** — il écrit uniquement la réponse HTTP JSON d'erreur. Un rejet
+  (401, 400, 409…) est donc invisible dans `kubectl logs` même en
+  observant activement, sauf si un `slog.Error`/`slog.Info` explicite a
+  été ajouté juste avant l'appel à `kit.Fail`. Plusieurs bugs de cette
+  session sont restés cachés des heures à cause de ça — ajouter un log
+  explicite est le premier réflexe face à un rejet HTTP inexpliqué.
+- **Secret webhook Stripe (`STRIPE_WEBHOOK_SECRET`, `whsec_...`)** :
+  Stripe signe avec le secret **complet, préfixe `whsec_` inclus** —
+  ne jamais le retirer avant de calculer le HMAC (bug réel trouvé et
+  corrigé le 26/08/2026, `services/payment-svc/main.go`). La vérification
+  de signature passe désormais par le SDK officiel
+  (`github.com/stripe/stripe-go/v82/webhook`, `ConstructEventWithOptions`)
+  plutôt qu'une implémentation manuelle — ne pas revenir à du HMAC
+  fait main pour ce endpoint.
+- **`order-received` (frontend) a besoin de l'ID de la commande PARENT**,
+  pas d'une sous-commande vendeur — `order-svc` expose sa vue agrégée sur
+  `GET /orders/parent/{id}`. `POST /api/orders` renvoie les deux
+  (`orderId` = sous-commande, `parentOrderId` = parent) : toujours utiliser
+  `parentOrderId` pour construire une URL vers `/order-received`.
+
 ---
 
 ## Le cycle complet : modif → relecture → prod
@@ -162,4 +221,7 @@ git pull origin main
 ---
 
 *Créé le 26 août 2026, au moment de la bascule de ce dossier vers le vrai
-dépôt `back` (auparavant contenu WordPress obsolète).*
+dépôt `back` (auparavant contenu WordPress obsolète). Mis à jour le
+27 août 2026 : domaines/routage Caddy, pièges de debug rencontrés en
+production (webhook Stripe, `kit.Fail` silencieux, ID parent vs
+sous-commande).*
