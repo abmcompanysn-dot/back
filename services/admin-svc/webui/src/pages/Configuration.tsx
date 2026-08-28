@@ -184,11 +184,16 @@ function WebhookUrls({ tab }: { tab: string }) {
   )
 }
 
-// MobileMoneyProviderSwitch — raccourci en haut de l'onglet Paiements :
-// un seul geste pour basculer entre PayDunya et PawaPay comme fournisseur
-// mobile money actif côté site, sans avoir à éditer les deux champs
-// "*_enabled" à la main. Écrit paydunya_enabled + pawapay_enabled en une
-// requête. Les clés API restent en place (rien n'est effacé).
+// MobileMoneyProviderSwitch — raccourci en haut de l'onglet Paiements pour
+// activer/désactiver PayDunya et PawaPay indépendamment. Anciennement un
+// interrupteur exclusif (un seul actif à la fois) — passé en deux cases
+// indépendantes le 2026-08-28 à la demande du fondateur : avec le
+// nouveau routage manuel par pays/opérateur (/admin/payment-routing, lien
+// ci-dessous), une ligne {pays, opérateur} ne peut choisir entre les deux
+// agrégateurs QUE s'ils sont tous les deux actifs globalement — sinon
+// toute ligne retombe sur le seul agrégateur actif (voir le commentaire
+// de PaymentRouting.tsx). Écrit paydunya_enabled + pawapay_enabled
+// indépendamment. Les clés API restent en place (rien n'est effacé).
 function MobileMoneyProviderSwitch({
   snapshot,
   onSaved,
@@ -200,19 +205,16 @@ function MobileMoneyProviderSwitch({
   const [err, setErr] = useState<string | null>(null)
   if (!snapshot) return null
 
-  // pawapay_enabled === "true" => PawaPay actif. Sinon => PayDunya
-  // (comportement par défaut historique, actif sauf "false" explicite).
+  const paydunyaActive = String(snapshot['paydunya_enabled'] ?? '') !== 'false'
   const pawapayActive = String(snapshot['pawapay_enabled'] ?? '') === 'true'
-  const active: 'paydunya' | 'pawapay' = pawapayActive ? 'pawapay' : 'paydunya'
 
-  async function switchTo(provider: 'paydunya' | 'pawapay') {
-    if (provider === active || busy) return
+  async function toggle(provider: 'paydunya' | 'pawapay', nextActive: boolean) {
+    if (busy) return
     setBusy(true)
     setErr(null)
     try {
       await api.put(settingsPath('payment'), {
-        paydunya_enabled: provider === 'paydunya' ? 'true' : 'false',
-        pawapay_enabled: provider === 'pawapay' ? 'true' : 'false',
+        [`${provider}_enabled`]: nextActive ? 'true' : 'false',
       })
       onSaved()
     } catch (e) {
@@ -224,36 +226,45 @@ function MobileMoneyProviderSwitch({
 
   return (
     <div className="form-card" style={{ marginBottom: 16 }}>
-      <h3 style={{ marginTop: 0, fontSize: 14 }}>Fournisseur Mobile Money actif</h3>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Fournisseurs Mobile Money actifs</h3>
       <p className="hint" style={{ marginTop: 0 }}>
-        Un seul fournisseur mobile money est proposé aux clients au paiement. Stripe (carte) n’est pas
-        concerné et reste géré séparément par « Stripe activé ».
+        Les deux peuvent être actifs en même temps — c'est ce que demande le
+        routage manuel par pays/opérateur (<Link to="/admin/payment-routing">voir/modifier →</Link>).
+        Sans ligne de routage explicite, PawaPay est utilisé par défaut s'il est actif (sinon PayDunya).
+        Stripe (carte) n'est pas concerné, géré séparément par « Stripe activé ».
       </p>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          type="button"
-          className={active === 'paydunya' ? 'btn-primary' : 'btn-ghost'}
-          disabled={busy}
-          onClick={() => switchTo('paydunya')}
-        >
-          {active === 'paydunya' ? '● PayDunya (actif)' : 'Activer PayDunya'}
-        </button>
-        <button
-          type="button"
-          className={active === 'pawapay' ? 'btn-primary' : 'btn-ghost'}
-          disabled={busy}
-          onClick={() => switchTo('pawapay')}
-        >
-          {active === 'pawapay' ? '● PawaPay (actif)' : 'Activer PawaPay'}
-        </button>
+      <div style={{ display: 'flex', gap: 16 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: busy ? 'default' : 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={paydunyaActive}
+            disabled={busy}
+            onChange={(e) => toggle('paydunya', e.target.checked)}
+          />
+          PayDunya {paydunyaActive ? '(actif)' : ''}
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: busy ? 'default' : 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={pawapayActive}
+            disabled={busy}
+            onChange={(e) => toggle('pawapay', e.target.checked)}
+          />
+          PawaPay {pawapayActive ? '(actif)' : ''}
+        </label>
       </div>
-      {active === 'pawapay' && String(snapshot['pawapay_environment'] ?? 'sandbox') !== 'production' && (
+      {!paydunyaActive && !pawapayActive && (
+        <p className="hint" style={{ color: '#b42318', fontWeight: 600, marginBottom: 0 }}>
+          ⚠ Aucun fournisseur mobile money actif — les clients ne pourront payer que par carte (Stripe).
+        </p>
+      )}
+      {pawapayActive && String(snapshot['pawapay_environment'] ?? 'sandbox') !== 'production' && (
         <p className="hint" style={{ color: '#b45309', fontWeight: 600, marginBottom: 0 }}>
           ⚠ PawaPay est en mode « sandbox » — aucun paiement réel ne sera encaissé. Passez
           « pawapay_environment » à « production » ci-dessous avant la mise en ligne.
         </p>
       )}
-      {active === 'pawapay' && !snapshot['pawapay_api_key_configured'] && (
+      {pawapayActive && !snapshot['pawapay_api_key_configured'] && (
         <p className="hint" style={{ color: '#b42318', fontWeight: 600, marginBottom: 0 }}>
           ⚠ Aucune clé API PawaPay enregistrée — les paiements mobile money échoueront tant qu’elle
           n’est pas renseignée ci-dessous.
