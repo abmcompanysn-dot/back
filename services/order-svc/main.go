@@ -490,7 +490,17 @@ func (s *server) getOrder(w http.ResponseWriter, r *http.Request) {
 		SELECT id, reference, customer_id, vendor_id, parent_order_id, status, payment_status, fulfillment_stage, lines,
 		       subtotal_usd, shipping_usd, total_usd, coupon_code, shipping_address, billing_address, created_at, updated_at
 		FROM orders WHERE id = $1`, id)
-	var oid, cust, vendor, parent int64
+	var oid, cust, vendor int64
+	// parent_order_id est NULL en base pour une ligne PARENT (status='group')
+	// — elle n'a pas de parent, elle EN EST un. Scanner cette colonne dans un
+	// int64 non-nullable faisait échouer row.Scan (erreur de conversion
+	// NULL→int64) pour TOUTE commande parent, renvoyant un 404 générique
+	// "introuvable" alors que la ligne existe bien — cassait
+	// resolveOrderContact côté email-svc (payment.confirmed porte le
+	// parent_order_id depuis "paiement unique par commande groupée", jamais
+	// consommable via ce endpoint), confirmé le 2026-08-28 : aucun email de
+	// confirmation de paiement n'est jamais parti pour aucune commande.
+	var parent *int64
 	var subtotal, shipping, total float64
 	var ref, status, paymentStatus, fulfillmentStage, coupon string
 	var lines, shipAddr, billAddr []byte

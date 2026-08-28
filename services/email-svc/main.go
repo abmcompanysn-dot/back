@@ -464,24 +464,32 @@ func (s *server) resolveOrderContact(ctx context.Context, payload map[string]any
 	// 2026-08-27. order.created/order.status_changed continuent de porter
 	// un id de sous-commande (order-svc publie ces events par vendeur),
 	// donc GET /orders/{id} reste le bon chemin pour eux.
-	var probe struct {
-		Status string `json:"status"`
+	// Détection parent vs sous-commande : /orders/{id} interroge la table
+	// orders PAR SON id — un parent_order_id n'y a jamais de ligne propre
+	// (c'est une vue agrégée construite à la volée par /orders/parent/{id},
+	// voir order-svc), donc /orders/{id} y répondait TOUJOURS 404 pour un
+	// vrai parent, et isParent restait donc TOUJOURS false. resolveOrderContact
+	// retombait alors sur la branche sous-commande, qui refaisait le même
+	// appel /orders/{id} et échouait à nouveau — payment.confirmed (qui
+	// porte le parent_order_id depuis "paiement unique par commande
+	// groupée") ne trouvait alors jamais le client, et aucun email de
+	// confirmation ne partait jamais (confirmé le 2026-08-28 : "email client
+	// introuvable pour paiement confirmé... commande 361 introuvable").
+	// On tente maintenant /orders/parent/{id} EN PREMIER : son succès est
+	// la vraie preuve qu'il s'agit d'un parent.
+	var parentProbe struct {
+		LineItems []struct {
+			ProductID int64  `json:"product_id"`
+			Name      string `json:"name"`
+			Quantity  int    `json:"quantity"`
+			Price     string `json:"price"`
+		} `json:"line_items"`
+		Total string `json:"total"`
 	}
-	isParent := fetchJSON(ctx, s.orderURL+"/orders/"+orderID, &probe) == nil && probe.Status == "group"
+	isParent := fetchJSON(ctx, s.orderURL+"/orders/parent/"+orderID, &parentProbe) == nil
 
 	if isParent {
-		var parent struct {
-			LineItems []struct {
-				ProductID int64  `json:"product_id"`
-				Name      string `json:"name"`
-				Quantity  int    `json:"quantity"`
-				Price     string `json:"price"`
-			} `json:"line_items"`
-			Total string `json:"total"`
-		}
-		if err := fetchJSON(ctx, s.orderURL+"/orders/parent/"+orderID, &parent); err != nil {
-			return "", fmt.Errorf("order-svc (parent): %w", err)
-		}
+		parent := parentProbe
 		if t, err := strconv.ParseFloat(parent.Total, 64); err == nil {
 			totalUSD = t
 		}
