@@ -26,6 +26,10 @@
 // ============================================================
 
 const DRY_RUN = process.argv.includes('--dry-run')
+// --emit-json : n'écrit rien vers shipping-svc, imprime une ligne JSON
+// {vendor_id,address,lat,lng} par boutique géocodée sur stdout (à piper
+// vers un exécuteur qui a accès au service, ex. via SSH + kubectl exec).
+const EMIT_JSON = process.argv.includes('--emit-json')
 const ONLY = (() => {
   const i = process.argv.indexOf('--only')
   return i !== -1 ? (process.argv[i + 1] || '').toUpperCase() : null
@@ -38,66 +42,74 @@ const UA = 'MIAD-Market-geocoder/1.0 (contact: abmcompanysn@gmail.com)'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ---------- Boutiques à géocoder ----------
-// vendorId : croisé avec frontend/CLAUDE.md (table des 71 vendeurs).
+// vendorId : IDs RÉELS de vendor-svc (GET /vendors), PAS ceux du
+//   frontend/CLAUDE.md qui sont obsolètes (décalage confirmé le
+//   2026-08-28 : "MAGUY SN" = 39 dans vendor-svc, pas 81).
 // hint     : le quartier/ville donné par le fondateur (email 2026-08-28).
 // country  : ISO2, pour le suffixe de requête Nominatim et le filtre --only.
-// Boutiques dont le vendorId n'a pas pu être résolu de façon fiable :
-// laissées avec vendorId:null et signalées en fin de script (à compléter).
+// Boutiques de l'email introuvables dans vendor-svc (nouveaux noms /
+// boutiques pas encore créées) : Touba store prestige, Local Consumption,
+// Épices Sénégal, Nature essence, Myana fashion, Teranga perle.
 const VENDORS = [
   // ---- Sénégal (module livraison nationale) ----
-  { vendorId: 75,  name: 'la Petite Attou',            hint: "Patte d'Oie, Dakar",          country: 'SN' },
-  { vendorId: 24,  name: "I'Dool",                      hint: 'Mariste, Dakar',              country: 'SN' },
-  { vendorId: 81,  name: 'MAGUY SN',                    hint: 'Mariste, Dakar',              country: 'SN' },
-  { vendorId: 87,  name: 'BK by Yacine',               hint: 'Almadies, Dakar',             country: 'SN' },
-  { vendorId: 17,  name: 'Ayzha Cosmetics',            hint: 'Grand Yoff, Dakar',           country: 'SN' },
-  { vendorId: 66,  name: 'COSAAN GROUPE',              hint: 'Yoff, Dakar',                 country: 'SN' },
-  { vendorId: 111, name: 'Fadhilou hijab',             hint: 'Thiaroye, Dakar',             country: 'SN' },
-  { vendorId: 118, name: 'EAAP TIM VIP AFRICAINE',     hint: 'Colobane, Dakar',             country: 'SN' }, // "Savodogo"
-  { vendorId: 68,  name: 'Teranga Infusion',           hint: 'Dakar',                       country: 'SN' },
-  { vendorId: 122, name: 'jamta-sport',                hint: 'Keur Massar, Parcelles Assainies Unité 9, Dakar', country: 'SN' },
-  { vendorId: 108, name: 'Sahel Natura',               hint: 'Golf Sud, Guédiawaye, Dakar', country: 'SN' },
-  { vendorId: 107, name: 'BarryAfricaincaaps',         hint: 'Castors, Dakar',              country: 'SN' },
-  { vendorId: 126, name: 'Fall',                        hint: 'Thiès',                       country: 'SN' }, // "Abybatou fall"
-  { vendorId: 110, name: 'maktaba assahaba',           hint: 'Colobane, Dakar',             country: 'SN' },
-  { vendorId: 85,  name: 'Mame Babacar Business',      hint: 'Keur Massar, Dakar',          country: 'SN' },
-  { vendorId: 84,  name: 'Mes perles By Awa',          hint: 'Fann Hock, Dakar',            country: 'SN' },
-  { vendorId: 76,  name: 'Diouma',                      hint: 'Sandaga, Dakar',              country: 'SN' }, // "Diouma art"
-  { vendorId: 25,  name: 'Thilor design',              hint: 'Tivaouane',                   country: 'SN' },
-  { vendorId: 120, name: 'Wall Art Print',             hint: 'Tivaouane',                   country: 'SN' },
-  { vendorId: 20,  name: 'Naby Gold',                  hint: 'Tivaouane',                   country: 'SN' },
-  { vendorId: 26,  name: 'MAC Collection',             hint: 'Tivaouane',                   country: 'SN' },
-  { vendorId: 79,  name: 'Awa',                         hint: 'Ndiakhaté, Tivaouane',        country: 'SN' },
-  { vendorId: 77,  name: 'Dabo filitex',               hint: 'HLM, Dakar',                  country: 'SN' },
-  { vendorId: 125, name: 'Fallou mode',                hint: 'HLM, Dakar',                  country: 'SN' },
-  { vendorId: 86,  name: 'Tawa mboudaye acajou',       hint: 'HLM 5, Dakar',                country: 'SN' },
-  { vendorId: 73,  name: 'Bio kya',                     hint: 'Keur Ndiaye Lô, Dakar',       country: 'SN' },
-  { vendorId: 105, name: 'Adore ESSENTIALS',           hint: 'Dakar',                       country: 'SN' },
-  // ---- Boutiques citées dans l'email SANS vendorId sûr (à compléter) ----
-  { vendorId: null, name: 'Touba store prestige',      hint: 'Mbour 3, Mbour',              country: 'SN' },
-  { vendorId: null, name: 'Local Consumption',         hint: 'Zone de Captage, Dakar',      country: 'SN' },
-  { vendorId: null, name: 'Épices Sénégal',            hint: 'Kédougou',                    country: 'SN' },
-  { vendorId: null, name: 'Nature essence',            hint: 'HLM, Dakar',                  country: 'SN' },
-  { vendorId: null, name: 'Myana fashion',             hint: 'Mariste, Dakar',              country: 'SN' },
-  { vendorId: null, name: 'Teranga perle',             hint: 'Gueule Tapée, Dakar',         country: 'SN' },
+  { vendorId: 43, name: 'la Petite Attou',            hint: "Patte d'Oie, Dakar",          country: 'SN' },
+  { vendorId: 70, name: "I'Dool",                      hint: 'Mariste, Dakar',              country: 'SN' },
+  { vendorId: 39, name: 'MAGUY SN',                    hint: 'Mariste, Dakar',              country: 'SN' },
+  { vendorId: 33, name: 'BK by Yacine',               hint: 'Almadies, Dakar',             country: 'SN' },
+  { vendorId: 74, name: 'Ayzha Cosmetics',            hint: 'Grand Yoff, Dakar',           country: 'SN' },
+  { vendorId: 46, name: 'COSAAN GROUPE',              hint: 'Yoff, Dakar',                 country: 'SN' },
+  { vendorId: 19, name: 'Fadhilou hijab',             hint: 'Thiaroye, Dakar',             country: 'SN' },
+  { vendorId: 16, name: 'EAAP TIM VIP AFRICAINE',     hint: 'Colobane, Dakar',             country: 'SN' }, // "Savodogo"
+  { vendorId: 45, name: 'Teranga Infusion',           hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 22, name: 'Sahel Natura',               hint: 'Golf Sud, Guédiawaye, Dakar', country: 'SN' },
+  { vendorId: 23, name: 'BarryAfricaincaaps',         hint: 'Castors, Dakar',              country: 'SN' },
+  { vendorId: 20, name: 'maktaba assahaba',           hint: 'Colobane, Dakar',             country: 'SN' },
+  { vendorId: 35, name: 'Mame Babacar Business',      hint: 'Keur Massar, Dakar',          country: 'SN' },
+  { vendorId: 36, name: 'Mes perles By Awa',          hint: 'Fann Hock, Dakar',            country: 'SN' },
+  { vendorId: 42, name: 'Diouma',                      hint: 'Sandaga, Dakar',              country: 'SN' }, // "Diouma art"
+  { vendorId: 69, name: 'Thilor design',              hint: 'Tivaouane',                   country: 'SN' },
+  { vendorId: 15, name: 'Wall Art Print',             hint: 'Tivaouane',                   country: 'SN' },
+  { vendorId: 72, name: 'Naby Gold',                  hint: 'Tivaouane',                   country: 'SN' },
+  { vendorId: 68, name: 'MAC Collection',             hint: 'Tivaouane',                   country: 'SN' },
+  { vendorId: 40, name: 'Awa',                         hint: 'Ndiakhaté 15km Tivaouane',    country: 'SN', force: [14.8667, -16.7000] },
+  { vendorId: 41, name: 'Dabo filitex',               hint: 'HLM, Dakar',                  country: 'SN' },
+  { vendorId: 34, name: 'Tawa mboudaye acajou',       hint: 'HLM 5, Dakar',                country: 'SN' },
+  { vendorId: 44, name: 'Bio kya',                     hint: 'Keur Ndiaye Lô, Dakar',       country: 'SN' },
+  { vendorId: 25, name: 'Adore ESSENTIALS',           hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 21, name: 'Lipton Café Touba',          hint: 'Dakar',                       country: 'SN' }, // "Touba store prestige" ? proche
+  { vendorId: 71, name: 'Café Touba Mame Fatou',      hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 73, name: 'Mamaniboutique',             hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 37, name: 'Mamis Ba',                   hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 38, name: 'waxtu',                      hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 57, name: 'noblesse sn',               hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 30, name: 'Lebou Agro',                hint: 'Dakar',                       country: 'SN' },
+  { vendorId: 17, name: 'complexe-yayou-naby-business', hint: 'Dakar',                    country: 'SN' },
+  { vendorId: 28, name: 'Complexe yayou Naby business', hint: 'Dakar',                    country: 'SN' },
 
   // ---- Autres pays (carte seulement, pas de livraison nationale) ----
-  { vendorId: 95,  name: "MALAÏKA'S HOUSE",            hint: 'Yaoundé, Cameroun',           country: 'CM' },
-  { vendorId: 48,  name: 'Nadjoa beads',              hint: 'Accra, Ghana',                country: 'GH' },
-  { vendorId: 42,  name: 'MŪHEBA',                     hint: 'Accra, Ghana',                country: 'GH' },
-  { vendorId: 49,  name: 'Styleworld',                hint: 'Accra, Ghana',                country: 'GH' },
-  { vendorId: 33,  name: 'Asoebi_by_nana',            hint: 'Lagos, Nigeria',              country: 'NG' },
-  { vendorId: 32,  name: 'Perles De Lux',             hint: 'Isheri Oshun, Lagos, Nigeria', country: 'NG' },
-  { vendorId: 106, name: 'Blings_by_ze',              hint: 'Suleja, Niger State, Nigeria', country: 'NG' },
-  { vendorId: 41,  name: 'AdaH',                       hint: 'Conakry, Guinée',             country: 'GN' },
-  { vendorId: 46,  name: 'Pure bio by Nastou',        hint: 'Conakry, Guinée',             country: 'GN' },
-  { vendorId: 104, name: 'I &M Chic création',        hint: 'Conakry, Guinée',             country: 'GN' },
-  { vendorId: 59,  name: 'Boiro création',            hint: 'Conakry, Guinée',             country: 'GN' },
-  { vendorId: 101, name: 'Georgine wax',              hint: 'Cotonou, Bénin',              country: 'BJ' },
-  { vendorId: 112, name: 'Galerie Fon Amonmi',        hint: 'Cotonou, Bénin',              country: 'BJ' },
-  { vendorId: 123, name: 'atelier MK',                hint: 'Cotonou, Bénin',              country: 'BJ' },
-  { vendorId: 124, name: 'garellemode',               hint: 'Cotonou, Bénin',              country: 'BJ' },
-  { vendorId: 142, name: 'attiale',                    hint: 'Abidjan, Côte d\'Ivoire',     country: 'CI' },
-  { vendorId: 143, name: 'RicardoDesign',             hint: 'Cameroun',                    country: 'CM' },
+  { vendorId: 29, name: "MALAÏKA'S HOUSE",           hint: 'Yaoundé, Cameroun',           country: 'CM' },
+  { vendorId: 31, name: 'chez bio distribution',     hint: 'Yaoundé, Cameroun',           country: 'CM' },
+  { vendorId: 32, name: 'Ets Bio distribution',      hint: 'Yaoundé, Cameroun',           country: 'CM' },
+  { vendorId: 59, name: 'Nadjoa beads',              hint: 'Accra, Ghana',                country: 'GH' },
+  { vendorId: 62, name: 'MŪHEBA',                    hint: 'Accra, Ghana',                country: 'GH' },
+  { vendorId: 58, name: 'Styleworld',               hint: 'Accra, Ghana',                country: 'GH' },
+  { vendorId: 64, name: 'nana_coutureofficial',     hint: 'Lagos, Nigeria',              country: 'NG' },
+  { vendorId: 65, name: 'Perles De Lux',            hint: 'Isheri Oshun, Lagos, Nigeria', country: 'NG' },
+  { vendorId: 24, name: 'Blings_by_ze',             hint: 'Suleja, Niger State, Nigeria', country: 'NG' },
+  { vendorId: 63, name: 'AdaH',                      hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 60, name: 'Pure bio by Nastou',       hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 26, name: 'I &M Chic création',       hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 50, name: 'Boiro création',           hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 47, name: 'ADJI BIO ET SERVICES',     hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 48, name: 'Thierno textile',          hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 49, name: 'COFAPP',                   hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 51, name: 'Komara et frères',         hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 52, name: 'Africa Art center',        hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 53, name: 'AKatty-by Echour',         hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 54, name: 'Les Épices de Maëlle',     hint: 'Conakry, Guinée',             country: 'GN' },
+  { vendorId: 67, name: "MOFOUNGOUROU Galerie d'Art", hint: 'Conakry, Guinée',           country: 'GN' },
+  { vendorId: 27, name: 'Georgine wax',             hint: 'Cotonou, Bénin',              country: 'BJ' },
+  { vendorId: 18, name: 'Galerie Fon Amonmi',       hint: 'Cotonou, Bénin',              country: 'BJ' },
 ]
 
 // ---------- Replis coordonnées connues ----------
@@ -206,7 +218,15 @@ async function main() {
     }
     let coords = null
     let source = ''
+    // force : coordonnées imposées manuellement (Nominatim renvoie un
+    // homonyme lointain — ex. "Ndiakhaté" à 60 km au lieu de 15 km de
+    // Tivaouane, ou "Cameroun" résolu vers Bamako).
+    if (Array.isArray(v.force)) {
+      coords = { lat: v.force[0], lng: v.force[1] }
+      source = 'forced'
+    }
     try {
+      if (coords) throw { skip: true }
       const g = await geocode(v.hint)
       await sleep(1100) // quota Nominatim
       if (g && !isSuspicious(g.lat, g.lng, v.hint)) {
@@ -216,7 +236,7 @@ async function main() {
         console.log(`   ⚠ ${v.name}: résultat Nominatim douteux (${g.lat},${g.lng} — "${g.display}"), repli table`)
       }
     } catch (e) {
-      console.log(`   ⚠ ${v.name}: Nominatim a échoué (${e.message}), repli table`)
+      if (!e?.skip) console.log(`   ⚠ ${v.name}: Nominatim a échoué (${e.message}), repli table`)
     }
     if (!coords) {
       const fb = fallbackCoords(v.hint)
@@ -229,7 +249,10 @@ async function main() {
     }
 
     const address = v.hint
-    if (DRY_RUN) {
+    if (EMIT_JSON) {
+      process.stdout.write(JSON.stringify({ vendor_id: v.vendorId, address, lat: coords.lat, lng: coords.lng }) + '\n')
+      done.push(v)
+    } else if (DRY_RUN) {
       console.log(`🔎 ${v.name.padEnd(28)} #${v.vendorId}  ${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}  (${source})`)
     } else {
       try {
@@ -243,6 +266,7 @@ async function main() {
     }
   }
 
+  if (EMIT_JSON) return
   console.log('\n─── Récapitulatif ───')
   console.log(`  Enregistrées : ${done.length}`)
   console.log(`  Échecs       : ${failed.length}`)
