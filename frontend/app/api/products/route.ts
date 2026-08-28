@@ -293,7 +293,11 @@ export async function GET(req: Request) {
       throw new Error(data?.error?.message || `Erreur catalog-svc: ${response.status}`);
     }
 
-    const rawProducts = id ? [data] : (data.items || []);
+    // resolvedId (pas `id`) : quand un slug a été résolu en id, on a appelé
+    // GET /products/{id} qui renvoie UN objet seul, pas { items: [...] }.
+    // Tester `id` seul cassait ce cas → rawProducts = [] → fiche produit
+    // vide (bug du 2026-08-28, régression du fix slug→détail précédent).
+    const rawProducts = (resolvedId || id) ? [data] : (data.items || []);
     const finalTotal = totalProducts ? parseInt(totalProducts) : (data.total ?? rawProducts.length);
     const finalPages = totalProducts
       ? Math.max(1, Math.ceil(parseInt(totalProducts) / perPage))
@@ -302,8 +306,9 @@ export async function GET(req: Request) {
     // Variations : catalog-svc les inclut déjà pour un produit unique
     // (GET /products/{id}) mais pas dans une liste — batch séparé pour les
     // produits variables d'une page de résultats.
+    const singleProduct = Boolean(resolvedId || id);
     let variationsMap: Record<number, any[]> = {};
-    if (includeVariations && !id) {
+    if (includeVariations && !singleProduct) {
       const variableIds = rawProducts.filter((p: any) => p.type === 'variable').map((p: any) => p.id);
       if (variableIds.length > 0) {
         const varRes = await fetch(`${CATALOG_SVC_URL}/products/variations?ids=${variableIds.join(',')}`, {
@@ -314,7 +319,8 @@ export async function GET(req: Request) {
           variationsMap = varData.variations || {};
         }
       }
-    } else if (includeVariations && id && data.variations) {
+    } else if (includeVariations && singleProduct && data.variations) {
+      // GET /products/{id} (slug résolu ou ?id=) inclut déjà data.variations
       variationsMap[data.id] = data.variations;
     }
 
