@@ -13,13 +13,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -654,27 +658,88 @@ type firebaseInfo struct {
 	Aud   string `json:"aud"`
 }
 
+// verifyFirebaseToken — vérifie un ID token émis par FIREBASE AUTH (pas un
+// token OAuth2 Google direct — deux choses différentes malgré la confusion
+// facile). Bug trouvé et corrigé le 2026-08-27 : la version précédente
+// appelait https://oauth2.googleapis.com/tokeninfo, un endpoint Google
+// conçu pour valider un id_token OAuth2 natif (iss=accounts.google.com,
+// aud=ID CLIENT OAuth) — un vrai token Firebase a iss=https://securetoken.
+// google.com/{project-id} et aud={project-id} (PAS l'ID client OAuth), donc
+// ce endpoint le rejetait SYSTÉMATIQUEMENT ("émetteur inattendu"). Résultat :
+// aucune connexion Google (admin ou client) n'a jamais pu aboutir.
+//
+// La correction vérifie la signature RS256 directement avec les
+// certificats publics Google (tournent régulièrement — récupérés à
+// chaque appel plutôt que mis en cache, payload minuscule, pas un
+// goulot d'étranglement pour un flux de login). wantAud doit être le
+// PROJECT ID Firebase (ex: "authentification-miad"), pas l'ID client
+// OAuth web — voir NEXT_PUBLIC_FIREBASE_PROJECT_ID côté frontend.
 func verifyFirebaseToken(ctx context.Context, idToken, wantAud string) (*firebaseInfo, error) {
-	url := "https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("jeton malformé (attendu 3 segments, reçu %d)", len(parts))
+	}
+	headerRaw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("en-tête JWT illisible: %w", err)
+	}
+	var header struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	if err := json.Unmarshal(headerRaw, &header); err != nil {
+		return nil, fmt.Errorf("en-tête JWT invalide: %w", err)
+	}
+	if header.Alg != "RS256" {
+		return nil, fmt.Errorf("algorithme inattendu: %s (RS256 attendu)", header.Alg)
+	}
+	if header.Kid == "" {
+		return nil, fmt.Errorf("jeton sans kid (clé de signature introuvable)")
+	}
+
+	cert, err := fetchGoogleSecureTokenCert(ctx, header.Kid)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Google tokeninfo injoignable: %w", err)
+	pubKey, ok := cert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("clé publique Google inattendue (pas RSA)")
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("jeton refusé par Google (%d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("signature illisible: %w", err)
+	}
+	signedInput := parts[0] + "." + parts[1]
+	digest := sha256.Sum256([]byte(signedInput))
+	if err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, digest[:], sig); err != nil {
+		return nil, fmt.Errorf("signature invalide: %w", err)
+	}
+
+	payloadRaw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("payload JWT illisible: %w", err)
 	}
 	var info firebaseInfo
-	if err := json.Unmarshal(raw, &info); err != nil {
-		return nil, fmt.Errorf("réponse Google illisible: %w", err)
+	var claims struct {
+		Exp int64 `json:"exp"`
+		Iat int64 `json:"iat"`
 	}
-	if info.Iss != "accounts.google.com" && info.Iss != "https://accounts.google.com" {
-		return nil, fmt.Errorf("émetteur inattendu: %s", info.Iss)
+	if err := json.Unmarshal(payloadRaw, &info); err != nil {
+		return nil, fmt.Errorf("payload JWT invalide: %w", err)
+	}
+	_ = json.Unmarshal(payloadRaw, &claims)
+
+	now := time.Now().Unix()
+	if claims.Exp != 0 && now >= claims.Exp {
+		return nil, fmt.Errorf("jeton expiré")
+	}
+	if claims.Iat != 0 && claims.Iat > now+300 {
+		return nil, fmt.Errorf("jeton émis dans le futur (horloge désynchronisée ?)")
+	}
+	wantIss := "https://securetoken.google.com/" + wantAud
+	if info.Iss != wantIss {
+		return nil, fmt.Errorf("émetteur inattendu: %s (attendu %s)", info.Iss, wantIss)
 	}
 	if wantAud != "" && info.Aud != wantAud {
 		return nil, fmt.Errorf("audience %s ≠ projet Firebase attendu %s", info.Aud, wantAud)
@@ -683,6 +748,45 @@ func verifyFirebaseToken(ctx context.Context, idToken, wantAud string) (*firebas
 		return nil, fmt.Errorf("jeton sans email")
 	}
 	return &info, nil
+}
+
+// fetchGoogleSecureTokenCert — récupère le certificat X.509 (donc la clé
+// publique) correspondant au "kid" du token, depuis l'endpoint public que
+// Firebase Auth publie pour la vérification de signature côté tiers (même
+// source que le SDK Admin officiel, ici en HTTP direct pour éviter la
+// dépendance complète firebase-admin).
+func fetchGoogleSecureTokenCert(ctx context.Context, kid string) (*x509.Certificate, error) {
+	const url = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("certificats Google injoignables: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("certificats Google refusés (%d)", resp.StatusCode)
+	}
+	var certsByKid map[string]string
+	if err := json.Unmarshal(raw, &certsByKid); err != nil {
+		return nil, fmt.Errorf("réponse certificats Google illisible: %w", err)
+	}
+	pemStr, ok := certsByKid[kid]
+	if !ok {
+		return nil, fmt.Errorf("aucun certificat Google pour kid=%s (clé de signature inconnue ou rotée)", kid)
+	}
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return nil, fmt.Errorf("certificat PEM illisible")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("certificat X.509 invalide: %w", err)
+	}
+	return cert, nil
 }
 
 /* ---------- OTP (flux acheteur, inchangé) ---------- */
