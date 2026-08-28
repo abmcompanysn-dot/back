@@ -123,13 +123,38 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Respect safe-area pour iOS/Android (encoche, barre navigateur) */
+    /* Respect safe-area pour iOS/Android (encoche, barre navigateur) —
+       baseline pour le contenu non-fixed. La barre MobileBottomNav étant
+       en position:fixed, elle gère sa propre safe-area (.mobile-bottom-nav
+       ci-dessous) et le contenu réserve sa hauteur via .has-bottom-nav. */
     padding-bottom: env(safe-area-inset-bottom);
   }
   /* dvh = dynamic viewport height : exclut la barre du navigateur mobile
      évite que le contenu soit caché derrière la barre Safari/Chrome mobile */
   .min-h-screen {
     min-height: 100dvh;
+  }
+}
+
+/* --- Barre de navigation mobile fixée en bas (MobileBottomNav) ---
+   1. .mobile-bottom-nav : la barre elle-même. On ajoute la safe-area iOS
+      DANS la barre (padding), sinon son contenu (icônes/labels) passe sous
+      la home-bar de l'iPhone. Le padding vertical de base (py-2 ≈ 8px) est
+      conservé via calc().
+   2. .has-bottom-nav : à mettre sur le conteneur de contenu scrollable pour
+      lui réserver la hauteur de la barre + la safe-area, sinon le bas de
+      page (footer, dernière ligne de la liste) reste masqué derrière la
+      barre fixed. ~64px = hauteur barre (icône 20 + label 10 + py-2). */
+.mobile-bottom-nav {
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+}
+.has-bottom-nav {
+  padding-bottom: calc(64px + env(safe-area-inset-bottom));
+}
+@media (min-width: 768px) {
+  /* la barre est md:hidden — pas de réservation d'espace sur desktop */
+  .has-bottom-nav {
+    padding-bottom: 0;
   }
 }
 
