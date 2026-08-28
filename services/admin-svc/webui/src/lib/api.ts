@@ -72,5 +72,10 @@ export const api = {
     request<T>(path, { method: 'PATCH', body: data ? JSON.stringify(data) : undefined }),
   put: <T>(path: string, data?: unknown) =>
     request<T>(path, { method: 'PUT', body: data ? JSON.stringify(data) : undefined }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  // data optionnel — ajouté le 2026-08-28 (PaymentRouting.tsx a besoin
+  // d'identifier la ligne à supprimer par son contenu, pas juste son
+  // path) : la plupart des appels DELETE existants n'en ont pas besoin
+  // (path suffit), donc reste optionnel plutôt que de casser leur appel.
+  delete: <T>(path: string, data?: unknown) =>
+    request<T>(path, { method: 'DELETE', body: data ? JSON.stringify(data) : undefined }),
 }

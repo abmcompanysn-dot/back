@@ -348,6 +348,11 @@ export function Configuration() {
           <Link to="/admin/whatsapp-logs">Voir le journal des notifications WhatsApp envoyées →</Link>
         </p>
       )}
+      {tab === 'payment' && (
+        <p className="hint" style={{ marginBottom: 12 }}>
+          <Link to="/admin/payment-routing">Voir/modifier le routage Mobile Money par pays et opérateur →</Link>
+        </p>
+      )}
 
       {error && <p className="error-text">{error}</p>}
       {notice && <p className="hint" style={{ color: '#1a7f37', fontWeight: 600 }}>{notice}</p>}

@@ -62,6 +62,20 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE INDEX IF NOT EXISTS idx_payments_order ON payments (order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_ref ON payments (provider_ref);
 
+-- Routage manuel PawaPay ⇄ PayDunya par pays/opérateur (2026-08-28,
+-- écran admin dédié) — décision fondateur : PAS de logique automatique
+-- cachée (ni "toujours X par défaut", ni un score de fiabilité), un
+-- choix explicite éditable quand les deux agrégateurs supportent le
+-- même opérateur. Une ligne absente ici = comportement historique (le
+-- seul agrégateur globalement actif en Configuration → Paiements).
+CREATE TABLE IF NOT EXISTS payment_routing_overrides (
+  country_iso2  TEXT NOT NULL,
+  provider_code TEXT NOT NULL, -- code PawaPay OU PayDunya (formats différents, ex. "ORANGE_SEN" vs "ORANGE_SN" — voir note webui)
+  aggregator    TEXT NOT NULL CHECK (aggregator IN ('pawapay','paydunya')),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (country_iso2, provider_code)
+);
+
 -- Wallet vendeur (module Finances/Vendeurs) : solde dû, ledger des
 -- mouvements, demandes de retrait. Posé ici plutôt que vendor-svc car
 -- payment-svc gère déjà toutes les transactions/passerelles.
@@ -358,6 +372,9 @@ func main() {
 		mux.HandleFunc("POST /payments/webhook/pawapay", s.pawapayWebhook)
 		mux.HandleFunc("GET /pawapay/countries", s.listPawapayCountries)
 		mux.HandleFunc("GET /paydunya/softpay-providers", s.listPaydunyaSoftpayProviders)
+		mux.HandleFunc("GET /payments/routing", s.listPaymentRoutingHandler)
+		mux.HandleFunc("PUT /payments/routing", s.setPaymentRoutingHandler)
+		mux.HandleFunc("DELETE /payments/routing", s.deletePaymentRoutingHandler)
 		mux.HandleFunc("GET /wallet/{vendor_id}", s.getWallet)
 		mux.HandleFunc("GET /wallet/{vendor_id}/transactions", s.listWalletTransactions)
 		mux.HandleFunc("POST /payout-requests", s.createPayoutRequest)

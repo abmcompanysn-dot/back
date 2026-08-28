@@ -371,6 +371,15 @@ func main() {
 		mux.HandleFunc("GET /admin/api/users", s.requireAdmin(s.listUnifiedUsers))
 		mux.HandleFunc("GET /admin/api/representatives", s.requireAdmin(s.proxyAuth(func() string { return s.loyaltyURL + "/representatives" })))
 		mux.HandleFunc("GET /admin/api/payments", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments" })))
+		// Écran Mobile Money — routage manuel PawaPay ⇄ PayDunya par
+		// pays/opérateur (2026-08-28, PaymentRouting.tsx).
+		mux.HandleFunc("GET /admin/api/payments/routing", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payments/routing" })))
+		mux.HandleFunc("PUT /admin/api/payments/routing", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPut, s.paymentURL+"/payments/routing")
+		}))
+		mux.HandleFunc("DELETE /admin/api/payments/routing", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodDelete, s.paymentURL+"/payments/routing")
+		}))
 		mux.HandleFunc("GET /admin/api/finance/overview", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/overview" })))
 		mux.HandleFunc("GET /admin/api/finance/transactions", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/transactions" })))
 		mux.HandleFunc("GET /admin/api/finance/gateways", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payment-methods" })))

@@ -13,6 +13,7 @@ import { EmailTemplates } from './pages/EmailTemplates'
 import { Security } from './pages/Security'
 import { System } from './pages/System'
 import { Configuration } from './pages/Configuration'
+import { PaymentRouting } from './pages/PaymentRouting'
 import { WhatsAppLogs } from './pages/WhatsAppLogs'
 import { AllProducts } from './pages/catalog/AllProducts'
 import { ProductForm } from './pages/catalog/ProductForm'
@@ -104,6 +105,7 @@ function AppRoutes() {
         <Route path="security" element={<Security />} />
         <Route path="system" element={<System />} />
         <Route path="configuration" element={<Configuration />} />
+        <Route path="payment-routing" element={<PaymentRouting />} />
         <Route path="whatsapp-logs" element={<WhatsAppLogs />} />
       </Route>
       <Route path="*" element={<Navigate to="/admin/" replace />} />
