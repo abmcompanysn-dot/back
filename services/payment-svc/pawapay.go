@@ -171,21 +171,60 @@ var nonDigit = regexp.MustCompile(`\D`)
 //     l'indicatif.
 //
 // EXCEPTION BÉNIN (dialCode 229) : depuis la réforme de numérotation 2021,
-// le "01" initial fait partie intégrante du numéro et ne doit PAS être
-// retiré comme un simple préfixe national. Ex : "01 90 01 02 03" →
-// "2290190010203" (on garde le 01), surtout pas "229190010203".
+// le "01" initial fait partie intégrante du numéro national (10 chiffres)
+// et ne doit PAS être retiré comme un simple préfixe national. Le format
+// PawaPay attendu est donc "229" + 10 chiffres = 13 chiffres, ex.
+// "01 90 01 02 03" → "2290190010203".
+//
+// PawaPay rejette avec "MSISDN is too long for the identified country BEN"
+// (vu en prod, Sentry 2026-08-28) dès qu'on lui envoie plus de 13 chiffres —
+// ce qui arrivait quand le numéro saisi contenait déjà un préfixe d'appel
+// international ("00229…", "+229…", ou un "0" de liaison) ET que l'ancien
+// code repréfixait "229" par-dessus sans le détecter (HasPrefix ne voyait
+// pas "229" derrière un "00" ou un "0"). On normalise donc d'abord en
+// retirant tous les préfixes d'appel possibles, PUIS on repréfixe une
+// seule fois.
 func normalizeMSISDN(raw, dialCode string) string {
 	digits := nonDigit.ReplaceAllString(raw, "")
 	if digits == "" {
 		return ""
 	}
-	if strings.HasPrefix(digits, dialCode) {
-		return digits
+
+	// Retire un préfixe d'appel international : "00" (norme UIT) puis, s'il
+	// reste, l'indicatif pays lui-même. On boucle pour absorber les cas
+	// doublement préfixés ("00229229…", "0229…") vus dans des saisies
+	// clients réelles.
+	for {
+		switch {
+		case strings.HasPrefix(digits, "00"+dialCode):
+			digits = strings.TrimPrefix(digits, "00"+dialCode)
+		case strings.HasPrefix(digits, "0"+dialCode):
+			// "0" de liaison avant l'indicatif (ex. "0229…").
+			digits = strings.TrimPrefix(digits, "0"+dialCode)
+		case strings.HasPrefix(digits, dialCode):
+			digits = strings.TrimPrefix(digits, dialCode)
+		default:
+			goto stripped
+		}
 	}
-	// Bénin : le "01" fait partie du numéro national, on ne le retire pas.
+stripped:
+
 	if dialCode == "229" {
+		// Bénin : numéro national de 10 chiffres commençant par "01". Si le
+		// "01" a sauté (numéro à 8 chiffres à l'ancienne), on le remet ;
+		// s'il y a un "0" de trop devant le "01" ("001…"), on l'enlève.
+		digits = strings.TrimPrefix(digits, "0")   // enlève un éventuel 0 résiduel unique
+		if !strings.HasPrefix(digits, "1") && len(digits) == 8 {
+			digits = "1" + digits // ancien format 8 chiffres → ajoute le "1" de "01"
+		}
+		if strings.HasPrefix(digits, "1") {
+			digits = "0" + digits // remet le "0" de "01"
+		}
 		return dialCode + digits
 	}
+
+	// Autres pays : on retire un unique "0" national de tête puis on
+	// préfixe l'indicatif.
 	digits = strings.TrimPrefix(digits, "0")
 	return dialCode + digits
 }
