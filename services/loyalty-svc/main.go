@@ -133,11 +133,12 @@ CREATE INDEX IF NOT EXISTS idx_whatsapp_logs_created ON whatsapp_logs (created_a
 `
 
 type server struct {
-	db        *pgxpool.Pool
-	kafka     sarama.SyncProducer
-	vendorURL string
-	orderURL  string
-	emailURL  string
+	db             *pgxpool.Pool
+	kafka          sarama.SyncProducer
+	vendorURL      string
+	orderURL       string
+	emailURL       string
+	fulfillmentURL string
 
 	settings *kit.SettingsStore
 	// Champs pointés par settings (voir NewSettingsStore) — mêmes garanties
@@ -189,11 +190,12 @@ func main() {
 	}
 
 	s := &server{
-		db:        db,
-		kafka:     kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
-		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
-		emailURL:  kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
+		db:             db,
+		kafka:          kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		vendorURL:      kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+		orderURL:       kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		emailURL:       kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
+		fulfillmentURL: kit.Env("FULFILLMENT_SVC_URL", "http://fulfillment-svc:8090"),
 
 		twilioAccountSID:   kit.Env("TWILIO_ACCOUNT_SID", ""),
 		twilioAuthToken:    kit.Env("TWILIO_AUTH_TOKEN", ""),
@@ -240,6 +242,7 @@ func main() {
 		mux.HandleFunc("GET /whatsapp/logs", s.listWhatsappLogs)
 		mux.HandleFunc("POST /whatsapp/resend/{order_id}", s.resendWhatsappForOrder)
 		mux.HandleFunc("POST /whatsapp/incoming", s.whatsappIncomingWebhook)
+		mux.HandleFunc("POST /whatsapp/test", s.whatsappTest)
 
 		// Représentants
 		// "representatives" (pluriel, sans variable) — pas de conflit avec
@@ -739,6 +742,7 @@ func (s *server) repDashboard(w http.ResponseWriter, r *http.Request) {
 			var parsed struct {
 				Items []struct {
 					ID            int64   `json:"id"`
+					ParentOrderID int64   `json:"parent_order_id"`
 					Reference     string  `json:"reference"`
 					CustomerID    int64   `json:"customer_id"`
 					VendorID      int64   `json:"vendor_id"`
@@ -770,8 +774,19 @@ func (s *server) repDashboard(w http.ResponseWriter, r *http.Request) {
 					if i >= 10 {
 						break
 					}
+					// "id" DOIT être le parent_order_id : OrderDetailPanel
+					// (espace représentant) appelle GET /api/orders/{id} qui
+					// route vers /orders/parent/{id}, lequel n'accepte QUE la
+					// commande groupée. Avec l'id de sous-commande on obtenait
+					// "Erreur serveur backend" (404 order_not_found), constaté
+					// le 2026-08-28. Repli sur o.ID si le parent est absent
+					// (0) — cas d'une commande non groupée.
+					detailID := o.ParentOrderID
+					if detailID == 0 {
+						detailID = o.ID
+					}
 					recentOrders = append(recentOrders, map[string]any{
-						"id": o.ID, "number": o.Reference, "date": o.CreatedAt, "status": o.Status,
+						"id": detailID, "number": o.Reference, "date": o.CreatedAt, "status": o.Status,
 						"client": fmt.Sprintf("Client #%d", o.CustomerID), "email": "", "phone": "",
 						"vendors": []string{}, "total": o.TotalUSD, "shipping_method": "",
 						"tracking": "",
@@ -1090,7 +1105,19 @@ func (s *server) sendWhatsApp(ctx context.Context, to, recipientType string, ord
 		form.Set("To", "whatsapp:"+strings.TrimPrefix(to, "whatsapp:"))
 		form.Set("From", "whatsapp:"+strings.TrimPrefix(s.twilioWhatsappFrom, "whatsapp:"))
 		if contentSid != "" {
-			varsJSON, _ := json.Marshal(vars)
+			// Twilio rejette ContentVariables si UNE valeur est vide
+			// (erreur 21656 "The Content Variables parameter is invalid").
+			// Ça arrivait dès qu'une commande n'avait pas d'adresse client
+			// complète (addr.fullName()/oneLine() = "") — constaté le
+			// 2026-08-28. On remplace toute valeur vide par "—".
+			cleaned := make(map[string]string, len(vars))
+			for k, v := range vars {
+				if strings.TrimSpace(v) == "" {
+					v = "—"
+				}
+				cleaned[k] = v
+			}
+			varsJSON, _ := json.Marshal(cleaned)
 			form.Set("ContentSid", contentSid)
 			form.Set("ContentVariables", string(varsJSON))
 			bodyLogged = fmt.Sprintf("[template %s] %s", contentSid, string(varsJSON))
@@ -1140,10 +1167,11 @@ func (s *server) sendWhatsApp(ctx context.Context, to, recipientType string, ord
 // notifications représentant au lieu d'une par pays réellement concerné.
 func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID int64) {
 	var order struct {
-		Reference      string `json:"reference"`
-		TotalUSD       string `json:"total"`
-		ShippingTotal  string `json:"shipping_total"`
-		LineItems      []struct {
+		Reference       string          `json:"reference"`
+		TotalUSD        string          `json:"total"`
+		ShippingTotal   string          `json:"shipping_total"`
+		ShippingAddress json.RawMessage `json:"shipping_address"`
+		LineItems       []struct {
 			VendorID int64  `json:"vendor_id"`
 			Name     string `json:"name"`
 			Quantity int    `json:"quantity"`
@@ -1157,12 +1185,16 @@ func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID 
 		return
 	}
 
-	// Adresse de livraison — le format parent (getParentOrder) n'expose pas
-	// encore shipping_address (limitation connue, à ajouter séparément côté
-	// order-svc si besoin) : les templates représentant l'affichent via
-	// {{.5}}/shipping_summary, laissés vides pour l'instant plutôt que de
-	// bloquer la notification sur un appel supplémentaire non garanti.
-	var addr parsedAddress
+	// Adresse de livraison — getParentOrder l'expose désormais (order-svc).
+	// Sert aux variables {{4}} (nom client) et {{5}} (adresse) des templates
+	// rep/admin. Le mode de livraison n'est pas persisté côté order-svc :
+	// on le déduit du shipping_total (0 = gratuit, sinon "Standard") pour
+	// rester aligné avec le format PHP {{5}} = "…adresse… — Livraison : X".
+	addr := parseAddress(order.ShippingAddress)
+	deliveryMethod := "Standard"
+	if order.ShippingTotal == "0.00" || order.ShippingTotal == "0" {
+		deliveryMethod = "Livraison offerte"
+	}
 	productsSummary := summarizeVendorLines(order.LineItems)
 	totalFmt := order.TotalUSD + " $"
 
@@ -1203,11 +1235,14 @@ func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID 
 				fallback := fmt.Sprintf("🛒 *Nouvelle commande #%s*\nBoutique : %s\nMontant total : *%s*\nProduits : %s",
 					order.Reference, vendor.Name, totalFmt, productsSummary)
 				s.sendWhatsApp(ctx, *wa, "representative", &orderID, s.twilioTemplateRepNewOrder, map[string]string{
-					"1": order.Reference + " — " + productsSummary,
+					"1": "#" + order.Reference + " — " + productsSummary,
 					"2": vendor.Name,
 					"3": totalFmt,
 					"4": addr.fullName(),
-					"5": addr.oneLine(),
+					// {{5}} = adresse + " — Livraison : X" (format aligné sur le
+					// plugin PHP miad_notify_rep_new_order, pour ne pas retoucher
+					// le template Twilio approuvé).
+					"5": addr.oneLine() + " — Livraison : " + deliveryMethod,
 					"6": productsSummary,
 				}, fallback)
 			}
@@ -1243,10 +1278,26 @@ func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID 
 				"1": order.Reference,
 				"2": addr.fullName(),
 				"3": totalFmt,
-				"4": time.Now().Format("02/01/2006 15:04"),
-				"5": addr.oneLine(),
+				// Format PHP : "d/m/Y à H:i" (avec "à" entre date et heure).
+				"4": time.Now().Format("02/01/2006 à 15:04"),
+				"5": addr.oneLine() + " — Livraison : " + deliveryMethod,
 			}, fallback)
 		}
+	}
+
+	// ---------- Client : confirmation de paiement ----------
+	// Le plugin PHP (miad_notify_client_on_status → 'processing') envoie au
+	// client un message de confirmation dès le paiement. Le backend Go ne le
+	// faisait à aucun moment. Template client_confirm : {{1}}=prénom,
+	// {{2}}=n° commande, {{3}}=nom du site. Fallback texte + lien de suivi.
+	if s.twilioEnableClient == "yes" && addr.phone != "" {
+		fallback := fmt.Sprintf("🙏 Merci %s pour votre commande #%s sur MIAD Market !\nNous la préparons avec soin.\nSuivre ma commande : https://miadmarket.ca/suivi/%d",
+			addr.firstName(), order.Reference, orderID)
+		s.sendWhatsApp(ctx, addr.phone, "client", &orderID, s.twilioTemplateClientConfirm, map[string]string{
+			"1": addr.firstName(),
+			"2": order.Reference,
+			"3": "MIAD Market",
+		}, fallback)
 	}
 }
 
@@ -1313,10 +1364,19 @@ func (s *server) notifyDeliveryStage(ctx context.Context, log *slog.Logger, orde
 
 	fallback := fmt.Sprintf(tmpl, addr.firstName(), strconv.FormatInt(orderID, 10))
 	if stage == "intl_handoff" {
+		// {{3}} = vrai n° de suivi DHL (fulfillment-svc) plutôt que "N/A"
+		// codé en dur — aligné sur le plugin PHP (_miad_dhl_tracking_number).
+		tracking := "N/A"
+		var ship struct {
+			TrackingNumber string `json:"tracking_number"`
+		}
+		if err := fetchJSONInto(ctx, fmt.Sprintf("%s/shipments/order/%d", s.fulfillmentURL, orderID), &ship); err == nil && ship.TrackingNumber != "" {
+			tracking = ship.TrackingNumber
+		}
 		s.sendWhatsApp(ctx, addr.phone, "client", &orderID, s.twilioTemplateClientShipped, map[string]string{
 			"1": addr.firstName(),
 			"2": strconv.FormatInt(orderID, 10),
-			"3": "N/A",
+			"3": tracking,
 		}, fallback)
 		return
 	}
@@ -1451,6 +1511,51 @@ func (s *server) resendWhatsappForOrder(w http.ResponseWriter, r *http.Request) 
 	}
 	s.notifyOrderPaid(r.Context(), slog.Default(), orderID)
 	kit.JSON(w, 200, map[string]any{"order_id": orderID, "resent": true})
+}
+
+// whatsappTest — POST /whatsapp/test {"to":"+221...", "body":"...", "template_sid":"HX..."}
+// Envoie un message WhatsApp de test avec la config Twilio en base
+// (SettingsStore) et renvoie le résultat (statut + dernière ligne
+// whatsapp_logs). Sert à valider les credentials/numéro sans avoir besoin
+// d'une vraie commande. Si "template_sid" est fourni, "vars" (map) est
+// passé en ContentVariables ; sinon "body" est envoyé en texte brut
+// (nécessite une fenêtre de conversation 24h ouverte côté WhatsApp).
+func (s *server) whatsappTest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		To          string            `json:"to"`
+		Body        string            `json:"body"`
+		TemplateSID string            `json:"template_sid"`
+		Vars        map[string]string `json:"vars"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.To == "" {
+		kit.Fail(w, 400, "invalid_body", "champ 'to' obligatoire (ex: +221771234567)")
+		return
+	}
+	if body.Body == "" && body.TemplateSID == "" {
+		body.Body = "Test MIAD Market — configuration WhatsApp OK ✅"
+	}
+
+	s.sendWhatsApp(r.Context(), body.To, "test", nil, body.TemplateSID, body.Vars, body.Body)
+
+	// Relit la dernière ligne de log pour ce numéro (sendWhatsApp ne renvoie rien).
+	var status, errMsg, logged string
+	var at time.Time
+	_ = s.db.QueryRow(r.Context(), `
+		SELECT status, coalesce(error,''), coalesce(message_body,''), created_at
+		FROM whatsapp_logs WHERE phone=$1 AND recipient_type='test'
+		ORDER BY id DESC LIMIT 1`, body.To,
+	).Scan(&status, &errMsg, &logged, &at)
+
+	code := 200
+	if status != "sent" {
+		code = 502
+	}
+	kit.JSON(w, code, map[string]any{
+		"to": body.To, "status": status, "error": errMsg,
+		"message": logged, "at": at.UTC().Format(time.RFC3339),
+		"twilio_from_configured": s.twilioWhatsappFrom != "",
+		"twilio_keys_configured": s.twilioAccountSID != "" && s.twilioAuthToken != "",
+	})
 }
 
 // whatsappIncomingWebhook — POST /whatsapp/incoming, appelé par Twilio à

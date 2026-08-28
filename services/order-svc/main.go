@@ -455,7 +455,7 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, reference, customer_id, vendor_id, status, payment_status, fulfillment_stage,
+		SELECT id, reference, customer_id, vendor_id, parent_order_id, status, payment_status, fulfillment_stage,
 		       total_usd, payment_method, created_at
 		FROM orders `+where+` ORDER BY id DESC
 		LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize), args...)
@@ -467,13 +467,23 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id, cust, vendor int64
+		var parentID *int64
 		var total float64
 		var ref, status, paymentStatus, fulfillmentStage, paymentMethod string
 		var at time.Time
-		_ = rows.Scan(&id, &ref, &cust, &vendor, &status, &paymentStatus, &fulfillmentStage, &total, &paymentMethod, &at)
+		_ = rows.Scan(&id, &ref, &cust, &vendor, &parentID, &status, &paymentStatus, &fulfillmentStage, &total, &paymentMethod, &at)
+		// parent_order_id : nécessaire aux consommateurs qui veulent
+		// remonter à la commande groupée (ex. espace représentant →
+		// OrderDetailPanel appelle /orders/parent/{id}, qui n'accepte QUE le
+		// parent). 0 pour une commande "group" elle-même (pas de parent).
+		pid := int64(0)
+		if parentID != nil {
+			pid = *parentID
+		}
 		items = append(items, map[string]any{
 			"id": id, "reference": ref, "customer_id": cust, "vendor_id": vendor,
-			"status": status, "payment_status": paymentStatus, "fulfillment_stage": fulfillmentStage,
+			"parent_order_id": pid,
+			"status":          status, "payment_status": paymentStatus, "fulfillment_stage": fulfillmentStage,
 			"total_usd": total, "payment_method": paymentMethod,
 			"created_at": at.UTC().Format(time.RFC3339),
 		})
