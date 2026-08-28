@@ -371,17 +371,28 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	categoryIDs := map[int64]bool{}
 	for rows.Next() {
-		var id, vendorID, categoryID int64
-		var brandID *int64
+		var id int64
+		// vendor_id / category_id peuvent être NULL en base (produit sans
+		// vendeur assigné, produit hors catégorie) — scan nul-safe puis
+		// repli sur 0, sinon pgx renvoie "cannot scan NULL into *int64" et
+		// tout GET /products plante en 500 (vu via Sentry le 28/08).
+		var vendorIDPtr, categoryIDPtr, brandID *int64
 		var price float64
 		var salePrice *float64
 		var trid, l, name, slug, status, sku string
 		var isVar bool
 		var images, tagsJSON []byte
 		var stock, lowStockThreshold int
-		if err := rows.Scan(&id, &trid, &l, &vendorID, &categoryID, &name, &slug, &price, &salePrice, &status, &isVar, &images, &sku, &stock, &lowStockThreshold, &brandID, &tagsJSON); err != nil {
+		if err := rows.Scan(&id, &trid, &l, &vendorIDPtr, &categoryIDPtr, &name, &slug, &price, &salePrice, &status, &isVar, &images, &sku, &stock, &lowStockThreshold, &brandID, &tagsJSON); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
+		}
+		var vendorID, categoryID int64
+		if vendorIDPtr != nil {
+			vendorID = *vendorIDPtr
+		}
+		if categoryIDPtr != nil {
+			categoryID = *categoryIDPtr
 		}
 		item := productToWooShape(id, trid, l, vendorID, categoryID, name, slug, "", price, salePrice, status, isVar, images, nil)
 		item["sku"] = sku
@@ -503,8 +514,10 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 		       p.meta_title, p.meta_description, p.hs_code, p.origin_country, p.tags
 		FROM products p WHERE p.id = $1 AND p.lang = $2`, id, lang)
 
-	var pID, vendorID, catID int64
-	var brandID *int64
+	var pID int64
+	// vendor_id / category_id nullable en base — scan nul-safe puis repli
+	// sur 0 (même correctif que listProducts, Sentry 28/08).
+	var vendorIDPtr, catIDPtr, brandID *int64
 	var price float64
 	var salePrice, weightKg, lengthCm, widthCm, heightCm *float64
 	var trid, l, name, slug, desc, shortDesc, status, sku, barcode, shippingClass, metaTitle, metaDesc, hsCode, originCountry string
@@ -512,7 +525,7 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	var backordersAllowed bool
 	var images, tagsJSON []byte
 	var isVar bool
-	if err := row.Scan(&pID, &trid, &l, &vendorID, &catID, &brandID, &name, &slug, &desc, &shortDesc, &price, &salePrice, &status, &images, &isVar,
+	if err := row.Scan(&pID, &trid, &l, &vendorIDPtr, &catIDPtr, &brandID, &name, &slug, &desc, &shortDesc, &price, &salePrice, &status, &images, &isVar,
 		&sku, &barcode, &stock, &lowStockThreshold, &backordersAllowed,
 		&weightKg, &lengthCm, &widthCm, &heightCm, &shippingClass,
 		&metaTitle, &metaDesc, &hsCode, &originCountry, &tagsJSON); err != nil {
@@ -522,6 +535,13 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 		}
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
+	}
+	var vendorID, catID int64
+	if vendorIDPtr != nil {
+		vendorID = *vendorIDPtr
+	}
+	if catIDPtr != nil {
+		catID = *catIDPtr
 	}
 
 	// Variante liée (autre langue du même trid) — le frontend affiche le switch FR/EN.
