@@ -375,6 +375,16 @@ func main() {
 		mux.HandleFunc("GET /admin/api/finance/transactions", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/transactions" })))
 		mux.HandleFunc("GET /admin/api/finance/gateways", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payment-methods" })))
 		mux.HandleFunc("GET /admin/api/shipping-quote", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping-rates/quote" })))
+		// Livraison nationale Sénégal — adresses d'expédition vendeur (carte
+		// admin des boutiques) + grille tarifaire par distance.
+		mux.HandleFunc("GET /admin/api/vendor-shipping-addresses", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/vendor-shipping-addresses" })))
+		mux.HandleFunc("POST /admin/api/vendor-shipping-address", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.shippingURL+"/vendor-shipping-address")
+		}))
+		mux.HandleFunc("GET /admin/api/domestic-tiers", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping-domestic/tiers" })))
+		mux.HandleFunc("POST /admin/api/domestic-tiers", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.shippingURL+"/shipping-domestic/tiers")
+		}))
 		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
 		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdminOrRep(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))

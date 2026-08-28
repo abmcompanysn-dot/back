@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stripe/stripe-go/v82/webhook"
 
@@ -271,6 +272,27 @@ func main() {
 	if _, err := db.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_order_unique ON payments (order_id)`); err != nil {
 		log.Error("index unique payments impossible", "err", err)
 		return
+	}
+	// Migration 2026-08-27 : ajout de 'pawapay' au CHECK provider des tables
+	// payments et refunds. `kit.Migrate` ne fait que CREATE TABLE IF NOT
+	// EXISTS — sur une table déjà créée avec l'ancien CHECK
+	// ('stripe','paydunya'), la nouvelle définition du schéma n'est jamais
+	// appliquée, et tout INSERT provider='pawapay' échoue en violation de
+	// contrainte (attrapé silencieusement par initiateFor → "paiement déjà
+	// initié", constaté en prod le 2026-08-27 : aucune ligne payments créée
+	// pour les commandes PawaPay). DROP + ADD explicite, idempotent (NOT
+	// VALID évité : les lignes existantes respectent déjà le nouveau CHECK,
+	// plus permissif). Le nom de contrainte auto-généré par Postgres est
+	// <table>_<colonne>_check.
+	for _, mig := range []struct{ table, check string }{
+		{"payments", "provider IN ('stripe','paydunya','pawapay')"},
+		{"refunds", "provider IN ('stripe','paydunya','pawapay')"},
+	} {
+		_, _ = db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s_provider_check`, mig.table, mig.table))
+		if _, err := db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ADD CONSTRAINT %s_provider_check CHECK (%s)`, mig.table, mig.table, mig.check)); err != nil {
+			log.Error("migration CHECK provider impossible", "table", mig.table, "err", err)
+			return
+		}
 	}
 
 	s := &server{
@@ -1133,7 +1155,18 @@ func (s *server) initiateFor(ctx context.Context, log *slog.Logger, ev orderCrea
 		VALUES ($1, $2, $3, 'initiated')
 		ON CONFLICT (order_id) DO NOTHING RETURNING id`, groupOrderID, provider, totalUSD).Scan(&id)
 	if err != nil {
-		log.Warn("paiement déjà initié", "order_id", ev.OrderID)
+		// pgx.ErrNoRows = ON CONFLICT DO NOTHING a supprimé la ligne du
+		// RETURNING → la ligne payments existe déjà pour ce groupe, cas
+		// nominal (un event order.created par sous-commande). TOUTE AUTRE
+		// erreur (ex. violation du CHECK provider si la migration n'a pas
+		// tourné) doit être loggée explicitement — sinon elle passe pour un
+		// simple doublon et le paiement n'est jamais initié sans trace
+		// (constaté en prod le 2026-08-27 avec provider='pawapay').
+		if err == pgx.ErrNoRows {
+			log.Info("paiement déjà initié pour ce groupe", "order_id", ev.OrderID, "group_order_id", groupOrderID)
+		} else {
+			log.Error("INSERT payments a échoué (autre que doublon) — paiement NON initié", "order_id", ev.OrderID, "provider", provider, "err", err)
+		}
 		return
 	}
 	if provider != "paydunya" {

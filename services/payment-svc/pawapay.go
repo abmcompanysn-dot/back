@@ -47,7 +47,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // ---------- Table pays → opérateurs PawaPay ----------
@@ -222,24 +221,20 @@ func pawapayBaseURL(environment string) string {
 	return "https://api.sandbox.pawapay.io"
 }
 
-// pawapayMetadata — PawaPay attend un TABLEAU d'objets, PAS un objet plat.
-// Envoyer {"orderId":"abc"} au lieu de [{"fieldName":"orderId",...}]
-// déclenche une erreur DUPLICATE_METADATA_FIELD peu explicite.
-type pawapayMetaField struct {
-	FieldName  string `json:"fieldName"`
-	FieldValue string `json:"fieldValue"`
-	IsPII      bool   `json:"isPII,omitempty"`
-}
-
-func pawapayOrderMetadata(orderID int64, reference, customerEmail string) []pawapayMetaField {
-	m := []pawapayMetaField{
-		{FieldName: "orderId", FieldValue: strconv.FormatInt(orderID, 10)},
+// pawapayOrderMetadata — la v2 attend un TABLEAU dont chaque élément est un
+// objet {"<clé>":"<valeur>"} (une seule paire), avec un éventuel
+// "isPII": true. PAS {"fieldName":...,"fieldValue":...} (ancien format v1),
+// PAS un objet plat {"orderId":"abc"} (→ DUPLICATE_METADATA_FIELD).
+// Exemple attendu : [{"orderId":"344"},{"customerEmail":"x@y.z","isPII":true}]
+func pawapayOrderMetadata(orderID int64, reference, customerEmail string) []map[string]any {
+	m := []map[string]any{
+		{"orderId": strconv.FormatInt(orderID, 10)},
 	}
 	if reference != "" {
-		m = append(m, pawapayMetaField{FieldName: "reference", FieldValue: reference})
+		m = append(m, map[string]any{"reference": reference})
 	}
 	if customerEmail != "" {
-		m = append(m, pawapayMetaField{FieldName: "customerEmail", FieldValue: customerEmail, IsPII: true})
+		m = append(m, map[string]any{"customerEmail": customerEmail, "isPII": true})
 	}
 	return m
 }
@@ -339,20 +334,29 @@ func (s *server) createPawaPayPaymentPage(ctx context.Context, ev orderCreatedEv
 	depositID = newUUIDv4()
 	front := s.storefrontURL
 
+	// Montant : l'API sandbox /v2/paymentpage REFUSE un champ "amount" à plat
+	// (UNSUPPORTED_PARAMETER, constaté en prod le 2026-08-27 — la doc "guide"
+	// PawaPay montre pourtant "amount"+"country" à plat, mais c'est l'ancien
+	// format v1 ; la v2 réelle attend amountDetails{amount,currency}, comme
+	// l'API reference). Idem : "customerMessage" (4-22 car.) remplace
+	// "statementDescription", et "phoneNumber" remplace "msisdn".
 	payload := map[string]any{
 		"depositId": depositID,
 		// order-received résout la commande PARENT (GET /orders/parent/{id}),
 		// jamais une sous-commande — même return_url que PayDunya.
-		"returnUrl":            front + "/order-received?order_id=" + strconv.FormatInt(redirectOrderID(ev), 10) + "&provider=pawapay",
-		"amount":               amountLocal,
-		"country":              country.ISO3,
-		"reason":               "Commande MIAD " + ev.Reference,
-		"language":             "FR",
-		"statementDescription": pawapayStatementDescription(ev.Reference),
-		"metadata":             pawapayOrderMetadata(redirectOrderID(ev), ev.Reference, customerEmail),
+		"returnUrl": front + "/order-received?order_id=" + strconv.FormatInt(redirectOrderID(ev), 10) + "&provider=pawapay",
+		"amountDetails": map[string]any{
+			"amount":   amountLocal,
+			"currency": country.Currency,
+		},
+		"country":         country.ISO3,
+		"reason":          "Commande MIAD " + ev.Reference,
+		"language":        "FR",
+		"customerMessage": pawapayStatementDescription(ev.Reference),
+		"metadata":        pawapayOrderMetadata(redirectOrderID(ev), ev.Reference, customerEmail),
 	}
 	if msisdn := normalizeMSISDN(buyerPhone, country.DialCode); len(msisdn) >= 8 {
-		payload["msisdn"] = msisdn
+		payload["phoneNumber"] = msisdn
 	}
 
 	status, raw, err := s.pawapayHTTP(ctx, http.MethodPost, "/v2/paymentpage", payload)
@@ -480,18 +484,27 @@ func (s *server) createPawaPayPayout(ctx context.Context, payoutRequestID, vendo
 	amountLocal := pawapayLocalAmount(amountUSD, rate, country.Currency)
 
 	payoutID = newUUIDv4()
+	// v2 /payouts : amountDetails{amount,currency}, recipient de type "MMO"
+	// avec accountDetails{phoneNumber,provider} (aligné sur GET /v2/payouts
+	// et le format deposit). customerMessage 4-22 car.
 	payload := map[string]any{
-		"payoutId":             payoutID,
-		"amount":               amountLocal,
-		"currency":             country.Currency,
-		"country":              country.ISO3,
-		"correspondent":        firstProvider(country),
-		"recipient":            map[string]any{"type": "MSISDN", "address": map[string]any{"value": msisdn}},
-		"customerTimestamp":    time.Now().UTC().Format(time.RFC3339),
-		"statementDescription": pawapayStatementDescription(fmt.Sprintf("MIADPO%d", payoutRequestID)),
-		"metadata": []pawapayMetaField{
-			{FieldName: "payoutRequestId", FieldValue: strconv.FormatInt(payoutRequestID, 10)},
-			{FieldName: "vendorId", FieldValue: strconv.FormatInt(vendorID, 10)},
+		"payoutId": payoutID,
+		"amountDetails": map[string]any{
+			"amount":   amountLocal,
+			"currency": country.Currency,
+		},
+		"country": country.ISO3,
+		"recipient": map[string]any{
+			"type": "MMO",
+			"accountDetails": map[string]any{
+				"phoneNumber": msisdn,
+				"provider":    firstProvider(country),
+			},
+		},
+		"customerMessage": pawapayStatementDescription(fmt.Sprintf("MIADPO%d", payoutRequestID)),
+		"metadata": []map[string]any{
+			{"payoutRequestId": strconv.FormatInt(payoutRequestID, 10)},
+			{"vendorId": strconv.FormatInt(vendorID, 10)},
 		},
 	}
 

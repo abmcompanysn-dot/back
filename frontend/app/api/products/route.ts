@@ -225,9 +225,35 @@ export async function GET(req: Request) {
       return NextResponse.json({ products: [], total: 0, pages: 1 });
     }
 
+    // Résolution slug -> id : GET {CATALOG_SVC_URL}/products?slug= renvoie la
+    // vue LISTE (allégée : description="", pas de weight_kg/length_cm/sku),
+    // alors que GET /products/{id} renvoie la vue DÉTAIL complète. La fiche
+    // produit (chargée par /api/products?slug=) affichait donc "Aucune
+    // description disponible" et une section Caractéristiques quasi vide même
+    // quand tout était renseigné en base (constaté le 2026-08-28). On résout
+    // le slug en id via la liste, puis on bascule sur l'endpoint détail.
+    let resolvedId = id;
+    if (!resolvedId && slug) {
+      try {
+        const lookupUrl = new URL(`${CATALOG_SVC_URL}/products`);
+        lookupUrl.searchParams.set('slug', slug);
+        lookupUrl.searchParams.set('page_size', '1');
+        if (lang) lookupUrl.searchParams.set('lang', lang);
+        const lookup = await fetch(lookupUrl.toString(), { next: { revalidate: cacheStrategy, tags: ['products'] } });
+        if (lookup.ok) {
+          const ld = await lookup.json().catch(() => ({}));
+          const first = (ld.items || ld.products || [])[0];
+          if (first?.id) resolvedId = String(first.id);
+        }
+      } catch {
+        // On retombe sur le chemin liste ci-dessous (description vide, mais
+        // pas de 500).
+      }
+    }
+
     let apiUrl: URL;
-    if (id) {
-      apiUrl = new URL(`${CATALOG_SVC_URL}/products/${id}`);
+    if (resolvedId) {
+      apiUrl = new URL(`${CATALOG_SVC_URL}/products/${resolvedId}`);
       if (lang) apiUrl.searchParams.set('lang', lang);
     } else {
       apiUrl = new URL(`${CATALOG_SVC_URL}/products`);

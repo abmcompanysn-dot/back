@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { SHIPPING_SVC_URL } from '@/lib/miad-server-auth'
+import { SENEGAL_DOMESTIC_FALLBACK_USD } from '@/lib/domestic-shipping-estimate'
 
 export const runtime = 'edge'
 
@@ -24,8 +25,13 @@ export async function POST(request: Request) {
   if (body.buyerLat === undefined || body.buyerLng === undefined) {
     // shipping-svc calcule par distance à vol d'oiseau (lat/lng obligatoires)
     // — pas de repli "par ville" côté Go, contrairement à l'ancien WordPress.
+    // price est en USD (tout le backend a migré price_xof -> price_usd).
+    // Le repli historique "3000" était en FCFA et se retrouvait affiché
+    // comme 3000 $ au checkout (bug constaté le 2026-08-28 : livraison à
+    // 3050 $ pour un article à 50 $). SENEGAL_DOMESTIC_FALLBACK_USD ≈ 8,33 $
+    // (= 5000 FCFA / 600), aligné sur la tranche médiane de la grille CDC.
     return NextResponse.json({
-      ok: true, distance_km: null, price: 3000, tier_label: 'estimation',
+      ok: true, distance_km: null, price: SENEGAL_DOMESTIC_FALLBACK_USD, tier_label: 'estimation',
       resolved_from: 'fallback_default', origin_source: 'missing_coords', dest_source: 'missing_coords',
     })
   }

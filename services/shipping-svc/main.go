@@ -196,6 +196,7 @@ func main() {
 		mux.HandleFunc("GET /shipping-domestic/tiers", s.listDomesticTiers)
 		mux.HandleFunc("POST /shipping-domestic/tiers", s.setDomesticTier)
 		mux.HandleFunc("GET /vendor-shipping-address", s.getVendorShippingAddress)
+		mux.HandleFunc("GET /vendor-shipping-addresses", s.listVendorShippingAddresses)
 		mux.HandleFunc("POST /vendor-shipping-address", s.setVendorShippingAddress)
 		mux.HandleFunc("POST /shipping-domestic/calculate", s.calculateDomestic)
 		mux.HandleFunc("POST /shipping-domestic/order-stage", s.setDomesticOrderStage)
@@ -420,6 +421,35 @@ func (s *server) getVendorShippingAddress(w http.ResponseWriter, r *http.Request
 		return
 	}
 	kit.JSON(w, 200, map[string]any{"vendor_id": vendorID, "address": address, "lat": lat, "lng": lng})
+}
+
+// listVendorShippingAddresses — toutes les adresses d'expédition vendeur
+// enregistrées (alimente la carte admin des boutiques). Pas de pagination :
+// quelques dizaines de vendeurs au plus.
+func (s *server) listVendorShippingAddresses(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(),
+		`SELECT vendor_id, address, lat, lng, updated_at FROM vendor_shipping_addresses ORDER BY vendor_id`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var vendorID int64
+		var address string
+		var lat, lng float64
+		var updatedAt time.Time
+		if err := rows.Scan(&vendorID, &address, &lat, &lng, &updatedAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"vendor_id": vendorID, "address": address, "lat": lat, "lng": lng,
+			"updated_at": updatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items})
 }
 
 func (s *server) setVendorShippingAddress(w http.ResponseWriter, r *http.Request) {

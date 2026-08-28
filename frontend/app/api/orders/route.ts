@@ -22,7 +22,20 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Erreur backend', status: res.status }, { status: res.status })
     }
     const data = await res.json()
-    return NextResponse.json({ orders: data.items || [] })
+    // order-svc renvoie le format Go (total_usd, created_at) ; le
+    // ClientDashboard attend le format WooCommerce (total, date_created,
+    // line_items). Sans ce mapping : "NaN XOF" (Number(order.total) sur un
+    // champ absent) et "Invalid Date" (new Date(order.date_created)) —
+    // constaté le 2026-08-28 sur la page Mon compte. On mappe ici plutôt
+    // que de patcher chaque accès du dashboard.
+    const orders = (data.items || []).map((o: any) => ({
+      ...o,
+      total: o.total_usd ?? o.total ?? 0,
+      date_created: o.created_at ?? o.date_created ?? null,
+      date_modified: o.updated_at ?? o.created_at ?? o.date_modified ?? null,
+      line_items: o.line_items ?? [],
+    }))
+    return NextResponse.json({ orders })
   } catch {
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
   }
