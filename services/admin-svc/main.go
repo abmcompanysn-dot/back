@@ -1281,6 +1281,15 @@ func forwardWithBody(w http.ResponseWriter, r *http.Request, method, upstream st
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Propager le JWT admin vers le service en amont : plusieurs endpoints
+	// (auth-svc POST /admins, /admin-roles, etc.) refont un requireRole
+	// "admin" et échouent en 403 sans ce header — le client interprète
+	// alors le 403 comme une session expirée et déconnecte l'admin
+	// (constaté le 2026-08-28 : "créer un compte admin déconnecte").
+	// s.proxyAuth le fait déjà pour les GET ; forwardWithBody l'oubliait.
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		kit.Fail(w, 502, "upstream_unreachable", fmt.Sprintf("%s injoignable — erreur EXPLICITE", upstream))
