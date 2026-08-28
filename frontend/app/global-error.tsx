@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import Image from 'next/image'
+import * as Sentry from '@sentry/nextjs'
 
 const primaryButtonStyle: React.CSSProperties = {
   width: '100%', padding: '14px', background: '#e85d04',
@@ -24,6 +25,9 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error('[MIAD] Global error:', error)
+    // Remonte l'erreur globale (celle qui casse toute la page) dans Sentry —
+    // no-op si le DSN n'est pas configuré.
+    Sentry.captureException(error)
   }, [error])
 
   return (

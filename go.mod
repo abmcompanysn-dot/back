@@ -4,9 +4,11 @@ go 1.22
 
 require (
 	github.com/IBM/sarama v1.43.3
+	github.com/getsentry/sentry-go v0.29.1
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/minio/minio-go/v7 v7.0.77
 	github.com/redis/go-redis/v9 v9.7.0
+	github.com/stripe/stripe-go/v82 v82.5.1
 )
 
 require (
@@ -38,7 +40,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/rs/xid v1.6.0 // indirect
-	github.com/stripe/stripe-go/v82 v82.5.1 // indirect
 	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
