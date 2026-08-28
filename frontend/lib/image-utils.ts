@@ -1,4 +1,13 @@
-const CDN_HOST = 'cdn.miadmarket.com'
+// CDN_HOST — mis à jour le 2026-08-28 : depuis la migration des images vers
+// MinIO (img.miadmarket.ca), cette fonction ne reconnaissait plus AUCUNE
+// URL (elle vérifiait encore l'ancien cdn.miadmarket.com), donc
+// getThumbnailUrl ne faisait plus jamais rien — chaque carte produit
+// chargeait l'image en pleine résolution d'origine au lieu d'une miniature
+// 300x300, ralentissant tout l'accueil (plusieurs centaines de Ko par
+// image au lieu de quelques Ko) et laissant des cartes grises côté
+// LazyImage sous charge. Les variantes -150x150/-300x300 existent bien
+// sur MinIO (vérifié en direct), la migration les a préservées.
+const CDN_HOST = 'img.miadmarket.ca'
 const WP_ORIGIN_HOST = 'api.miadmarket.com'
 
 /**
