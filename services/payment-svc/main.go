@@ -2089,7 +2089,25 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 	// la créer, il n'a ni le pays ni le téléphone de l'acheteur). Même
 	// verrou anti-doublon 'creating'. depositId (UUID v4) stocké en
 	// provider_ref : c'est la clé de corrélation du webhook pawapayWebhook.
-	if provider == "pawapay" && redirect == "" && (status == "initiated" || status == "failed") {
+	//
+	// body.MobileMoneyProvider == "" exigé en plus (2026-08-28) : ce
+	// endpoint est appelé DEUX FOIS dans le flux sans redirection — une
+	// première fois par POST /api/orders (juste après le formulaire
+	// d'adresse, AVANT que le client ait choisi son opérateur — provider
+	// forcément vide à ce stade), puis une seconde fois par
+	// MobileMoneyDirectForm.tsx via /orders/{id}/mobile-money-deposit,
+	// une fois l'opérateur réellement choisi. Sans ce garde-fou, le
+	// PREMIER appel (provider vide) tombait déjà dans createPawaPayPaymentPage
+	// (ligne juste en dessous, branche else), remplissait redirect_url,
+	// et le SECOND appel (avec le vrai provider) ne faisait plus jamais
+	// rien car `redirect == ""` était déjà faux — le nouveau formulaire
+	// avec logos d'opérateurs n'apparaissait donc JAMAIS en pratique, le
+	// client était systématiquement redirigé vers l'ancienne Payment Page
+	// dès la création de commande (signalé par le fondateur, vidéo à
+	// l'appui, 2026-08-28). Le premier appel laisse maintenant le paiement
+	// en status='initiated' sans redirect_url ; seul le second (avec
+	// provider) crée réellement le dépôt.
+	if provider == "pawapay" && redirect == "" && body.MobileMoneyProvider != "" && (status == "initiated" || status == "failed") {
 		locked, err := s.db.Exec(ctx,
 			"UPDATE payments SET status='creating' WHERE id=$1 AND status IN ('initiated','failed')", id)
 		if err != nil {
