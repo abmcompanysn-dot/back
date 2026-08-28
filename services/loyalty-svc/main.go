@@ -742,6 +742,7 @@ func (s *server) repDashboard(w http.ResponseWriter, r *http.Request) {
 			var parsed struct {
 				Items []struct {
 					ID            int64   `json:"id"`
+					ParentOrderID int64   `json:"parent_order_id"`
 					Reference     string  `json:"reference"`
 					CustomerID    int64   `json:"customer_id"`
 					VendorID      int64   `json:"vendor_id"`
@@ -773,8 +774,19 @@ func (s *server) repDashboard(w http.ResponseWriter, r *http.Request) {
 					if i >= 10 {
 						break
 					}
+					// "id" DOIT être le parent_order_id : OrderDetailPanel
+					// (espace représentant) appelle GET /api/orders/{id} qui
+					// route vers /orders/parent/{id}, lequel n'accepte QUE la
+					// commande groupée. Avec l'id de sous-commande on obtenait
+					// "Erreur serveur backend" (404 order_not_found), constaté
+					// le 2026-08-28. Repli sur o.ID si le parent est absent
+					// (0) — cas d'une commande non groupée.
+					detailID := o.ParentOrderID
+					if detailID == 0 {
+						detailID = o.ID
+					}
 					recentOrders = append(recentOrders, map[string]any{
-						"id": o.ID, "number": o.Reference, "date": o.CreatedAt, "status": o.Status,
+						"id": detailID, "number": o.Reference, "date": o.CreatedAt, "status": o.Status,
 						"client": fmt.Sprintf("Client #%d", o.CustomerID), "email": "", "phone": "",
 						"vendors": []string{}, "total": o.TotalUSD, "shipping_method": "",
 						"tracking": "",
