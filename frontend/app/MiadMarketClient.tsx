@@ -1829,12 +1829,18 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         // has-bottom-nav : réserve la hauteur de la MobileBottomNav (fixed)
         // + la safe-area iOS, sinon le bas du footer (liste des pays,
         // moyens de paiement) reste masqué derrière la barre sur mobile.
-        <div className="has-bottom-nav">
+        // Pas sur la vue panier : la MobileBottomNav y est masquée (voir
+        // plus bas), c'est la barre "Procéder au paiement" de CartPage qui
+        // occupe le bas de l'écran sur mobile.
+        <div className={currentView === 'cart' ? '' : 'has-bottom-nav'}>
           <Footer categories={categories} onCountryClick={handleCountryClick} selectedCountry={selectedCountryCode} language={language} />
         </div>
       )}
       {currentView === 'home' && <ScrollToTopButton />}
-      {currentView !== 'login' && (
+      {/* MobileBottomNav masquée sur la vue panier : sur mobile, CartPage
+          affiche sa propre barre fixe "Procéder au paiement" (z-40) — la
+          bottom-nav (z-50) passait par-dessus et recouvrait le bouton. */}
+      {currentView !== 'login' && currentView !== 'cart' && (
         <MobileBottomNav
           currentView={currentView}
           cartCount={cartCount}

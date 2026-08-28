@@ -18,25 +18,33 @@ const BANNER_IMAGE: Record<string, string> = {
 }
 
 const BANNER_SUBTITLE: Record<string, string> = {
+  'sacs-maroquinerie': 'Sacs, pochettes et maroquinerie faits main',
+  'pagnes-tissus-africains': 'Wax, bogolan, kente et tissus authentiques',
   'mode-vetements': 'Pagnes, boubous et tenues authentiques d’Afrique',
   'bijoux-accessoires': 'Bijoux artisanaux, cauris et créations dorées',
-  'beaute-soin-naturel': 'Soins naturels, huiles et savons artisanaux',
-  'artisanat-art-africain': 'Sculptures, tableaux et art fait main',
   'alimentation-epicerie': 'Épices, infusions et saveurs du continent',
+  'beaute-soin-naturel': 'Soins naturels, huiles et savons artisanaux',
+  'chaussures-sandales': 'Sandales, babouches et chaussures artisanales',
+  'artisanat-art-africain': 'Sculptures, tableaux et art fait main',
+  'soin-cheveux-naturels': 'Huiles, masques et soins capillaires naturels',
   'maison-decoration': 'Décoration et artisanat pour la maison',
-  'bebe-enfant': 'Vêtements et douceurs pour les tout-petits',
-  'sante-bien-etre': 'Plantes médicinales et compléments naturels',
+  'livres-religieux': 'Ouvrages religieux et spirituels',
+  'electronique-tech': 'Accessoires et petit matériel tech',
 }
 
 const BANNER_SUBTITLE_EN: Record<string, string> = {
+  'sacs-maroquinerie': 'Handmade bags, clutches and leather goods',
+  'pagnes-tissus-africains': 'Wax, bogolan, kente and authentic fabrics',
   'mode-vetements': 'Pagnes, boubous and authentic African outfits',
   'bijoux-accessoires': 'Handcrafted jewelry, cowries and golden pieces',
-  'beaute-soin-naturel': 'Natural skincare, oils and handmade soaps',
-  'artisanat-art-africain': 'Sculptures, paintings and handmade art',
   'alimentation-epicerie': 'Spices, infusions and flavors from the continent',
+  'beaute-soin-naturel': 'Natural skincare, oils and handmade soaps',
+  'chaussures-sandales': 'Sandals, babouches and handmade shoes',
+  'artisanat-art-africain': 'Sculptures, paintings and handmade art',
+  'soin-cheveux-naturels': 'Natural oils, masks and hair care',
   'maison-decoration': 'Home decor and craftsmanship',
-  'bebe-enfant': 'Clothes and gentle essentials for little ones',
-  'sante-bien-etre': 'Medicinal plants and natural supplements',
+  'livres-religieux': 'Religious and spiritual books',
+  'electronique-tech': 'Tech accessories and small devices',
 }
 
 const fetcher = (url: string) => {

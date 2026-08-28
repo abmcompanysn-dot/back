@@ -101,6 +101,32 @@ export function VariationsMaintenance() {
     }
   }
 
+  // --- Tailles vêtements (même forme de réponse que les pointures) ---
+  const [clothPreview, setClothPreview] = useState<ShoeResult | null>(null)
+  const [clothDone, setClothDone] = useState<ShoeResult | null>(null)
+  const [clothBusy, setClothBusy] = useState(false)
+
+  async function runCloth(dryRun: boolean) {
+    setClothBusy(true)
+    setError(null)
+    try {
+      const res = await api.post<ShoeResult>(
+        `/admin/api/catalog/backfill-clothing-sizes${dryRun ? '?dry_run=true' : ''}`
+      )
+      if (dryRun) {
+        setClothPreview(res)
+        setClothDone(null)
+      } else {
+        setClothDone(res)
+        setClothPreview(null)
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'échec de l\'opération')
+    } finally {
+      setClothBusy(false)
+    }
+  }
+
   return (
     <div>
       <CatalogNav />
@@ -260,6 +286,87 @@ export function VariationsMaintenance() {
                   </thead>
                   <tbody>
                     {shoePreview.details.map((d) => (
+                      <tr key={d.product_id}>
+                        <td>{d.product_id}</td>
+                        <td>{d.name}</td>
+                        <td>{d.price_usd}</td>
+                        <td>{d.stock_per_size}</td>
+                        <td>{d.sizes.join(', ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ------------------------------------------------------------ */}
+      {/* 3. Tailles vêtements (homme + femme)                         */}
+      {/* ------------------------------------------------------------ */}
+      <div className="form-card" style={{ marginTop: 20 }}>
+        <h3 style={{ marginTop: 0 }}>3. Générer les tailles des vêtements (homme &amp; femme)</h3>
+        <p className="hint">
+          Parcourt les produits des catégories « vêtements » homme et femme (vêtement, homme, femme,
+          robe, boubou, ensemble, chemise, pantalon…) — <strong>hors enfant, sacs, pagnes et
+          chaussures</strong> — et, pour chacun sans variation de taille, crée la grille
+          <strong> S / M / L / XL / XXL / XXXL</strong> sous l'attribut « Taille ». Chaque taille
+          reprend le prix et le stock du produit.
+        </p>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button className="btn-ghost" disabled={clothBusy} onClick={() => runCloth(true)}>
+            {clothBusy ? '…' : 'Aperçu (ne modifie rien)'}
+          </button>
+          {clothPreview && clothPreview.products_updated > 0 && (
+            <button
+              className="btn-primary"
+              disabled={clothBusy}
+              onClick={() => {
+                if (
+                  confirm(
+                    `Générer les tailles S→XXXL sur ${clothPreview.products_updated} produit(s) ? (${clothPreview.variations_created} variations créées)`
+                  )
+                ) {
+                  runCloth(false)
+                }
+              }}
+            >
+              Appliquer sur {clothPreview.products_updated} produit(s)
+            </button>
+          )}
+        </div>
+
+        {clothDone && (
+          <p className="hint" style={{ marginTop: 12, color: '#1a7f37' }}>
+            ✓ {clothDone.products_updated} produit(s) mis à jour, {clothDone.variations_created} tailles
+            créées ({clothDone.products_skipped} déjà avec une taille, ignorés).
+          </p>
+        )}
+
+        {clothPreview && (
+          <div style={{ marginTop: 12 }}>
+            <p className="hint">
+              {clothPreview.shoe_categories} catégorie(s) vêtements · {clothPreview.products_scanned}{' '}
+              produit(s) scanné(s) · {clothPreview.products_updated} à traiter ·{' '}
+              {clothPreview.products_skipped} déjà OK.
+              {clothPreview.note && <> — {clothPreview.note}</>}
+            </p>
+            {clothPreview.products_updated > 0 && (
+              <div className="table-card" style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Produit</th>
+                      <th>Prix (USD)</th>
+                      <th>Stock / taille</th>
+                      <th>Tailles créées</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clothPreview.details.map((d) => (
                       <tr key={d.product_id}>
                         <td>{d.product_id}</td>
                         <td>{d.name}</td>

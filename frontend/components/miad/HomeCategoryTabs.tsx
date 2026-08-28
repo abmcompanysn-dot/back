@@ -10,15 +10,27 @@ export interface HomeTab {
   labelEn: string
 }
 
+// Onglets = les vraies catégories racines du catalogue (catalog-svc
+// GET /categories), triées par nombre de produits décroissant. Les slugs
+// sont volontairement SANS le suffixe de langue (`-fr`/`-en`) : la
+// résolution slug→id est tolérante (voir app/api/products/route.ts et
+// lib/woo-server.ts fetchCategoryRow), donc le même onglet marche en FR et
+// en EN. Corrigé le 2026-08-28 : l'ancienne liste contenait `bebe-enfant`
+// et `sante-bien-etre` qui n'existent pas en base (0 produit, jamais
+// créées) et omettait Sacs (195), Pagnes (129), Chaussures (58), etc.
 export const HOME_CATEGORY_TABS: HomeTab[] = [
+  { slug: 'sacs-maroquinerie', label: 'Sacs', labelEn: 'Bags' },
+  { slug: 'pagnes-tissus-africains', label: 'Pagnes', labelEn: 'Fabrics' },
   { slug: 'mode-vetements', label: 'Mode', labelEn: 'Fashion' },
   { slug: 'bijoux-accessoires', label: 'Bijoux', labelEn: 'Jewelry' },
-  { slug: 'beaute-soin-naturel', label: 'Beauté', labelEn: 'Beauty' },
-  { slug: 'artisanat-art-africain', label: 'Artisanat', labelEn: 'Crafts' },
   { slug: 'alimentation-epicerie', label: 'Alimentation', labelEn: 'Groceries' },
+  { slug: 'beaute-soin-naturel', label: 'Beauté', labelEn: 'Beauty' },
+  { slug: 'chaussures-sandales', label: 'Chaussures', labelEn: 'Shoes' },
+  { slug: 'artisanat-art-africain', label: 'Artisanat', labelEn: 'Crafts' },
+  { slug: 'soin-cheveux-naturels', label: 'Cheveux', labelEn: 'Hair care' },
   { slug: 'maison-decoration', label: 'Maison', labelEn: 'Home' },
-  { slug: 'bebe-enfant', label: 'Bébé', labelEn: 'Baby' },
-  { slug: 'sante-bien-etre', label: 'Santé', labelEn: 'Health' },
+  { slug: 'livres-religieux', label: 'Livres', labelEn: 'Books' },
+  { slug: 'electronique-tech', label: 'Électronique', labelEn: 'Electronics' },
 ]
 
 interface HomeCategoryTabsProps {

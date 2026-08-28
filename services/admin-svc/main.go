@@ -253,6 +253,14 @@ func main() {
 			}
 			forwardWithBody(w, r, http.MethodPost, target)
 		}))
+		// Backfill des tailles S→XXXL sur les vêtements homme/femme existants.
+		mux.HandleFunc("POST /admin/api/catalog/backfill-clothing-sizes", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			target := s.catalogURL + "/admin/backfill-clothing-sizes"
+			if q := r.URL.RawQuery; q != "" {
+				target += "?" + q
+			}
+			forwardWithBody(w, r, http.MethodPost, target)
+		}))
 		// Répare les produits "faux variables" (1 seule variation) — les
 		// repasse en produit simple. catalog-svc POST /admin/collapse-fake-variables.
 		mux.HandleFunc("POST /admin/api/catalog/collapse-fake-variables", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {

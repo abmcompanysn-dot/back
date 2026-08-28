@@ -205,8 +205,8 @@ func main() {
 	}
 
 	s := &server{
-		db:       db,
-		kafka:    kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		db:        db,
+		kafka:     kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
 		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 	}
@@ -226,6 +226,7 @@ func main() {
 		mux.HandleFunc("GET /products/{id}/similar", s.similar)
 		mux.HandleFunc("GET /products/variations", s.listVariationsBatch)
 		mux.HandleFunc("POST /admin/backfill-shoe-sizes", s.backfillShoeSizes)
+		mux.HandleFunc("POST /admin/backfill-clothing-sizes", s.backfillClothingSizes)
 		mux.HandleFunc("POST /admin/collapse-fake-variables", s.collapseFakeVariables)
 		mux.HandleFunc("POST /products/{id}/variations", s.createVariation)
 		mux.HandleFunc("PUT /products/{id}/variations/{variation_id}", s.updateVariation)
@@ -2076,51 +2077,82 @@ func (s *server) collapseFakeVariables(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// backfillShoeSizes — POST /admin/backfill-shoe-sizes
-// Parcourt tous les produits dont le nom de catégorie désigne des
-// chaussures (voir isShoeCategoryName) et, pour chacun qui n'a PAS déjà
-// une variation de taille, le passe is_variable=true et lui crée la grille
-// EU 36→46 (shoeSizeGrid) sous l'attribut "Pointure". Chaque pointure
-// reprend le prix ET le stock du produit parent (choix du 2026-08-28).
-// Idempotent : relançable sans créer de doublons (skip si taille déjà là).
+// backfillShoeSizes  — POST /admin/backfill-shoe-sizes    (grille pointures 36→46)
+// backfillClothingSizes — POST /admin/backfill-clothing-sizes (grille S→XXXL)
 //
-// Query params :
-//   ?dry_run=true  -> ne modifie rien, renvoie juste ce qui SERAIT fait
-//   ?category_id=N -> restreint à une catégorie précise (sinon toutes les
-//                     catégories "chaussures" détectées par leur nom)
+// Même logique : parcourt les produits d'une famille de catégories (détectée
+// par le nom), et pour chacun SANS variation de taille, crée la grille sous
+// l'attribut donné, en reprenant prix + stock du produit. Idempotent (skip
+// si une variation de taille existe déjà). Query params :
+//   ?dry_run=true  -> ne modifie rien, renvoie ce qui SERAIT fait
+//   ?category_id=N -> restreint à une catégorie précise
 func (s *server) backfillShoeSizes(w http.ResponseWriter, r *http.Request) {
+	s.backfillSizes(w, r, backfillSpec{
+		matchCategory: isShoeCategoryName,
+		attrName:      shoeSizeAttrName,
+		grid:          shoeSizeGrid,
+		familyLabel:   "chaussures",
+		noMatchNote:   "aucune catégorie 'chaussures' détectée par son nom (chaussure, sandale, babouche, basket, ...)",
+	})
+}
+
+func (s *server) backfillClothingSizes(w http.ResponseWriter, r *http.Request) {
+	s.backfillSizes(w, r, backfillSpec{
+		matchCategory:    isClothingCategoryName,
+		matchProductName: isClothingProductName, // filtre supplémentaire : nom du produit
+		attrName:         clothingSizeAttrName,
+		grid:             clothingSizeGrid,
+		familyLabel:      "vêtements",
+		noMatchNote:      "aucune catégorie 'vêtements' détectée par son nom",
+	})
+}
+
+type backfillSpec struct {
+	matchCategory func(name string) bool
+	// matchProductName — filtre optionnel sur le nom du produit (nil = tous
+	// les produits des catégories qui matchent). Utilisé pour les vêtements
+	// où la catégorie "Mode - Vêtements" contient aussi des non-vêtements.
+	matchProductName func(name string) bool
+	attrName         string
+	grid             []string
+	familyLabel      string // "chaussures" / "vêtements" — pour les messages
+	noMatchNote      string
+}
+
+func (s *server) backfillSizes(w http.ResponseWriter, r *http.Request, spec backfillSpec) {
 	ctx := r.Context()
 	dryRun := r.URL.Query().Get("dry_run") == "true"
 	onlyCat := atoi(r.URL.Query().Get("category_id"))
 
-	// 1. Catégories chaussures (par nom). On garde tous les IDs (FR + EN).
+	// 1. Catégories de la famille (par nom). Tous les IDs (FR + EN).
 	catRows, err := s.db.Query(ctx, `SELECT id, name FROM categories`)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	shoeCatIDs := map[int64]string{}
+	catIDs := map[int64]string{}
 	for catRows.Next() {
 		var cid int64
 		var cname string
-		if catRows.Scan(&cid, &cname) == nil && isShoeCategoryName(cname) {
+		if catRows.Scan(&cid, &cname) == nil && spec.matchCategory(cname) {
 			if onlyCat == 0 || cid == onlyCat {
-				shoeCatIDs[cid] = cname
+				catIDs[cid] = cname
 			}
 		}
 	}
 	catRows.Close()
-	if len(shoeCatIDs) == 0 {
+	if len(catIDs) == 0 {
 		kit.JSON(w, 200, map[string]any{
-			"dry_run": dryRun, "shoe_categories": 0, "products_scanned": 0,
-			"products_updated": 0, "variations_created": 0,
-			"note": "aucune catégorie 'chaussures' détectée par son nom (chaussure, sandale, babouche, basket, ...)",
+			"dry_run": dryRun, "matched_categories": 0, "products_scanned": 0,
+			"products_updated": 0, "variations_created": 0, "note": spec.noMatchNote,
 		})
 		return
 	}
-	catIDList := make([]int64, 0, len(shoeCatIDs))
-	for cid := range shoeCatIDs {
+	catIDList := make([]int64, 0, len(catIDs))
+	catNames := make([]string, 0, len(catIDs))
+	for cid, cname := range catIDs {
 		catIDList = append(catIDList, cid)
+		catNames = append(catNames, cname)
 	}
 
 	// 2. Produits de ces catégories.
@@ -2132,30 +2164,34 @@ func (s *server) backfillShoeSizes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type prod struct {
-		id       int64
-		name     string
-		price    float64
-		stock    int
-		sku      string
-		variable bool
+		id    int64
+		name  string
+		price float64
+		stock int
+		sku   string
 	}
 	var products []prod
 	for prodRows.Next() {
 		var p prod
-		if prodRows.Scan(&p.id, &p.name, &p.price, &p.stock, &p.sku, &p.variable) == nil {
+		var isVar bool
+		if prodRows.Scan(&p.id, &p.name, &p.price, &p.stock, &p.sku, &isVar) == nil {
 			products = append(products, p)
 		}
 	}
 	prodRows.Close()
 
 	scanned := len(products)
-	updated := 0
-	varsCreated := 0
-	skipped := 0
+	updated, varsCreated, skipped, filteredByName := 0, 0, 0, 0
 	details := []map[string]any{}
 
 	for _, p := range products {
-		// Le produit a-t-il déjà une variation de taille ?
+		// Filtre optionnel sur le nom du produit (vêtements : la catégorie
+		// "Mode - Vêtements" contient aussi des chapeaux, de la vaisselle…).
+		if spec.matchProductName != nil && !spec.matchProductName(p.name) {
+			filteredByName++
+			continue
+		}
+
 		existRows, err := s.db.Query(ctx,
 			`SELECT attributes FROM product_variations WHERE product_id = $1`, p.id)
 		if err != nil {
@@ -2180,24 +2216,23 @@ func (s *server) backfillShoeSizes(w http.ResponseWriter, r *http.Request) {
 
 		details = append(details, map[string]any{
 			"product_id": p.id, "name": p.name, "price_usd": p.price,
-			"stock_per_size": p.stock, "sizes": shoeSizeGrid,
+			"stock_per_size": p.stock, "sizes": spec.grid,
 		})
 		if dryRun {
 			updated++
-			varsCreated += len(shoeSizeGrid)
+			varsCreated += len(spec.grid)
 			continue
 		}
 
-		// 3. Créer les 11 pointures + passer le produit en variable.
-		//    Transaction par produit : soit toute la grille, soit rien.
+		// Transaction par produit : toute la grille, ou rien.
 		tx, err := s.db.Begin(ctx)
 		if err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
 		ok := true
-		for _, size := range shoeSizeGrid {
-			attrsJSON, _ := json.Marshal(map[string]string{shoeSizeAttrName: size})
+		for _, size := range spec.grid {
+			attrsJSON, _ := json.Marshal(map[string]string{spec.attrName: size})
 			vsku := p.sku
 			if vsku != "" {
 				vsku = vsku + "-" + size
@@ -2217,7 +2252,7 @@ func (s *server) backfillShoeSizes(w http.ResponseWriter, r *http.Request) {
 		}
 		if !ok {
 			_ = tx.Rollback(ctx)
-			kit.Fail(w, 500, "db_error", fmt.Sprintf("échec insertion pointures pour produit %d — rollback", p.id))
+			kit.Fail(w, 500, "db_error", fmt.Sprintf("échec insertion tailles pour produit %d (%s) — rollback", p.id, spec.familyLabel))
 			return
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -2225,18 +2260,22 @@ func (s *server) backfillShoeSizes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		updated++
-		varsCreated += len(shoeSizeGrid)
+		varsCreated += len(spec.grid)
 	}
 
 	kit.JSON(w, 200, map[string]any{
 		"dry_run":            dryRun,
-		"shoe_categories":    len(shoeCatIDs),
+		"family":             spec.familyLabel,
+		"matched_categories": len(catIDs),
+		"shoe_categories":    len(catIDs), // compat : ancienne clé lue par VariationsMaintenance.tsx
+		"category_names":     catNames,
 		"products_scanned":   scanned,
+		"products_filtered":  filteredByName, // écartés par le nom (non-vêtements)
 		"products_updated":   updated,
 		"products_skipped":   skipped, // déjà une variation de taille
 		"variations_created": varsCreated,
-		"size_grid":          shoeSizeGrid,
-		"attribute":          shoeSizeAttrName,
+		"size_grid":          spec.grid,
+		"attribute":          spec.attrName,
 		"details":            details,
 	})
 }
@@ -2574,6 +2613,104 @@ func stripAccentsLower(s string) string {
 func isShoeCategoryName(name string) bool {
 	n := stripAccentsLower(name)
 	for _, kw := range shoeCategoryKeywords {
+		if strings.Contains(n, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------- variations de taille (vêtements homme + femme) ----------
+
+// clothingSizeAttrName — attribut "Taille" (distinct de "Pointure" pour les
+// chaussures). Même valeur côté admin (ProductForm.tsx) et frontend.
+const clothingSizeAttrName = "Taille"
+
+// clothingSizeGrid — S → XXXL (6 tailles), décidé le 2026-08-28.
+var clothingSizeGrid = []string{"S", "M", "L", "XL", "XXL", "XXXL"}
+
+// clothingCategoryKeywords — vêtements homme + femme (PAS enfant : grille de
+// tailles différente). Détection par nom de catégorie.
+var clothingCategoryKeywords = []string{
+	"vetement", "vetements", "habit", "habits", "pret-a-porter", "pret a porter",
+	"homme", "femme", "boubou", "boubous", "tenue", "tenues", "ensemble", "ensembles",
+	"robe", "robes", "chemise", "chemises", "chemisier", "chemisiers",
+	"pantalon", "pantalons", "jupe", "jupes", "t-shirt", "tshirt", "t shirt",
+	"pull", "pulls", "veste", "vestes", "blouse", "blouses", "tunique", "tuniques",
+	"kaftan", "caftan", "kimono", "dashiki", "agbada", "grand boubou",
+	"apparel", "clothing", "menswear", "womenswear", "dress", "shirt", "trousers",
+}
+
+// clothingCategoryExclude — fragments qui DÉSACTIVENT la détection vêtement
+// même si un mot-clé ci-dessus matche : enfant (grille distincte), et les
+// familles qui ne se déclinent pas en S/M/L (sacs, pagnes au mètre,
+// chaussures déjà gérées en pointures, accessoires/bijoux).
+var clothingCategoryExclude = []string{
+	"enfant", "enfants", "bebe", "bebes", "kids", "child", "baby",
+	"sac", "sacs", "maroquinerie", "pochette", "pochettes",
+	"pagne", "pagnes", "tissu", "tissus", "wax", "kente", "bogolan",
+	"chaussure", "chaussures", "sandale", "babouche", "basket",
+	"bijou", "bijoux", "accessoire", "accessoires", "montre", "montres",
+	"ceinture", "ceintures", "echarpe", "foulard", "lunette", "chapeau",
+}
+
+// isClothingCategoryName — vrai si le nom de catégorie désigne des vêtements
+// homme/femme (hors exclusions).
+func isClothingCategoryName(name string) bool {
+	n := stripAccentsLower(name)
+	for _, ex := range clothingCategoryExclude {
+		if strings.Contains(n, ex) {
+			return false
+		}
+	}
+	for _, kw := range clothingCategoryKeywords {
+		if strings.Contains(n, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// clothingProductNameKeywords — la base n'a qu'UNE catégorie vêtement
+// ("Mode - Vêtements", vérifié 2026-08-28 : pas de sous-catégories
+// Homme/Femme), et elle contient aussi des chapeaux et des produits mal
+// classés (couvre-verre…). On filtre donc au niveau du NOM DU PRODUIT :
+// on ne pose des tailles S→XXXL que si le nom évoque un vêtement porté.
+var clothingProductNameKeywords = []string{
+	"robe", "ensemble", "boubou", "kaftan", "caftan", "dashiki", "agbada",
+	"chemise", "chemisier", "pantalon", "jean", "jeans", "jupe", "short",
+	"t-shirt", "tshirt", "tee", "polo", "pull", "sweat", "veste", "blazer",
+	"blouse", "tunique", "kimono", "combinaison", "salopette", "gilet",
+	"cardigan", "manteau", "trench", "peignoir", "pyjama", "tenue", "top",
+	"jogging", "survetement", "bermuda", "bomber", "hoodie", "sweatshirt",
+	"deux pieces", "2 pieces", "3 pieces", "trois pieces", "abaya", "jellaba",
+	"djellaba", "gandoura", "grand boubou", "complet", "costume",
+}
+
+// clothingProductNameExclude — mots qui, dans le nom, disqualifient (objets
+// qui ne se portent pas / ne se déclinent pas en S/M/L).
+var clothingProductNameExclude = []string{
+	"chapeau", "casquette", "bonnet", "beret", "foulard", "echarpe",
+	"ceinture", "cravate", "noeud papillon", "gant", "gants", "chaussette",
+	"chaussettes", "collant", "collants", "sac", "pochette", "portefeuille",
+	"couvre-verre", "couvre verre", "set de", "lot de", "nappe", "coussin",
+	"rideau", "torchon", "serviette", "drap", "housse", "plaid",
+	"bijou", "collier", "bracelet", "bague", "boucle", "montre", "lunette",
+	"parfum", "huile", "creme", "savon", "beurre", "the ", "cafe",
+	"tableau", "statue", "sculpture", "panier", "vase", "bougie",
+	"metre", "au metre", "coupon", "tissu", "pagne", "wax", // vendus au mètre
+}
+
+// isClothingProductName — vrai si le nom du produit désigne un vêtement
+// porté (à l'intérieur de la catégorie "Mode - Vêtements").
+func isClothingProductName(name string) bool {
+	n := stripAccentsLower(name)
+	for _, ex := range clothingProductNameExclude {
+		if strings.Contains(n, ex) {
+			return false
+		}
+	}
+	for _, kw := range clothingProductNameKeywords {
 		if strings.Contains(n, kw) {
 			return true
 		}

@@ -280,7 +280,14 @@ export async function fetchCategoryRow(
     const catRes = await fetch(`${CATALOG_SVC_URL}/categories?lang=${lang}`, { next: { revalidate: 3600 } })
     if (!catRes.ok) return { products: [], totalPages: 0 }
     const catData = await catRes.json()
-    const match = (catData.items || catData.categories || []).find((c: any) => c.slug === categorySlug)
+    // Slugs en base suffixés par langue (`-fr`/`-en`) — cf. catalog-svc
+    // listCategories. Match tolérant : exact, slug+`-<lang>`, ou slug de base.
+    const wanted = categorySlug.replace(/-(fr|en)$/, '')
+    const cats = catData.items || catData.categories || []
+    const match =
+      cats.find((c: any) => c.slug === categorySlug) ||
+      cats.find((c: any) => c.slug === `${wanted}-${lang}`) ||
+      cats.find((c: any) => String(c.slug || '').replace(/-(fr|en)$/, '') === wanted)
     if (!match?.id) return { products: [], totalPages: 0 }
 
     const res = await fetch(
