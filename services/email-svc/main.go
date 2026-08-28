@@ -2781,6 +2781,9 @@ const vendorNewOrderHTML = `
               <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
                 {{range .Items}}
                 <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;width:52px;">
+                    {{if .Image}}<img src="{{.Image}}" alt="{{.Name}}" width="44" height="44" style="width:44px;height:44px;border-radius:6px;object-fit:cover;display:block;">{{end}}
+                  </td>
                   <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
                   <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
                 </tr>
@@ -2854,6 +2857,9 @@ const adminNewOrderHTML = `
               <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
                 {{range .Items}}
                 <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #eeeeee;width:52px;">
+                    {{if .Image}}<img src="{{.Image}}" alt="{{.Name}}" width="44" height="44" style="width:44px;height:44px;border-radius:6px;object-fit:cover;display:block;">{{end}}
+                  </td>
                   <td style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#333333;">{{.Name}}</td>
                   <td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#555555;">{{.Quantity}} x {{.Price}}</td>
                 </tr>
