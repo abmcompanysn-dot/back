@@ -696,7 +696,21 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     setSelectedVendor(snapshot.selectedVendor)
     setSelectedCategory(snapshot.selectedCategory)
     setActiveCountry(snapshot.activeCountry)
-  }, [])
+    // router.refresh() uniquement quand on revient à l'accueil : homeSections
+    // est une prop Server Component figée au tout premier montage de
+    // MiadMarketClient (voir son commentaire plus haut), jamais rechargée
+    // par un simple setCurrentView. Un détour par une VRAIE page Next.js
+    // externe (/vendor/[slug] ou /product/[slug], atteinte via <Link> —
+    // pas navigateTo) puis un retour arrière restaurait bien view:'home'
+    // depuis la pile, mais avec l'ancien homeSections (potentiellement
+    // jamais valorisé sur ce remontage) — accueil sans aucune section
+    // produit visible (hero + bandeau boutiques puis vide), signalé le
+    // 2026-08-28 avec capture à l'appui. refresh() redemande homeSections
+    // au serveur sans perdre le reste du state client (panier, navStack).
+    if (snapshot.view === 'home') {
+      router.refresh()
+    }
+  }, [router])
 
   const navigateBack = useCallback(() => {
     if (navStack.current.length === 0) {
@@ -718,15 +732,19 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       if (navStack.current.length > 0) {
         restoreFromStack()
       } else {
-        // Pile vide : on est a l'accueil (ou a l'entree-garde initiale)
+        // Pile vide : on est a l'accueil (ou a l'entree-garde initiale).
+        // router.refresh() — meme raison que dans restoreFromStack
+        // ci-dessus (homeSections figé, retour depuis une vraie page
+        // Next.js externe).
         setCurrentView('home')
         setSearchQuery('')
         window.scrollTo(0, 0)
+        router.refresh()
       }
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [restoreFromStack])
+  }, [restoreFromStack, router])
 
   const handleProductClick = useCallback((p: WooProduct) => {
     trackEvent('product_view', { productId: p.id })
