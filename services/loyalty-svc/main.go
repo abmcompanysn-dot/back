@@ -240,6 +240,7 @@ func main() {
 		mux.HandleFunc("GET /whatsapp/logs", s.listWhatsappLogs)
 		mux.HandleFunc("POST /whatsapp/resend/{order_id}", s.resendWhatsappForOrder)
 		mux.HandleFunc("POST /whatsapp/incoming", s.whatsappIncomingWebhook)
+		mux.HandleFunc("POST /whatsapp/test", s.whatsappTest)
 
 		// Représentants
 		// "representatives" (pluriel, sans variable) — pas de conflit avec
@@ -1140,10 +1141,10 @@ func (s *server) sendWhatsApp(ctx context.Context, to, recipientType string, ord
 // notifications représentant au lieu d'une par pays réellement concerné.
 func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID int64) {
 	var order struct {
-		Reference      string `json:"reference"`
-		TotalUSD       string `json:"total"`
-		ShippingTotal  string `json:"shipping_total"`
-		LineItems      []struct {
+		Reference     string `json:"reference"`
+		TotalUSD      string `json:"total"`
+		ShippingTotal string `json:"shipping_total"`
+		LineItems     []struct {
 			VendorID int64  `json:"vendor_id"`
 			Name     string `json:"name"`
 			Quantity int    `json:"quantity"`
@@ -1451,6 +1452,51 @@ func (s *server) resendWhatsappForOrder(w http.ResponseWriter, r *http.Request) 
 	}
 	s.notifyOrderPaid(r.Context(), slog.Default(), orderID)
 	kit.JSON(w, 200, map[string]any{"order_id": orderID, "resent": true})
+}
+
+// whatsappTest — POST /whatsapp/test {"to":"+221...", "body":"...", "template_sid":"HX..."}
+// Envoie un message WhatsApp de test avec la config Twilio en base
+// (SettingsStore) et renvoie le résultat (statut + dernière ligne
+// whatsapp_logs). Sert à valider les credentials/numéro sans avoir besoin
+// d'une vraie commande. Si "template_sid" est fourni, "vars" (map) est
+// passé en ContentVariables ; sinon "body" est envoyé en texte brut
+// (nécessite une fenêtre de conversation 24h ouverte côté WhatsApp).
+func (s *server) whatsappTest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		To          string            `json:"to"`
+		Body        string            `json:"body"`
+		TemplateSID string            `json:"template_sid"`
+		Vars        map[string]string `json:"vars"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.To == "" {
+		kit.Fail(w, 400, "invalid_body", "champ 'to' obligatoire (ex: +221771234567)")
+		return
+	}
+	if body.Body == "" && body.TemplateSID == "" {
+		body.Body = "Test MIAD Market — configuration WhatsApp OK ✅"
+	}
+
+	s.sendWhatsApp(r.Context(), body.To, "test", nil, body.TemplateSID, body.Vars, body.Body)
+
+	// Relit la dernière ligne de log pour ce numéro (sendWhatsApp ne renvoie rien).
+	var status, errMsg, logged string
+	var at time.Time
+	_ = s.db.QueryRow(r.Context(), `
+		SELECT status, coalesce(error,''), coalesce(message_body,''), created_at
+		FROM whatsapp_logs WHERE phone=$1 AND recipient_type='test'
+		ORDER BY id DESC LIMIT 1`, body.To,
+	).Scan(&status, &errMsg, &logged, &at)
+
+	code := 200
+	if status != "sent" {
+		code = 502
+	}
+	kit.JSON(w, code, map[string]any{
+		"to": body.To, "status": status, "error": errMsg,
+		"message": logged, "at": at.UTC().Format(time.RFC3339),
+		"twilio_from_configured": s.twilioWhatsappFrom != "",
+		"twilio_keys_configured": s.twilioAccountSID != "" && s.twilioAuthToken != "",
+	})
 }
 
 // whatsappIncomingWebhook — POST /whatsapp/incoming, appelé par Twilio à
