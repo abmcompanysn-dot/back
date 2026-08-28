@@ -635,12 +635,16 @@ func pawapayIsFinalFailure(status string) bool {
 
 // pawapayActiveProvider — un opérateur mobile money tel que renvoyé par
 // GET /v2/active-conf, avec son authType (détermine si le flux direct
-// est possible pour cet opérateur précis). displayName existe côté API
-// mais n'est PAS repris ici (bug trouvé le 2026-08-28 : c'est une simple
-// string, pas {name: string} comme initialement supposé — provoquait un
-// échec de désérialisation systématique de tout /v2/active-conf) — les
-// libellés affichés au client sont générés côté frontend
-// (MobileMoneyDirectForm.tsx, PROVIDER_INFO), pas besoin de le dupliquer ici.
+// est possible pour cet opérateur précis).
+//
+// Structure RÉELLE de l'API (constatée le 2026-08-28 par appel direct —
+// la doc "guide" avait déjà induit en erreur une fois sur cet endpoint,
+// voir createPawaPayPaymentPage) : authType n'est PAS un champ plat du
+// provider, il est niché sous providers[].currencies[].operationTypes.
+// DEPOSIT.authType — un provider a potentiellement plusieurs devises,
+// chacune avec son propre authType (rare en pratique mais possible). On
+// prend le authType de la PREMIÈRE devise trouvée : dans les faits, un
+// provider PawaPay n'opère que dans une seule devise par pays.
 type pawapayActiveProvider struct {
 	Provider string `json:"provider"`
 	AuthType string `json:"authType"` // PROVIDER_AUTH | PREAUTH | REDIRECT_AUTH
@@ -649,10 +653,14 @@ type pawapayActiveProvider struct {
 type pawapayActiveCountry struct {
 	Country   string `json:"country"` // ISO3
 	Providers []struct {
-		Provider string `json:"provider"`
-		Deposit  struct {
-			AuthType string `json:"authType"`
-		} `json:"depositProviderInfo"`
+		Provider   string `json:"provider"`
+		Currencies []struct {
+			OperationTypes struct {
+				Deposit struct {
+					AuthType string `json:"authType"`
+				} `json:"DEPOSIT"`
+			} `json:"operationTypes"`
+		} `json:"currencies"`
 	} `json:"providers"`
 }
 
@@ -688,9 +696,13 @@ func (s *server) pawapayActiveConfig(ctx context.Context) (map[string][]pawapayA
 	byCountry := make(map[string][]pawapayActiveProvider)
 	for _, c := range doc.Countries {
 		for _, p := range c.Providers {
+			authType := ""
+			if len(p.Currencies) > 0 {
+				authType = p.Currencies[0].OperationTypes.Deposit.AuthType
+			}
 			byCountry[c.Country] = append(byCountry[c.Country], pawapayActiveProvider{
 				Provider: p.Provider,
-				AuthType: p.Deposit.AuthType,
+				AuthType: authType,
 			})
 		}
 	}
