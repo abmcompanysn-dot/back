@@ -5,6 +5,7 @@ const SUBTABS = [
   { path: '/admin/vendors/kyc', label: "Demandes d'inscription" },
   { path: '/admin/vendors/new', label: 'Ajouter un Vendeur' },
   { path: '/admin/vendors/payouts', label: 'Retraits & Payouts' },
+  { path: '/admin/vendors/map', label: 'Carte des boutiques' },
 ]
 
 export function VendorNav() {

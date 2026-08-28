@@ -26,6 +26,7 @@ import { VendorDetail } from './pages/vendors/VendorDetail'
 import { VendorKYC } from './pages/vendors/VendorKYC'
 import { NewVendor } from './pages/vendors/NewVendor'
 import { Payouts } from './pages/vendors/Payouts'
+import { VendorMap } from './pages/vendors/VendorMap'
 import { AllOrders } from './pages/orders/AllOrders'
 import { OrderDetail } from './pages/orders/OrderDetail'
 import { Returns } from './pages/orders/Returns'
@@ -87,6 +88,7 @@ function AppRoutes() {
         <Route path="vendors/new" element={<NewVendor />} />
         <Route path="vendors/kyc" element={<VendorKYC />} />
         <Route path="vendors/payouts" element={<Payouts />} />
+        <Route path="vendors/map" element={<VendorMap />} />
         <Route path="vendors/:id" element={<VendorDetail />} />
         <Route path="customers" element={<Navigate to="/admin/users" replace />} />
         <Route path="users" element={<AllUsers />} />
