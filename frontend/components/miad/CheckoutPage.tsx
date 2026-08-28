@@ -367,14 +367,49 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
       // paiement, peu importe le vrai contenu du panier (bug de prod
       // trouvé le 2026-08-26, sans lien avec Stripe — le message d'erreur
       // trompeur laissait croire à un problème de configuration paiement).
-      const lines = cart.map(item => ({
-        product_id: Number(item.product.id),
-        variation_id: item.variation?.id ? parseInt(item.variation.id) : 0,
-        vendor_id: item.product.vendor?.id ? Number(item.product.vendor.id) : 0,
-        name: item.product.name,
-        quantity: item.quantity,
-        unit_price_usd: Number(item.variation?.price ?? item.product.price ?? 0),
-      }))
+      //
+      // Filet de sécurité vendor_id (2026-08-28) : order-svc rejette en 400
+      // ("chaque ligne doit porter vendor_id et quantity ≥ 1") toute ligne
+      // sans vendor_id. Un panier persisté en localStorage AVANT que le
+      // frontend ne stocke `vendor` dans le panier garde des articles sans
+      // vendeur — le client se retrouvait bloqué au paiement sans pouvoir
+      // comprendre pourquoi. Ici on re-résout le vendeur manquant via
+      // /api/products?id= avant d'envoyer la commande.
+      const lines = await Promise.all(
+        cart.map(async (item) => {
+          let vendorId = item.product.vendor?.id ? Number(item.product.vendor.id) : 0
+          if (!vendorId) {
+            try {
+              const r = await fetch(`/api/products?id=${Number(item.product.id)}&lang=fr`)
+              if (r.ok) {
+                const body = await r.json()
+                const p = body.items?.[0] ?? body.products?.[0] ?? (body.id ? body : null)
+                const resolved = p?.vendor?.id ?? p?.vendor_id
+                if (resolved) vendorId = Number(resolved)
+              }
+            } catch {
+              /* laissé à 0 — l'erreur backend explicite prendra le relais */
+            }
+          }
+          return {
+            product_id: Number(item.product.id),
+            variation_id: item.variation?.id ? parseInt(item.variation.id) : 0,
+            vendor_id: vendorId,
+            name: item.product.name,
+            quantity: item.quantity,
+            unit_price_usd: Number(item.variation?.price ?? item.product.price ?? 0),
+          }
+        })
+      )
+
+      const missingVendor = lines.find((l) => !l.vendor_id)
+      if (missingVendor) {
+        setIsProcessing(false)
+        toast.error(
+          `L'article « ${missingVendor.name} » de votre panier est obsolète. Retirez-le puis rajoutez-le depuis sa fiche produit avant de payer.`
+        )
+        return
+      }
 
       const fullPhone = buildFullPhone(formData.country, formData.phone)
       // Pas de champ WooCommerce dédié au quartier — repli sur address_2,
