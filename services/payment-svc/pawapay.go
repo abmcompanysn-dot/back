@@ -731,6 +731,8 @@ func (s *server) initiateMobileMoneyDeposit(ctx context.Context, ev orderCreated
 	authType := ""
 	if cfgErr == nil {
 		authType = providerAuthType(cfg, country.ISO3, provider)
+	} else {
+		slog.Warn("initiateMobileMoneyDeposit: /v2/active-conf indisponible, repli Payment Page", "provider", provider, "err", cfgErr)
 	}
 	if authType == "REDIRECT_AUTH" || authType == "" {
 		// Repli Payment Page — soit l'opérateur l'exige, soit on ne sait

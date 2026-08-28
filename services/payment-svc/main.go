@@ -421,7 +421,15 @@ func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
 // l'appel PawaPay échoue — initiateMobileMoneyDeposit gère déjà ce cas
 // côté serveur (repli Payment Page), donc pas bloquant ici.
 func (s *server) listPawapayCountries(w http.ResponseWriter, r *http.Request) {
-	cfg, _ := s.pawapayActiveConfig(r.Context()) // nil si erreur — providerAuthType gère nil proprement
+	cfg, cfgErr := s.pawapayActiveConfig(r.Context()) // nil si erreur — providerAuthType gère nil proprement
+	if cfgErr != nil {
+		// kit.Fail() ne loggue jamais rien côté serveur (piège documenté
+		// CLAUDE.md) — mais ici on ne fait même pas de kit.Fail, l'erreur
+		// était juste avalée en silence (cfg, _ :=). Sans ce log, un
+		// authType toujours vide (donc repli Payment Page systématique
+		// pour tous les opérateurs) était totalement invisible.
+		slog.Warn("listPawapayCountries: /v2/active-conf indisponible, authType inconnu pour tous les providers", "err", cfgErr)
+	}
 	out := make([]map[string]any, 0, len(pawapayCountries))
 	for _, c := range pawapayCountries {
 		providers := make([]map[string]any, 0, len(c.Providers))
@@ -1297,6 +1305,7 @@ func (s *server) createStripePaymentIntent(orderID int64, reference string, tota
 //  3. response_code de succès est "00" (pas "0000"), et l'URL de paiement
 //     est directement response_text — inutile de la reconstruire à la main
 //     (l'ancienne reconstruction pointait en plus vers l'URL cassée)
+//
 // redirectOrderID — le parent groupe (multi-vendeur) est le seul ID que
 // order-received/confirm-paydunya sait résoudre (GET /orders/parent/{id}),
 // jamais l'ID d'une sous-commande individuelle. Repli sur OrderID si
