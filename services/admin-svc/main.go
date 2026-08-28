@@ -243,6 +243,25 @@ func main() {
 		mux.HandleFunc("POST /admin/api/products/{id}/variations", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/products/"+r.PathValue("id")+"/variations")
 		}))
+		// Backfill des pointures sur les produits chaussures existants
+		// (catalog-svc POST /admin/backfill-shoe-sizes). ?dry_run=true &
+		// ?category_id=N transmis tels quels.
+		mux.HandleFunc("POST /admin/api/catalog/backfill-shoe-sizes", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			target := s.catalogURL + "/admin/backfill-shoe-sizes"
+			if q := r.URL.RawQuery; q != "" {
+				target += "?" + q
+			}
+			forwardWithBody(w, r, http.MethodPost, target)
+		}))
+		// Répare les produits "faux variables" (1 seule variation) — les
+		// repasse en produit simple. catalog-svc POST /admin/collapse-fake-variables.
+		mux.HandleFunc("POST /admin/api/catalog/collapse-fake-variables", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			target := s.catalogURL + "/admin/collapse-fake-variables"
+			if q := r.URL.RawQuery; q != "" {
+				target += "?" + q
+			}
+			forwardWithBody(w, r, http.MethodPost, target)
+		}))
 		mux.HandleFunc("PUT /admin/api/products/{id}/variations/{variation_id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPut, s.catalogURL+"/products/"+r.PathValue("id")+"/variations/"+r.PathValue("variation_id"))
 		}))

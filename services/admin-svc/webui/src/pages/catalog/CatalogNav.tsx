@@ -7,6 +7,7 @@ const SUBTABS = [
   { path: '/admin/catalog/brands', label: 'Marques' },
   { path: '/admin/catalog/reviews', label: 'Avis & Modération' },
   { path: '/admin/catalog/pending', label: 'Produits en attente' },
+  { path: '/admin/catalog/variations-maintenance', label: 'Maintenance variations' },
 ]
 
 export function CatalogNav() {

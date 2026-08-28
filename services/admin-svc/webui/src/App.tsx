@@ -21,6 +21,7 @@ import { Brands } from './pages/catalog/Brands'
 import { CategoriesAttributes } from './pages/catalog/CategoriesAttributes'
 import { Reviews } from './pages/catalog/Reviews'
 import { PendingProducts } from './pages/catalog/PendingProducts'
+import { VariationsMaintenance } from './pages/catalog/VariationsMaintenance'
 import { MediaLibrary } from './pages/media/MediaLibrary'
 import { AllVendors } from './pages/vendors/AllVendors'
 import { VendorDetail } from './pages/vendors/VendorDetail'
@@ -84,6 +85,7 @@ function AppRoutes() {
         <Route path="catalog/categories" element={<CategoriesAttributes />} />
         <Route path="catalog/reviews" element={<Reviews />} />
         <Route path="catalog/pending" element={<PendingProducts />} />
+        <Route path="catalog/variations-maintenance" element={<VariationsMaintenance />} />
         <Route path="media" element={<MediaLibrary />} />
         <Route path="vendors" element={<AllVendors />} />
         <Route path="vendors/new" element={<NewVendor />} />

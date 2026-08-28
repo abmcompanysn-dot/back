@@ -97,6 +97,29 @@ const EMPTY: Draft = {
 
 const EMPTY_VARIATION: VariationRow = { sku: '', attributes: {}, price_usd: '', stock: '', image_url: '' }
 
+// --- Pointures chaussures (aligné sur catalog-svc : shoeSizeAttrName /
+// shoeSizeGrid / shoeCategoryKeywords). Toute chaussure DOIT avoir des
+// variations de taille — bouton de génération + blocage à l'enregistrement.
+const SHOE_SIZE_ATTR = 'Pointure'
+const SHOE_SIZE_GRID = ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46']
+const SHOE_CATEGORY_KEYWORDS = [
+  'chaussure', 'sandale', 'babouche', 'basket', 'sneaker', 'mocassin', 'botte',
+  'bottine', 'escarpin', 'tong', 'derby', 'derbies', 'ballerine', 'espadrille',
+  'claquette', 'mule', 'footwear', 'shoe', 'slipper', 'boot',
+]
+function stripAccentsLower(s: string) {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+}
+function isShoeCategoryName(name: string) {
+  const n = stripAccentsLower(name || '')
+  return SHOE_CATEGORY_KEYWORDS.some((kw) => n.includes(kw))
+}
+function variationHasSizeAttr(v: VariationRow) {
+  return Object.keys(v.attributes || {}).some((k) =>
+    ['pointure', 'taille', 'size'].includes(stripAccentsLower(k))
+  )
+}
+
 const TABS = [
   { key: 'general', label: 'Informations générales' },
   { key: 'category', label: 'Catégorisation' },
@@ -245,8 +268,39 @@ export function ProductForm() {
     set('images', draft.images.filter((u) => u !== url))
   }
 
+  // Ce produit est-il une chaussure ? (nom de la catégorie sélectionnée)
+  const selectedCategoryName = categories.find((c) => String(c.id) === draft.category_id)?.name || ''
+  const isShoeProduct = isShoeCategoryName(selectedCategoryName)
+  const hasSizeVariation = draft.variations.some(variationHasSizeAttr)
+
   function addVariation() {
     set('variations', [...draft.variations, { ...EMPTY_VARIATION }])
+  }
+
+  // generateShoeSizes — remplit la grille EU 36→46 sous l'attribut
+  // "Pointure", en reprenant prix/stock du produit. Passe aussi le produit
+  // en "variable". Ne recrée pas une pointure déjà présente.
+  function generateShoeSizes() {
+    const existing = new Set(
+      draft.variations
+        .filter(variationHasSizeAttr)
+        .map((v) => String(v.attributes[SHOE_SIZE_ATTR] ?? Object.values(v.attributes)[0] ?? ''))
+    )
+    const basePrice = draft.price_usd || ''
+    const baseStock = draft.stock || '0'
+    const added: VariationRow[] = SHOE_SIZE_GRID.filter((s) => !existing.has(s)).map((size) => ({
+      sku: draft.sku ? `${draft.sku}-${size}` : '',
+      attributes: { [SHOE_SIZE_ATTR]: size },
+      price_usd: basePrice,
+      stock: baseStock,
+      image_url: '',
+    }))
+    setDraft((d) => ({
+      ...d,
+      product_type: 'variable',
+      variations: [...d.variations, ...added],
+    }))
+    setTab('variations')
   }
 
   function updateVariation(idx: number, patch: Partial<VariationRow>) {
@@ -317,6 +371,16 @@ export function ProductForm() {
     }
     if (draft.product_type === 'variable' && draft.variations.length === 0) {
       setError('un produit variable doit avoir au moins une variation')
+      setTab('variations')
+      return
+    }
+    // Blocage chaussures : toute chaussure/sandale/babouche… doit avoir des
+    // variations de taille (décision du 2026-08-28).
+    if (isShoeProduct && !hasSizeVariation) {
+      setError(
+        `« ${selectedCategoryName} » est une catégorie de chaussures : ce produit doit avoir des variations de pointure. ` +
+          'Utilisez le bouton « Générer les pointures 36–46 » dans l\'onglet Variations.'
+      )
       setTab('variations')
       return
     }
@@ -587,6 +651,28 @@ export function ProductForm() {
 
         {tab === 'variations' && (
           <div>
+            {isShoeProduct && (
+              <div
+                className={hasSizeVariation ? 'hint' : 'error-text'}
+                style={{
+                  marginBottom: 12,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: `1px solid ${hasSizeVariation ? '#cfe9d5' : '#f0c9c9'}`,
+                  background: hasSizeVariation ? '#f2faf4' : '#fdf3f3',
+                }}
+              >
+                <strong>Catégorie chaussures « {selectedCategoryName} ».</strong>{' '}
+                {hasSizeVariation
+                  ? 'Ce produit a bien des variations de pointure.'
+                  : 'Ce produit doit avoir des variations de pointure pour pouvoir être enregistré.'}
+                <div style={{ marginTop: 8 }}>
+                  <button className="btn-primary" type="button" onClick={generateShoeSizes}>
+                    Générer les pointures 36–46
+                  </button>
+                </div>
+              </div>
+            )}
             {draft.product_type === 'simple' ? (
               <p className="hint">
                 Ce produit est de type "Simple" — passez-le en "Variable" dans l'onglet Prix &amp; Inventaire pour ajouter des variations (ex : "1 pièce" à 15$, "3 pièces" à 40$).
@@ -597,7 +683,7 @@ export function ProductForm() {
                   <table style={{ width: '100%' }}>
                     <thead>
                       <tr>
-                        <th>Libellé (ex: "1 pièce")</th>
+                        <th>Libellé (ex: "1 pièce", "Pointure 40")</th>
                         <th>SKU</th>
                         <th>Prix (USD)</th>
                         <th>Stock</th>
@@ -607,14 +693,21 @@ export function ProductForm() {
                     </thead>
                     <tbody>
                       {draft.variations.map((v, idx) => {
-                        const label = v.attributes['Variante'] ?? ''
+                        // Un seul champ "libellé" : on édite l'attribut existant
+                        // (Pointure pour une chaussure, sinon Variante).
+                        const attrKey = variationHasSizeAttr(v)
+                          ? Object.keys(v.attributes).find((k) =>
+                              ['pointure', 'taille', 'size'].includes(stripAccentsLower(k))
+                            ) || SHOE_SIZE_ATTR
+                          : 'Variante'
+                        const label = v.attributes[attrKey] ?? ''
                         return (
                           <tr key={v.id ?? `new-${idx}`}>
                             <td>
                               <input
                                 value={label}
-                                placeholder="1 pièce"
-                                onChange={(e) => updateVariation(idx, { attributes: { ...v.attributes, Variante: e.target.value } })}
+                                placeholder={attrKey === SHOE_SIZE_ATTR ? '40' : '1 pièce'}
+                                onChange={(e) => updateVariation(idx, { attributes: { ...v.attributes, [attrKey]: e.target.value } })}
                               />
                             </td>
                             <td>
@@ -643,8 +736,15 @@ export function ProductForm() {
                 <button className="btn-ghost" type="button" onClick={addVariation} style={{ marginTop: 12 }}>
                   + Ajouter une variation
                 </button>
+                {isShoeProduct && (
+                  <button className="btn-ghost" type="button" onClick={generateShoeSizes} style={{ marginTop: 12, marginLeft: 8 }}>
+                    Générer les pointures 36–46
+                  </button>
+                )}
                 <p className="hint" style={{ marginTop: 8 }}>
-                  Le libellé (ex : "1 pièce", "3 pièces", "Taille M") est stocké comme attribut "Variante" — cohérent avec le format déjà utilisé par le dashboard vendeur.
+                  Le libellé (ex : "1 pièce", "3 pièces", "40") est stocké comme attribut
+                  {isShoeProduct ? ' "Pointure" pour les chaussures' : ' "Variante"'} — c'est ce libellé qui
+                  s'affiche comme sélecteur sur la fiche produit.
                 </p>
               </>
             )}

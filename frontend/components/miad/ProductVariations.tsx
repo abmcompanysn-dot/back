@@ -101,13 +101,18 @@ export function ProductVariations({ product, onVariationChange }: ProductVariati
     if (!isSelectionComplete) return null
 
     return product.variations.find((v: any) => {
-      // EXTRACTION INTELLIGENTE : On cherche dans .attributes OU dans les clés de l'objet v
+      // EXTRACTION INTELLIGENTE : les variations peuvent arriver sous 3 formes :
+      //  - tableau [{name,option}]            (ancien format WooCommerce)
+      //  - objet {"Pointure":"40"}            (catalog-svc Go — format actuel)
+      //  - clés à plat attribute_pa_taille=…  (fallback legacy)
       let vAttrs: { name: string; option: string }[] = [];
 
       if (Array.isArray(v.attributes)) {
         vAttrs = v.attributes;
+      } else if (v.attributes && typeof v.attributes === 'object' && Object.keys(v.attributes).length > 0) {
+        vAttrs = Object.entries(v.attributes).map(([name, option]) => ({ name, option: String(option) }));
       } else {
-        // Si .attributes est undefined, on scanne les clés (ex: attribute_pa_taille ou taille)
+        // Si .attributes est absent, on scanne les clés (ex: attribute_pa_taille ou taille)
         vAttrs = Object.keys(v).map(k => ({
           name: k.replace('attribute_', '').replace('pa_', ''),
           option: String(v[k])
@@ -120,8 +125,9 @@ export function ProductVariations({ product, onVariationChange }: ProductVariati
         const userValue = String(selectedOptions[attr.name] || "").toLowerCase().trim();
         const attrNameClean = normalizeString(attr.name).replace(/^pa\s+/, '');
 
-        // On cherche une correspondance dans vAttrs
-        const vAttr = v.attributes.find((a: any) =>
+        // On cherche une correspondance dans vAttrs (jamais v.attributes
+        // directement : ce n'est pas toujours un tableau — cf. ci-dessus).
+        const vAttr = vAttrs.find((a: any) =>
           normalizeString(a.name).includes(attrNameClean) ||
           normalizeString(a.name) === normalizeString(attr.slug)
         );

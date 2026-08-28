@@ -225,6 +225,8 @@ func main() {
 		mux.HandleFunc("GET /products/{id}", s.getProduct)
 		mux.HandleFunc("GET /products/{id}/similar", s.similar)
 		mux.HandleFunc("GET /products/variations", s.listVariationsBatch)
+		mux.HandleFunc("POST /admin/backfill-shoe-sizes", s.backfillShoeSizes)
+		mux.HandleFunc("POST /admin/collapse-fake-variables", s.collapseFakeVariables)
 		mux.HandleFunc("POST /products/{id}/variations", s.createVariation)
 		mux.HandleFunc("PUT /products/{id}/variations/{variation_id}", s.updateVariation)
 		mux.HandleFunc("DELETE /products/{id}/variations/{variation_id}", s.deleteVariation)
@@ -529,6 +531,15 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	).Scan(&linkedID, &linkedLang)
 
 	var variations []map[string]any
+	// derivedAttrs — clés d'attribut (ex. "Pointure", "Couleur") découvertes
+	// dans les variations, avec l'ensemble ordonné de leurs valeurs. On les
+	// renvoie ensuite dans out["attributes"] : sans ça le frontend
+	// (ProductVariations.tsx lit product.attributes) n'a AUCUNE donnée pour
+	// construire le sélecteur de taille/couleur, même quand les variations
+	// existent en base — le sélecteur restait donc toujours invisible.
+	derivedOrder := []string{}
+	derivedAttrs := map[string][]string{}
+	seenVal := map[string]bool{} // clé "attr\x00valeur" pour dédupliquer en gardant l'ordre
 	if isVar {
 		variations = []map[string]any{}
 		rows, _ := s.db.Query(r.Context(),
@@ -542,6 +553,24 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 				var attrs []byte
 				var stock int
 				_ = rows.Scan(&vid, &sku, &attrs, &vprice, &stock, &img)
+
+				var attrMap map[string]any
+				_ = json.Unmarshal(attrs, &attrMap)
+				for k, v := range attrMap {
+					val := fmt.Sprintf("%v", v)
+					if val == "" {
+						continue
+					}
+					if _, ok := derivedAttrs[k]; !ok {
+						derivedOrder = append(derivedOrder, k)
+					}
+					dedupeKey := k + "\x00" + val
+					if !seenVal[dedupeKey] {
+						seenVal[dedupeKey] = true
+						derivedAttrs[k] = append(derivedAttrs[k], val)
+					}
+				}
+
 				variations = append(variations, map[string]any{
 					"id": vid, "sku": sku, "attributes": json.RawMessage(attrs),
 					"price": strconv.FormatFloat(vprice, 'f', 2, 64), "price_usd": vprice,
@@ -557,6 +586,24 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := productToWooShape(pID, trid, l, vendorID, catID, name, slug, desc, price, salePrice, status, isVar, images, variations)
+
+	// attributes / default_attributes — forme attendue par le frontend
+	// (lib/woo-server.ts mapProduct → ProductVariations.tsx). variation:true
+	// sur chaque attribut car ils SERVENT tous aux déclinaisons ici.
+	if len(derivedOrder) > 0 {
+		attrList := make([]map[string]any, 0, len(derivedOrder))
+		defList := make([]map[string]any, 0, len(derivedOrder))
+		for _, k := range derivedOrder {
+			attrList = append(attrList, map[string]any{
+				"name": k, "slug": slugify(k), "options": derivedAttrs[k], "variation": true,
+			})
+			if len(derivedAttrs[k]) > 0 {
+				defList = append(defList, map[string]any{"name": k, "option": derivedAttrs[k][0]})
+			}
+		}
+		out["attributes"] = attrList
+		out["default_attributes"] = defList
+	}
 	out["brand_id"] = brandID
 	out["short_description"] = shortDesc
 	out["sku"] = sku
@@ -1932,6 +1979,268 @@ func (s *server) bulkUpdateProducts(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{"action": body.Action, "rows_affected": tag.RowsAffected()})
 }
 
+// collapseFakeVariables — POST /admin/collapse-fake-variables
+// Répare les produits marqués is_variable=true qui n'ont en réalité qu'UNE
+// seule variation : le frontend affiche alors soit un sélecteur à un seul
+// bouton (inutile — cf. "CONTENANCE 200ml"), soit un bouton "Choisir" en
+// cul-de-sac quand il n'arrive pas à construire le bouton (pagne "Motifs
+// Tribaux" — achat impossible). Vidéos du 2026-08-28.
+//
+// Action pour chaque produit concerné : copier price_usd/stock de la
+// variation vers le produit, supprimer la variation, is_variable=false.
+// Critère retenu le 2026-08-28 : TOUTE variation unique, quel que soit son
+// attribut (Variante/Modèle/Contenance/…). Les vrais produits variables
+// (≥2 variations) ne sont jamais touchés.
+//
+// Query param : ?dry_run=true -> liste seulement, ne modifie rien.
+func (s *server) collapseFakeVariables(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	dryRun := r.URL.Query().Get("dry_run") == "true"
+
+	// Produits variables ayant exactement 1 variation.
+	rows, err := s.db.Query(ctx, `
+		SELECT p.id, p.name, v.id, v.price_usd, v.stock, v.attributes
+		FROM products p
+		JOIN product_variations v ON v.product_id = p.id
+		WHERE p.is_variable = TRUE
+		  AND (SELECT COUNT(*) FROM product_variations v2 WHERE v2.product_id = p.id) = 1
+		ORDER BY p.id`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	type cand struct {
+		productID   int64
+		name        string
+		variationID int64
+		price       float64
+		stock       int
+		attrs       string
+	}
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		var attrsRaw []byte
+		if rows.Scan(&c.productID, &c.name, &c.variationID, &c.price, &c.stock, &attrsRaw) == nil {
+			c.attrs = string(attrsRaw)
+			cands = append(cands, c)
+		}
+	}
+	rows.Close()
+
+	details := make([]map[string]any, 0, len(cands))
+	collapsed := 0
+	for _, c := range cands {
+		details = append(details, map[string]any{
+			"product_id": c.productID, "name": c.name,
+			"new_price_usd": c.price, "new_stock": c.stock,
+			"removed_variation_id": c.variationID, "removed_attributes": json.RawMessage(c.attrs),
+		})
+		if dryRun {
+			continue
+		}
+		tx, err := s.db.Begin(ctx)
+		if err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		ok := true
+		if _, err := tx.Exec(ctx,
+			`UPDATE products SET price_usd = $1, stock = $2, is_variable = FALSE WHERE id = $3`,
+			c.price, c.stock, c.productID); err != nil {
+			ok = false
+		}
+		if ok {
+			if _, err := tx.Exec(ctx,
+				`DELETE FROM product_variations WHERE id = $1`, c.variationID); err != nil {
+				ok = false
+			}
+		}
+		if !ok {
+			_ = tx.Rollback(ctx)
+			kit.Fail(w, 500, "db_error", fmt.Sprintf("échec collapse produit %d — rollback", c.productID))
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		collapsed++
+	}
+
+	kit.JSON(w, 200, map[string]any{
+		"dry_run":            dryRun,
+		"candidates":         len(cands),
+		"products_collapsed": collapsed,
+		"details":            details,
+	})
+}
+
+// backfillShoeSizes — POST /admin/backfill-shoe-sizes
+// Parcourt tous les produits dont le nom de catégorie désigne des
+// chaussures (voir isShoeCategoryName) et, pour chacun qui n'a PAS déjà
+// une variation de taille, le passe is_variable=true et lui crée la grille
+// EU 36→46 (shoeSizeGrid) sous l'attribut "Pointure". Chaque pointure
+// reprend le prix ET le stock du produit parent (choix du 2026-08-28).
+// Idempotent : relançable sans créer de doublons (skip si taille déjà là).
+//
+// Query params :
+//   ?dry_run=true  -> ne modifie rien, renvoie juste ce qui SERAIT fait
+//   ?category_id=N -> restreint à une catégorie précise (sinon toutes les
+//                     catégories "chaussures" détectées par leur nom)
+func (s *server) backfillShoeSizes(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	dryRun := r.URL.Query().Get("dry_run") == "true"
+	onlyCat := atoi(r.URL.Query().Get("category_id"))
+
+	// 1. Catégories chaussures (par nom). On garde tous les IDs (FR + EN).
+	catRows, err := s.db.Query(ctx, `SELECT id, name FROM categories`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	shoeCatIDs := map[int64]string{}
+	for catRows.Next() {
+		var cid int64
+		var cname string
+		if catRows.Scan(&cid, &cname) == nil && isShoeCategoryName(cname) {
+			if onlyCat == 0 || cid == onlyCat {
+				shoeCatIDs[cid] = cname
+			}
+		}
+	}
+	catRows.Close()
+	if len(shoeCatIDs) == 0 {
+		kit.JSON(w, 200, map[string]any{
+			"dry_run": dryRun, "shoe_categories": 0, "products_scanned": 0,
+			"products_updated": 0, "variations_created": 0,
+			"note": "aucune catégorie 'chaussures' détectée par son nom (chaussure, sandale, babouche, basket, ...)",
+		})
+		return
+	}
+	catIDList := make([]int64, 0, len(shoeCatIDs))
+	for cid := range shoeCatIDs {
+		catIDList = append(catIDList, cid)
+	}
+
+	// 2. Produits de ces catégories.
+	prodRows, err := s.db.Query(ctx,
+		`SELECT id, name, price_usd, stock, sku, is_variable
+		 FROM products WHERE category_id = ANY($1) ORDER BY id`, catIDList)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	type prod struct {
+		id       int64
+		name     string
+		price    float64
+		stock    int
+		sku      string
+		variable bool
+	}
+	var products []prod
+	for prodRows.Next() {
+		var p prod
+		if prodRows.Scan(&p.id, &p.name, &p.price, &p.stock, &p.sku, &p.variable) == nil {
+			products = append(products, p)
+		}
+	}
+	prodRows.Close()
+
+	scanned := len(products)
+	updated := 0
+	varsCreated := 0
+	skipped := 0
+	details := []map[string]any{}
+
+	for _, p := range products {
+		// Le produit a-t-il déjà une variation de taille ?
+		existRows, err := s.db.Query(ctx,
+			`SELECT attributes FROM product_variations WHERE product_id = $1`, p.id)
+		if err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		var existing []map[string]any
+		for existRows.Next() {
+			var raw []byte
+			if existRows.Scan(&raw) == nil {
+				var m map[string]any
+				_ = json.Unmarshal(raw, &m)
+				existing = append(existing, map[string]any{"attributes": m})
+			}
+		}
+		existRows.Close()
+
+		if variationsHaveSizeAttr(existing) {
+			skipped++
+			continue
+		}
+
+		details = append(details, map[string]any{
+			"product_id": p.id, "name": p.name, "price_usd": p.price,
+			"stock_per_size": p.stock, "sizes": shoeSizeGrid,
+		})
+		if dryRun {
+			updated++
+			varsCreated += len(shoeSizeGrid)
+			continue
+		}
+
+		// 3. Créer les 11 pointures + passer le produit en variable.
+		//    Transaction par produit : soit toute la grille, soit rien.
+		tx, err := s.db.Begin(ctx)
+		if err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		ok := true
+		for _, size := range shoeSizeGrid {
+			attrsJSON, _ := json.Marshal(map[string]string{shoeSizeAttrName: size})
+			vsku := p.sku
+			if vsku != "" {
+				vsku = vsku + "-" + size
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO product_variations (product_id, sku, attributes, price_usd, stock, image_url)
+				VALUES ($1,$2,$3,$4,$5,'')`,
+				p.id, vsku, attrsJSON, p.price, p.stock); err != nil {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			if _, err := tx.Exec(ctx, "UPDATE products SET is_variable = TRUE WHERE id = $1", p.id); err != nil {
+				ok = false
+			}
+		}
+		if !ok {
+			_ = tx.Rollback(ctx)
+			kit.Fail(w, 500, "db_error", fmt.Sprintf("échec insertion pointures pour produit %d — rollback", p.id))
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		updated++
+		varsCreated += len(shoeSizeGrid)
+	}
+
+	kit.JSON(w, 200, map[string]any{
+		"dry_run":            dryRun,
+		"shoe_categories":    len(shoeCatIDs),
+		"products_scanned":   scanned,
+		"products_updated":   updated,
+		"products_skipped":   skipped, // déjà une variation de taille
+		"variations_created": varsCreated,
+		"size_grid":          shoeSizeGrid,
+		"attribute":          shoeSizeAttrName,
+		"details":            details,
+	})
+}
+
 // createVariation — nouvelle déclinaison (taille/couleur/...) pour un
 // produit variable. Marque aussi le produit is_variable=true si ce n'était
 // pas déjà le cas (un vendeur peut convertir un produit simple en variable
@@ -2218,4 +2527,72 @@ func slugify(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// ---------- variations de pointure (chaussures) ----------
+
+// shoeSizeAttrName — libellé de l'attribut taille pour les chaussures. Doit
+// rester cohérent entre : la dérivation `attributes` renvoyée par getProduct
+// (que ProductVariations.tsx lit pour afficher le sélecteur), le bouton
+// "générer les pointures" de l'admin (ProductForm.tsx) et le backfill.
+const shoeSizeAttrName = "Pointure"
+
+// shoeSizeGrid — grille EU 36→46 (11 pointures), décidée le 2026-08-28.
+// Valeurs en string : product_variations.attributes est un JSONB clé→string
+// et le frontend compare des strings ("36" == option du bouton).
+var shoeSizeGrid = []string{"36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46"}
+
+// shoeCategoryKeywords — un produit est considéré "chaussure" si le nom de
+// sa catégorie (insensible casse/accents) contient l'un de ces fragments.
+// Détection par nom de catégorie (choix du 2026-08-28) plutôt que par ID
+// figé : robuste au renommage, et couvre les sous-catégories futures.
+var shoeCategoryKeywords = []string{
+	"chaussure", "chaussures", "sandale", "sandales", "babouche", "babouches",
+	"basket", "baskets", "sneaker", "sneakers", "mocassin", "mocassins",
+	"botte", "bottes", "bottine", "bottines", "escarpin", "escarpins",
+	"tong", "tongs", "derby", "derbies", "ballerine", "ballerines",
+	"espadrille", "espadrilles", "claquette", "claquettes", "mule", "mules",
+	"footwear", "shoe", "shoes", "slipper", "slippers", "boot", "boots",
+}
+
+// stripAccentsLower — minuscule + retrait des accents FR courants, pour que
+// "Chaussures — Sandales" matche "sandale" quelle que soit la casse/accent.
+func stripAccentsLower(s string) string {
+	s = strings.ToLower(s)
+	repl := strings.NewReplacer(
+		"à", "a", "â", "a", "ä", "a", "á", "a",
+		"é", "e", "è", "e", "ê", "e", "ë", "e",
+		"î", "i", "ï", "i", "í", "i",
+		"ô", "o", "ö", "o", "ó", "o",
+		"û", "u", "ü", "u", "ù", "u", "ú", "u",
+		"ç", "c",
+	)
+	return repl.Replace(s)
+}
+
+// isShoeCategoryName — vrai si le nom de catégorie désigne des chaussures.
+func isShoeCategoryName(name string) bool {
+	n := stripAccentsLower(name)
+	for _, kw := range shoeCategoryKeywords {
+		if strings.Contains(n, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// variationsHaveSizeAttr — vrai si au moins une variation porte déjà un
+// attribut de taille (Pointure / Taille / Size). Sert à rendre le backfill
+// idempotent et à ne pas re-générer par-dessus une saisie manuelle.
+func variationsHaveSizeAttr(variations []map[string]any) bool {
+	for _, v := range variations {
+		attrs, _ := v["attributes"].(map[string]any)
+		for k := range attrs {
+			switch stripAccentsLower(k) {
+			case "pointure", "taille", "size", "shoe size", "pointures":
+				return true
+			}
+		}
+	}
+	return false
 }
