@@ -413,12 +413,29 @@ func (s *server) listPaymentMethods(w http.ResponseWriter, r *http.Request) {
 // listPawapayCountries — table pays/opérateurs exposée au frontend pour le
 // sélecteur de pays du checkout PawaPay. Statique, dérivée de
 // pawapayCountries (voir pawapay.go).
+// listPawapayCountries — enrichi le 2026-08-28 avec authType par provider
+// (GET /v2/active-conf, mis en cache 1h — voir pawapayActiveConfig) : le
+// checkout (flux sans redirection) l'utilise pour savoir si le dépôt
+// direct est possible pour l'opérateur choisi, ou si une redirection est
+// nécessaire (REDIRECT_AUTH). Repli silencieux sur "" (inconnu) si
+// l'appel PawaPay échoue — initiateMobileMoneyDeposit gère déjà ce cas
+// côté serveur (repli Payment Page), donc pas bloquant ici.
 func (s *server) listPawapayCountries(w http.ResponseWriter, r *http.Request) {
+	cfg, _ := s.pawapayActiveConfig(r.Context()) // nil si erreur — providerAuthType gère nil proprement
 	out := make([]map[string]any, 0, len(pawapayCountries))
 	for _, c := range pawapayCountries {
+		providers := make([]map[string]any, 0, len(c.Providers))
+		for _, p := range c.Providers {
+			providers = append(providers, map[string]any{
+				"code":     p,
+				"authType": providerAuthType(cfg, c.ISO3, p), // "" = inconnu, repli Payment Page
+			})
+		}
 		out = append(out, map[string]any{
 			"iso2": c.ISO2, "iso3": c.ISO3, "name": c.Name,
-			"currency": c.Currency, "dial_code": c.DialCode, "providers": c.Providers,
+			"currency": c.Currency, "dial_code": c.DialCode,
+			"providers":        c.Providers, // conservé pour compatibilité (frontend existant)
+			"providers_detail": providers,
 		})
 	}
 	kit.JSON(w, 200, map[string]any{"countries": out, "default_iso2": "SN"})
@@ -1927,6 +1944,12 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		BuyerCountry string `json:"buyer_country"` // ISO2 (ex. "sn")
 		BuyerPhone   string `json:"buyer_phone"`   // format libre, normalisé côté serveur
 		BuyerEmail   string `json:"buyer_email"`
+		// MobileMoneyProvider — présent UNIQUEMENT si le client a choisi son
+		// opérateur directement sur notre checkout (2026-08-28, flux sans
+		// redirection). Vide = comportement historique (Payment Page
+		// hébergée, l'opérateur est choisi côté PawaPay). Code exact attendu
+		// par PawaPay (ex. "ORANGE_SEN") — voir pawapayCountries/active-conf.
+		MobileMoneyProvider string `json:"mobile_money_provider"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrderID == 0 {
 		kit.Fail(w, 400, "invalid_body", "order_id obligatoire")
@@ -2052,13 +2075,22 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		if reference == "" {
 			reference = fmt.Sprintf("MIAD-%d", body.OrderID)
 		}
-		depositID, ppRedirect, err := s.createPawaPayPaymentPage(ctx,
-			orderCreatedEvent{OrderID: body.OrderID, ParentOrderID: body.OrderID, Reference: reference, TotalUSD: amount},
-			body.BuyerCountry, body.BuyerPhone, body.BuyerEmail)
+		ev := orderCreatedEvent{OrderID: body.OrderID, ParentOrderID: body.OrderID, Reference: reference, TotalUSD: amount}
+		var depositID, ppRedirect string
+		if body.MobileMoneyProvider != "" {
+			// Flux sans redirection (2026-08-28) — bascule interne vers la
+			// Payment Page si l'opérateur choisi l'exige (REDIRECT_AUTH),
+			// voir initiateMobileMoneyDeposit.
+			depositID, ppRedirect, err = s.initiateMobileMoneyDeposit(ctx, ev,
+				body.BuyerCountry, body.MobileMoneyProvider, body.BuyerPhone, body.BuyerEmail)
+		} else {
+			depositID, ppRedirect, err = s.createPawaPayPaymentPage(ctx, ev,
+				body.BuyerCountry, body.BuyerPhone, body.BuyerEmail)
+		}
 		if err != nil {
 			_, _ = s.db.Exec(ctx, "UPDATE payments SET status='failed' WHERE id=$1", id)
-			slog.Error("initPayment: création de la page PawaPay impossible", "order_id", body.OrderID, "err", err)
-			kit.Fail(w, 502, "pawapay_error", fmt.Sprintf("création de la page de paiement PawaPay impossible: %v", err))
+			slog.Error("initPayment: création du dépôt PawaPay impossible", "order_id", body.OrderID, "err", err)
+			kit.Fail(w, 502, "pawapay_error", fmt.Sprintf("paiement PawaPay impossible: %v", err))
 			return
 		}
 		if _, err := s.db.Exec(ctx,

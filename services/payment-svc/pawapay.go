@@ -5,13 +5,18 @@
 // PawaPay donne accès à M-Pesa (KE/TZ/CD), MTN MoMo, Airtel Money,
 // Orange Money, Wave, Free Money, Vodacom, etc. sur ~20 pays.
 //
-// Flux CLIENT (deposit) : on n'appelle PAS /v2/deposits directement
-// (qui exige le MSISDN du payeur dans le corps) — on utilise la
-// PAYMENT PAGE hébergée PawaPay (POST /v2/paymentpage) : PawaPay
-// affiche sa propre page, le client y choisit son opérateur et saisit
-// son numéro mobile money, PawaPay déclenche le push USSD. On reçoit
-// un redirectUrl où envoyer le client — MÊME modèle que PayDunya
-// (createPayDunyaInvoice, voir main.go), pas Stripe Elements.
+// Flux CLIENT (deposit) : DEUX chemins, voir initiateMobileMoneyDeposit
+// (2026-08-28) qui choisit automatiquement entre les deux selon
+// l'authType de l'opérateur (GET /v2/active-conf) :
+//   - PAYMENT PAGE hébergée (POST /v2/paymentpage, createPawaPayPaymentPage
+//     ci-dessous) : PawaPay affiche sa propre page, MÊME modèle que
+//     PayDunya (createPayDunyaInvoice, voir main.go) — utilisé quand
+//     l'opérateur exige authType=REDIRECT_AUTH, ou par repli si la
+//     config active est indisponible.
+//   - Dépôt DIRECT (POST /v2/deposits) : le client reste sur notre page
+//     checkout (numéro + opérateur saisis chez nous), PawaPay déclenche
+//     le push USSD, le frontend fait du polling GET /v2/deposits/{id}
+//     jusqu'à COMPLETED/FAILED — utilisé pour PROVIDER_AUTH/PREAUTH.
 //
 // Flux VERSEMENT (payout) : POST /v2/payouts, cette fois avec le MSISDN
 // du bénéficiaire (le vendeur) — pas de page hébergée pour les payouts.
@@ -47,6 +52,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // ---------- Table pays → opérateurs PawaPay ----------
@@ -613,4 +620,167 @@ func (s *server) pawapayRefundStatus(ctx context.Context, refundID string) (stat
 func pawapayIsFinalSuccess(status string) bool { return status == "COMPLETED" }
 func pawapayIsFinalFailure(status string) bool {
 	return status == "FAILED" || status == "NOT_FOUND" || status == "REJECTED"
+}
+
+// ---------- Deposit SANS redirection (2026-08-28) ----------
+//
+// Alternative à createPawaPayPaymentPage ci-dessus : le client reste sur
+// notre propre page checkout (numéro + opérateur saisis chez nous), au
+// lieu d'être envoyé sur une page PawaPay. Voir le plan
+// pawapay-sans-redirection.md pour le contexte complet — en résumé :
+// certains opérateurs (authType=REDIRECT_AUTH) exigent quand même une
+// redirection côté PawaPay, gérée de façon transparente par
+// initiateMobileMoneyDeposit ci-dessous (le client ne voit qu'un seul
+// endpoint, la bascule se fait en interne).
+
+// pawapayActiveProvider — un opérateur mobile money tel que renvoyé par
+// GET /v2/active-conf, avec son authType (détermine si le flux direct
+// est possible pour cet opérateur précis).
+type pawapayActiveProvider struct {
+	Provider  string `json:"provider"`
+	AuthType  string `json:"authType"` // PROVIDER_AUTH | PREAUTH | REDIRECT_AUTH
+	Displayed struct {
+		Name string `json:"name"`
+	} `json:"displayName"`
+}
+
+type pawapayActiveCountry struct {
+	Country   string `json:"country"` // ISO3
+	Providers []struct {
+		Provider  string `json:"provider"`
+		Displayed struct {
+			Name string `json:"name"`
+		} `json:"displayName"`
+		Deposit struct {
+			AuthType string `json:"authType"`
+		} `json:"depositProviderInfo"`
+	} `json:"providers"`
+}
+
+// pawapayActiveConfig — GET /v2/active-conf, mis en cache process-local
+// 1h (config quasi statique, évite un appel réseau à chaque affichage du
+// sélecteur checkout). Remplace à terme pawapayCountries (codé en dur,
+// gardé comme repli si l'appel échoue — voir activeConfigCache ci-dessous).
+var (
+	activeConfigCache     map[string][]pawapayActiveProvider // clé = ISO3
+	activeConfigCacheAt   time.Time
+	activeConfigCacheLock sync.Mutex
+)
+
+func (s *server) pawapayActiveConfig(ctx context.Context) (map[string][]pawapayActiveProvider, error) {
+	activeConfigCacheLock.Lock()
+	defer activeConfigCacheLock.Unlock()
+	if activeConfigCache != nil && time.Since(activeConfigCacheAt) < time.Hour {
+		return activeConfigCache, nil
+	}
+	code, raw, err := s.pawapayHTTP(ctx, http.MethodGet, "/v2/active-conf?operationType=DEPOSIT", nil)
+	if err != nil {
+		return nil, err
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("PawaPay GET active-conf (%d): %s", code, strings.TrimSpace(string(raw)))
+	}
+	var doc struct {
+		Countries []pawapayActiveCountry `json:"countries"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	byCountry := make(map[string][]pawapayActiveProvider)
+	for _, c := range doc.Countries {
+		for _, p := range c.Providers {
+			byCountry[c.Country] = append(byCountry[c.Country], pawapayActiveProvider{
+				Provider: p.Provider,
+				AuthType: p.Deposit.AuthType,
+			})
+		}
+	}
+	activeConfigCache = byCountry
+	activeConfigCacheAt = time.Now()
+	return byCountry, nil
+}
+
+// providerAuthType — cherche l'authType d'un provider précis dans la
+// config active ; "" (inconnu) si l'appel /v2/active-conf a échoué ou si
+// le provider n'y figure pas — dans ce cas, initiateMobileMoneyDeposit
+// retombe prudemment sur la Payment Page (comportement déjà éprouvé)
+// plutôt que de tenter un dépôt direct à l'aveugle.
+func providerAuthType(cfg map[string][]pawapayActiveProvider, countryISO3, provider string) string {
+	for _, p := range cfg[countryISO3] {
+		if p.Provider == provider {
+			return p.AuthType
+		}
+	}
+	return ""
+}
+
+// initiateMobileMoneyDeposit — point d'entrée unique appelé par le
+// checkout (POST /payments/mobile-money/deposit), agrégateur-agnostique
+// dans son contrat (order_id, country, provider, phone) même si seul
+// PawaPay est branché aujourd'hui. Route en interne :
+//   - authType REDIRECT_AUTH, ou config active indisponible → Payment
+//     Page hébergée (redirectUrl renvoyé, le frontend redirige le client)
+//   - PROVIDER_AUTH / PREAUTH → dépôt direct /v2/deposits (pas de
+//     redirectUrl, le frontend passe en polling GET .../status)
+func (s *server) initiateMobileMoneyDeposit(ctx context.Context, ev orderCreatedEvent, countryISO2, provider, phoneRaw, customerEmail string) (depositID, redirectURL string, err error) {
+	country := findPawapayCountryByISO2(countryISO2)
+	if country == nil {
+		return "", "", fmt.Errorf("pays non couvert par PawaPay: %s", countryISO2)
+	}
+	cfg, cfgErr := s.pawapayActiveConfig(ctx)
+	authType := ""
+	if cfgErr == nil {
+		authType = providerAuthType(cfg, country.ISO3, provider)
+	}
+	if authType == "REDIRECT_AUTH" || authType == "" {
+		// Repli Payment Page — soit l'opérateur l'exige, soit on ne sait
+		// pas (config indisponible) : mieux vaut le flux éprouvé qu'un
+		// dépôt direct à l'aveugle sur un opérateur mal supporté.
+		return s.createPawaPayPaymentPage(ctx, ev, countryISO2, phoneRaw, customerEmail)
+	}
+
+	phone := normalizeMSISDN(phoneRaw, country.DialCode)
+	if phone == "" {
+		return "", "", fmt.Errorf("numéro de téléphone invalide")
+	}
+	rate, err := s.pawapayResolveRate(ctx, country.Currency)
+	if err != nil {
+		return "", "", err
+	}
+	amount := pawapayLocalAmount(ev.TotalUSD, rate, country.Currency)
+	depositID = newUUIDv4()
+
+	payload := map[string]any{
+		"depositId": depositID,
+		"payer": map[string]any{
+			"type": "MMO",
+			"accountDetails": map[string]any{
+				"phoneNumber": phone,
+				"provider":    provider,
+			},
+		},
+		"amount":          amount,
+		"currency":        country.Currency,
+		"customerMessage": pawapayStatementDescription(ev.Reference),
+		"metadata":        pawapayOrderMetadata(redirectOrderID(ev), ev.Reference, customerEmail),
+	}
+	code, raw, err := s.pawapayHTTP(ctx, http.MethodPost, "/v2/deposits", payload)
+	if err != nil {
+		return "", "", err
+	}
+	var resp struct {
+		Status        string `json:"status"`
+		FailureReason struct {
+			FailureMessage string `json:"failureMessage"`
+		} `json:"failureReason"`
+	}
+	_ = json.Unmarshal(raw, &resp)
+	if code != http.StatusOK || (resp.Status != "ACCEPTED" && resp.Status != "DUPLICATE_IGNORED") {
+		msg := resp.FailureReason.FailureMessage
+		if msg == "" {
+			msg = strings.TrimSpace(string(raw))
+		}
+		return "", "", fmt.Errorf("PawaPay a refusé le dépôt (%d, %s): %s", code, resp.Status, msg)
+	}
+	return depositID, "", nil // pas de redirectUrl : le frontend passe en polling
 }

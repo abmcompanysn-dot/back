@@ -60,7 +60,10 @@ export async function POST(request: Request) {
     if (!user?.sub) return NextResponse.json({ error: 'Session invalide' }, { status: 401 })
 
     const body = await request.json()
-    const { lines, shipping, billing, coupon_code, payment_method } = body
+    // mobile_money_provider — opérateur choisi directement sur notre
+    // checkout (flux sans redirection, 2026-08-28) ; absent = comportement
+    // historique (Payment Page hébergée PawaPay).
+    const { lines, shipping, billing, coupon_code, payment_method, mobile_money_provider } = body
 
     if (!Array.isArray(lines) || lines.length === 0) {
       return NextResponse.json({ error: 'Le panier est vide' }, { status: 400 })
@@ -113,6 +116,10 @@ export async function POST(request: Request) {
       initBody.buyer_country = shipping?.country || billing?.country || ''
       initBody.buyer_phone = shipping?.phone || billing?.phone || ''
       initBody.buyer_email = billing?.email || ''
+      // mobile_money_provider — présent seulement si le client a choisi son
+      // opérateur directement sur notre checkout (flux sans redirection,
+      // 2026-08-28). Absent = comportement historique (Payment Page).
+      if (mobile_money_provider) initBody.mobile_money_provider = mobile_money_provider
     }
 
     let payment: any = null
@@ -144,8 +151,12 @@ export async function POST(request: Request) {
       paydunyaUrl: payment?.redirect_url,
       // PawaPay : page de paiement hébergée — on redirige simplement le
       // navigateur vers cette URL (PawaPay y collecte l'opérateur + le
-      // numéro mobile money du client et déclenche le push USSD).
+      // numéro mobile money du client et déclenche le push USSD). Vide
+      // dans le flux SANS redirection (mobile_money_provider fourni,
+      // authType PROVIDER_AUTH/PREAUTH) — dans ce cas le frontend passe
+      // en polling sur pawapayDepositId via GET /api/orders/{id}/payment-status.
       pawapayUrl: payment_method === 'pawapay' ? payment?.redirect_url : undefined,
+      pawapayDepositId: payment_method === 'pawapay' ? payment?.payment?.provider_ref : undefined,
     })
   } catch (error: any) {
     return NextResponse.json(

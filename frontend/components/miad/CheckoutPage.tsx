@@ -17,6 +17,7 @@ import { loadStripe } from '@stripe/stripe-js'
 import { Elements } from '@stripe/react-stripe-js'
 import { StripePaymentForm, SavedCardConfirmButton } from './StripePaymentForm'
 import { SavedCardPicker } from './SavedCardPicker'
+import { MobileMoneyDirectForm } from './MobileMoneyDirectForm'
 import { getShippingCost, ALL_WORLD_COUNTRIES, isLocalDelivery, isSameZoneAfrica, COUNTRY_TO_ZONE, getDialCode, stripDialCode, buildFullPhone } from '@/lib/shipping-utils'
 import { useShippingRates, calcShipping } from '@/hooks/useShippingRates'
 import { trackEvent } from '@/lib/analytics'
@@ -98,6 +99,12 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   const [isLoadingShipping, setIsLoadingShipping] = useState(false)
   const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null)
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null)
+  // Flux mobile money SANS redirection (2026-08-28) : true dès que la
+  // commande est créée avec succès et que pawapayUrl est vide (l'opérateur
+  // n'est pas encore choisi — c'est justement ce que MobileMoneyDirectForm
+  // va demander). false = comportement historique (Payment Page hébergée,
+  // redirection immédiate).
+  const [showMobileMoneyForm, setShowMobileMoneyForm] = useState(false)
   // Depuis le 2026-08-26, UN SEUL paiement par commande groupée (peu
   // importe le nombre de boutiques) — createdOrderId ET
   // parentOrderIdForRedirect valent donc désormais le même id (le parent)
@@ -441,15 +448,27 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
         window.scrollTo(0, 0)
         trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'payment', paymentMethod: resolvedMethod } })
       }
-      // PawaPay : page de paiement hébergée — on quitte le site vers l'URL
-      // renvoyée (PawaPay y collecte opérateur + numéro mobile money et
-      // déclenche le push USSD). Le retour se fait sur /order-received
-      // (returnUrl construite côté payment-svc) qui confirme via le webhook.
-      else if (resolvedMethod === 'pawapay' && data.pawapayUrl) {
+      // PawaPay : deux chemins possibles selon si l'opérateur a déjà été
+      // choisi ou non à ce stade (il ne l'a jamais été ici — le choix se
+      // fait sur MobileMoneyDirectForm.tsx, PAS avant, voir plus bas).
+      // pawapayUrl présent = ancien comportement jamais déclenché depuis
+      // ce chemin (gardé pour compatibilité si jamais buyer_phone seul
+      // suffit un jour) ; en pratique on affiche toujours le formulaire.
+      else if (resolvedMethod === 'pawapay') {
         setCreatedOrderId(data.orderId);
         setParentOrderIdForRedirect(data.parentOrderId ?? data.orderId);
-        trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'redirect', paymentMethod: 'pawapay' } })
-        window.location.href = data.pawapayUrl;
+        if (data.pawapayUrl) {
+          trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'redirect', paymentMethod: 'pawapay' } })
+          window.location.href = data.pawapayUrl;
+        } else {
+          // Flux sans redirection (2026-08-28) : la commande existe, le
+          // paiement 'initiated' aussi — MobileMoneyDirectForm.tsx va
+          // maintenant demander opérateur + numéro puis déclencher le
+          // dépôt réel via POST /api/orders/{id}/mobile-money-deposit.
+          trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'mobile_money_form', paymentMethod: 'pawapay' } })
+          setShowMobileMoneyForm(true)
+          window.scrollTo(0, 0)
+        }
       }
       else if (resolvedMethod === 'paydunya' && data.paydunyaToken) {
         setCreatedOrderId(data.orderId);
@@ -481,8 +500,11 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
         }
       }
       else {
-        const methodLabel =
-          resolvedMethod === 'stripe' ? 'Stripe' : resolvedMethod === 'pawapay' ? 'PawaPay' : 'PayDunya';
+        // resolvedMethod ne peut plus valoir 'pawapay' ici : le bloc
+        // ci-dessus le capture désormais TOUJOURS (avec ou sans
+        // redirectUrl) depuis le 2026-08-28 — seul 'paydunya' peut encore
+        // atterrir dans ce cas d'erreur générique.
+        const methodLabel = resolvedMethod === 'stripe' ? 'Stripe' : 'PayDunya';
         console.error(`[Checkout] Réponse d'initialisation incomplète pour ${methodLabel}`, data);
         throw new Error(`Erreur d'initialisation du paiement ${methodLabel}. Veuillez vérifier la configuration serveur.`);
       }
@@ -542,6 +564,52 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
             >
               Retour à la boutique
             </Button>
+          </m.div>
+        </div>
+      </main>
+      </LazyMotion>
+    )
+  }
+
+  // --- VUE DÉDIÉE MOBILE MONEY SANS REDIRECTION (2026-08-28) ---
+  if (showMobileMoneyForm && createdOrderId) {
+    return (
+      <LazyMotion features={domAnimation}>
+      <main className="min-h-screen bg-muted/20 py-12">
+        <div className="container mx-auto px-4 max-w-2xl">
+          <button
+            type="button"
+            onClick={() => { setShowMobileMoneyForm(false); setStep('form') }}
+            className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-8 transition-colors font-bold uppercase text-xs tracking-widest"
+          >
+            <ArrowLeft size={16} />
+            <span>Modifier mes informations</span>
+          </button>
+          <m.div
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            className="bg-white rounded-[2.5rem] border border-border p-8 md:p-12 shadow-2xl"
+          >
+            <div className="text-center mb-8">
+              <h1 className="text-3xl font-black uppercase tracking-tighter italic">Mobile Money</h1>
+              <p className="text-sm text-muted-foreground mt-2 font-medium">Commande #{createdOrderId} · Total : {fp(total)}</p>
+            </div>
+            <MobileMoneyDirectForm
+              orderId={createdOrderId}
+              countryISO2={formData.country}
+              phoneHint={formData.phone}
+              onSuccess={() => {
+                trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod: 'pawapay' } })
+                setStep('confirm')
+                window.scrollTo(0, 0)
+                setTimeout(onOrderComplete, 5000)
+              }}
+              onFailure={(message) => {
+                trackEvent('payment_failed', { cartValue: total, paymentFailureReason: 'pawapay_failure', metadata: { paymentMethod: 'pawapay' } })
+                toast.error(message)
+              }}
+              onNeedsFormRestart={() => { setShowMobileMoneyForm(false); setStep('form') }}
+            />
           </m.div>
         </div>
       </main>
