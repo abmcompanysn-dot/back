@@ -26,6 +26,10 @@
 // ============================================================
 
 const DRY_RUN = process.argv.includes('--dry-run')
+// --emit-json : n'écrit rien vers shipping-svc, imprime une ligne JSON
+// {vendor_id,address,lat,lng} par boutique géocodée sur stdout (à piper
+// vers un exécuteur qui a accès au service, ex. via SSH + kubectl exec).
+const EMIT_JSON = process.argv.includes('--emit-json')
 const ONLY = (() => {
   const i = process.argv.indexOf('--only')
   return i !== -1 ? (process.argv[i + 1] || '').toUpperCase() : null
@@ -66,7 +70,7 @@ const VENDORS = [
   { vendorId: 120, name: 'Wall Art Print',             hint: 'Tivaouane',                   country: 'SN' },
   { vendorId: 20,  name: 'Naby Gold',                  hint: 'Tivaouane',                   country: 'SN' },
   { vendorId: 26,  name: 'MAC Collection',             hint: 'Tivaouane',                   country: 'SN' },
-  { vendorId: 79,  name: 'Awa',                         hint: 'Ndiakhaté, Tivaouane',        country: 'SN' },
+  { vendorId: 79,  name: 'Awa',                         hint: 'Ndiakhaté 15km Tivaouane',    country: 'SN', force: [14.8667, -16.7000] },
   { vendorId: 77,  name: 'Dabo filitex',               hint: 'HLM, Dakar',                  country: 'SN' },
   { vendorId: 125, name: 'Fallou mode',                hint: 'HLM, Dakar',                  country: 'SN' },
   { vendorId: 86,  name: 'Tawa mboudaye acajou',       hint: 'HLM 5, Dakar',                country: 'SN' },
@@ -97,7 +101,7 @@ const VENDORS = [
   { vendorId: 123, name: 'atelier MK',                hint: 'Cotonou, Bénin',              country: 'BJ' },
   { vendorId: 124, name: 'garellemode',               hint: 'Cotonou, Bénin',              country: 'BJ' },
   { vendorId: 142, name: 'attiale',                    hint: 'Abidjan, Côte d\'Ivoire',     country: 'CI' },
-  { vendorId: 143, name: 'RicardoDesign',             hint: 'Cameroun',                    country: 'CM' },
+  { vendorId: 143, name: 'RicardoDesign',             hint: 'Cameroun',                    country: 'CM', force: [3.8480, 11.5021] },
 ]
 
 // ---------- Replis coordonnées connues ----------
@@ -206,7 +210,15 @@ async function main() {
     }
     let coords = null
     let source = ''
+    // force : coordonnées imposées manuellement (Nominatim renvoie un
+    // homonyme lointain — ex. "Ndiakhaté" à 60 km au lieu de 15 km de
+    // Tivaouane, ou "Cameroun" résolu vers Bamako).
+    if (Array.isArray(v.force)) {
+      coords = { lat: v.force[0], lng: v.force[1] }
+      source = 'forced'
+    }
     try {
+      if (coords) throw { skip: true }
       const g = await geocode(v.hint)
       await sleep(1100) // quota Nominatim
       if (g && !isSuspicious(g.lat, g.lng, v.hint)) {
@@ -216,7 +228,7 @@ async function main() {
         console.log(`   ⚠ ${v.name}: résultat Nominatim douteux (${g.lat},${g.lng} — "${g.display}"), repli table`)
       }
     } catch (e) {
-      console.log(`   ⚠ ${v.name}: Nominatim a échoué (${e.message}), repli table`)
+      if (!e?.skip) console.log(`   ⚠ ${v.name}: Nominatim a échoué (${e.message}), repli table`)
     }
     if (!coords) {
       const fb = fallbackCoords(v.hint)
@@ -229,7 +241,10 @@ async function main() {
     }
 
     const address = v.hint
-    if (DRY_RUN) {
+    if (EMIT_JSON) {
+      process.stdout.write(JSON.stringify({ vendor_id: v.vendorId, address, lat: coords.lat, lng: coords.lng }) + '\n')
+      done.push(v)
+    } else if (DRY_RUN) {
       console.log(`🔎 ${v.name.padEnd(28)} #${v.vendorId}  ${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}  (${source})`)
     } else {
       try {
@@ -243,6 +258,7 @@ async function main() {
     }
   }
 
+  if (EMIT_JSON) return
   console.log('\n─── Récapitulatif ───')
   console.log(`  Enregistrées : ${done.length}`)
   console.log(`  Échecs       : ${failed.length}`)
