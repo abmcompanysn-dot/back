@@ -59,7 +59,14 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   // 'paydunya' OU 'pawapay' à l'envoi selon le fournisseur actif côté
   // backend (GET /api/payment-gateways → gateway.enabled). L'admin bascule
   // entre les deux dans Configuration Système sans toucher au frontend.
-  const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'mobile_money'>('mobile_money')
+  // Mobile Money par défaut sauf si userCountryCode (détection IP/pays de
+  // livraison déjà connu à ce stade) est hors Afrique — évite d'ouvrir la
+  // page checkout avec une option pré-sélectionnée que le client ne peut
+  // pas utiliser (pas de numéro mobile money africain). Reste changeable
+  // manuellement dans les deux sens, ce n'est qu'un défaut (2026-08-28).
+  const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'mobile_money'>(
+    COUNTRY_TO_ZONE[userCountryCode.toUpperCase()] === 'AF' ? 'mobile_money' : 'stripe'
+  )
   // Fournisseur mobile money réellement actif — 'pawapay' si activé, sinon
   // 'paydunya' (défaut). Rempli par l'effet ci-dessous.
   const [mobileMoneyProvider, setMobileMoneyProvider] = useState<'paydunya' | 'pawapay'>('paydunya')
@@ -913,6 +920,24 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                             laissez l'application ouverte en arrière-plan pendant toute la
                             validation du paiement — sinon l'autorisation risque de ne pas
                             aboutir. (Pas nécessaire pour Wave et les autres.)
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Mobile Money nécessite un numéro d'un opérateur africain
+                          (Wave, Orange Money, MTN...) — un client dont le pays de
+                          livraison est hors Afrique (COUNTRY_TO_ZONE) n'en a
+                          généralement pas. Pas de masquage de l'option (demandé
+                          le 2026-08-28 : garder le choix visible), juste un
+                          avertissement clair pour éviter l'échec silencieux au
+                          moment de saisir le numéro sur la page du fournisseur. */}
+                      {paymentMethod === 'mobile_money' && COUNTRY_TO_ZONE[formData.country.toUpperCase()] !== 'AF' && (
+                        <div className="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-2xl text-[11px] text-blue-800 font-bold leading-snug">
+                          <AlertCircle size={15} className="shrink-0 mt-0.5 text-blue-600" />
+                          <span>
+                            Mobile Money nécessite un numéro de téléphone d'un opérateur
+                            africain (Wave, Orange Money, MTN, Moov, M-Pesa, Airtel...).
+                            Si vous n'en avez pas, choisissez <strong>Carte bancaire</strong> ci-dessous.
                           </span>
                         </div>
                       )}
