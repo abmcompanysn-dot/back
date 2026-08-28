@@ -47,7 +47,11 @@ function buildCSP(nonce: string): string {
       " https://app.paydunya.com https://sandbox.paydunya.com" +
       " https://js.stripe.com https://m.stripe.network https://m.stripe.com" +
       " https://apis.google.com https://accounts.google.com https://www.googleapis.com" +
-      " https://vitals.vercel-insights.com",
+      " https://vitals.vercel-insights.com" +
+      // Sentry (suivi des erreurs) — l'endpoint d'ingestion du projet. Sans
+      // cette entrée, la CSP bloque silencieusement tous les envois et
+      // aucune erreur n'arrive dans Sentry.
+      " https://*.ingest.us.sentry.io https://*.ingest.sentry.io",
 
     // ── iFrames ────────────────────────────────────────────────────────────────
     "frame-src https://js.stripe.com https://hooks.stripe.com" +

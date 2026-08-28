@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	sentry "github.com/getsentry/sentry-go"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -49,6 +50,56 @@ func Logger(service string) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("svc", service)
 }
 
+// ---------- Sentry (suivi des erreurs — commun aux 11 services) ----------
+
+// sentryEnabled — vrai si sentry.Init a réussi (DSN présent et valide).
+var sentryEnabled bool
+
+// initSentry — appelé par Run au démarrage de chaque service. Lit
+// SENTRY_DSN dans l'environnement (Secret k8s miad-secrets / .env du VPS) ;
+// sans DSN, tout est no-op. Le nom du service devient un tag Sentry pour
+// savoir immédiatement lequel des 11 a planté (même clé que le champ "svc"
+// des logs slog).
+func initSentry(service string) {
+	dsn := os.Getenv("SENTRY_DSN")
+	if dsn == "" {
+		return
+	}
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn:              dsn,
+		Environment:      Env("SENTRY_ENV", Env("ENV", "production")),
+		Release:          os.Getenv("GIT_SHA"), // renseigné au build si dispo
+		AttachStacktrace: true,
+		// Pas de tracing perf (quota) — uniquement les erreurs/panics.
+		TracesSampleRate: 0,
+	})
+	if err != nil {
+		slog.Error("sentry.Init a échoué — suivi des erreurs désactivé", "err", err)
+		return
+	}
+	sentry.ConfigureScope(func(scope *sentry.Scope) {
+		scope.SetTag("svc", service)
+	})
+	sentryEnabled = true
+	slog.Info("sentry actif", "svc", service)
+}
+
+// CaptureError — remonte une erreur applicative dans Sentry avec un
+// contexte optionnel. No-op si Sentry n'est pas configuré. À utiliser dans
+// les services pour les erreurs qu'on veut voir sans forcément renvoyer un
+// 5xx (échec Kafka, appel inter-service dégradé, etc.).
+func CaptureError(err error, context map[string]any) {
+	if !sentryEnabled || err == nil {
+		return
+	}
+	sentry.WithScope(func(scope *sentry.Scope) {
+		for k, v := range context {
+			scope.SetExtra(k, v)
+		}
+		sentry.CaptureException(err)
+	})
+}
+
 // ---------- Erreurs explicites ----------
 
 type APIError struct {
@@ -67,6 +118,17 @@ func JSON(w http.ResponseWriter, status int, v any) {
 }
 
 func Fail(w http.ResponseWriter, status int, code, msg string) {
+	// Les 5xx sont de vrais incidents serveur — on les remonte dans Sentry
+	// (rappel : Fail ne logue rien par lui-même, cf. CLAUDE.md « kit.Fail()
+	// ne loge JAMAIS rien »). Les 4xx sont des erreurs client attendues,
+	// on ne les envoie pas pour ne pas noyer Sentry.
+	if status >= 500 && sentryEnabled {
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("error.code", code)
+			scope.SetLevel(sentry.LevelError)
+			sentry.CaptureException(fmt.Errorf("%s: %s", code, msg))
+		})
+	}
 	JSON(w, status, errorEnvelope{Error: APIError{Code: code, Message: msg}})
 }
 
@@ -390,6 +452,14 @@ func (h *Health) Handler(service string) http.HandlerFunc {
 
 // Run monte le mux HTTP, /healthz + /system-check, et gère l'arrêt propre.
 func Run(service, port string, log *slog.Logger, h *Health, register func(mux *http.ServeMux)) {
+	initSentry(service)
+	// Vide le buffer Sentry à l'arrêt (les events sont envoyés en asynchrone).
+	defer func() {
+		if sentryEnabled {
+			sentry.Flush(2 * time.Second)
+		}
+	}()
+
 	mux := http.NewServeMux()
 	register(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -431,6 +501,17 @@ func withRecover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// Remonte la panique dans Sentry AVANT de répondre — avec
+				// la méthode et le chemin pour la reproduire.
+				if sentryEnabled {
+					sentry.WithScope(func(scope *sentry.Scope) {
+						scope.SetTag("http.method", r.Method)
+						scope.SetTag("http.path", r.URL.Path)
+						scope.SetLevel(sentry.LevelFatal)
+						sentry.CurrentHub().Recover(rec)
+					})
+					sentry.Flush(2 * time.Second)
+				}
 				Fail(w, 500, "internal_error", fmt.Sprintf("panique serveur: %v", rec))
 			}
 		}()
