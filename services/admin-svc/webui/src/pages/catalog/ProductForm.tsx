@@ -97,9 +97,16 @@ const EMPTY: Draft = {
 
 const EMPTY_VARIATION: VariationRow = { sku: '', attributes: {}, price_usd: '', stock: '', image_url: '' }
 
-// --- Pointures chaussures (aligné sur catalog-svc : shoeSizeAttrName /
-// shoeSizeGrid / shoeCategoryKeywords). Toute chaussure DOIT avoir des
-// variations de taille — bouton de génération + blocage à l'enregistrement.
+function stripAccentsLower(s: string) {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+}
+
+// --- Grilles de tailles (alignées sur catalog-svc). Deux familles :
+//   - chaussures  → attribut "Pointure", grille EU 36→46
+//   - vêtements   → attribut "Taille",   grille S→XXXL (homme + femme, hors
+//                   enfant/sacs/pagnes/chaussures)
+// Les produits de ces familles DOIVENT avoir des variations de taille :
+// bouton de génération + blocage à l'enregistrement.
 const SHOE_SIZE_ATTR = 'Pointure'
 const SHOE_SIZE_GRID = ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46']
 const SHOE_CATEGORY_KEYWORDS = [
@@ -107,12 +114,30 @@ const SHOE_CATEGORY_KEYWORDS = [
   'bottine', 'escarpin', 'tong', 'derby', 'derbies', 'ballerine', 'espadrille',
   'claquette', 'mule', 'footwear', 'shoe', 'slipper', 'boot',
 ]
-function stripAccentsLower(s: string) {
-  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-}
+const CLOTHING_SIZE_ATTR = 'Taille'
+const CLOTHING_SIZE_GRID = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL']
+const CLOTHING_CATEGORY_KEYWORDS = [
+  'vetement', 'habit', 'pret-a-porter', 'pret a porter', 'homme', 'femme',
+  'boubou', 'tenue', 'ensemble', 'robe', 'chemise', 'chemisier', 'pantalon',
+  'jupe', 't-shirt', 'tshirt', 't shirt', 'pull', 'veste', 'blouse', 'tunique',
+  'kaftan', 'caftan', 'kimono', 'dashiki', 'agbada', 'apparel', 'clothing',
+  'menswear', 'womenswear', 'dress', 'shirt', 'trousers',
+]
+const CLOTHING_CATEGORY_EXCLUDE = [
+  'enfant', 'bebe', 'kids', 'child', 'baby',
+  'sac', 'maroquinerie', 'pochette', 'pagne', 'tissu', 'wax', 'kente', 'bogolan',
+  'chaussure', 'sandale', 'babouche', 'basket',
+  'bijou', 'accessoire', 'montre', 'ceinture', 'echarpe', 'foulard', 'lunette', 'chapeau',
+]
+
 function isShoeCategoryName(name: string) {
   const n = stripAccentsLower(name || '')
   return SHOE_CATEGORY_KEYWORDS.some((kw) => n.includes(kw))
+}
+function isClothingCategoryName(name: string) {
+  const n = stripAccentsLower(name || '')
+  if (CLOTHING_CATEGORY_EXCLUDE.some((ex) => n.includes(ex))) return false
+  return CLOTHING_CATEGORY_KEYWORDS.some((kw) => n.includes(kw))
 }
 function variationHasSizeAttr(v: VariationRow) {
   return Object.keys(v.attributes || {}).some((k) =>
@@ -268,29 +293,37 @@ export function ProductForm() {
     set('images', draft.images.filter((u) => u !== url))
   }
 
-  // Ce produit est-il une chaussure ? (nom de la catégorie sélectionnée)
+  // Famille de taille du produit, d'après le nom de la catégorie choisie.
   const selectedCategoryName = categories.find((c) => String(c.id) === draft.category_id)?.name || ''
   const isShoeProduct = isShoeCategoryName(selectedCategoryName)
+  const isClothingProduct = !isShoeProduct && isClothingCategoryName(selectedCategoryName)
+  const needsSize = isShoeProduct || isClothingProduct
   const hasSizeVariation = draft.variations.some(variationHasSizeAttr)
+  // Attribut + grille + libellé selon la famille (chaussure / vêtement).
+  const sizeAttr = isShoeProduct ? SHOE_SIZE_ATTR : CLOTHING_SIZE_ATTR
+  const sizeGrid = isShoeProduct ? SHOE_SIZE_GRID : CLOTHING_SIZE_GRID
+  const sizeGridLabel = isShoeProduct ? 'les pointures 36–46' : 'les tailles S–XXXL'
+  const sizeFamilyLabel = isShoeProduct ? 'chaussures' : 'vêtements'
 
   function addVariation() {
     set('variations', [...draft.variations, { ...EMPTY_VARIATION }])
   }
 
-  // generateShoeSizes — remplit la grille EU 36→46 sous l'attribut
-  // "Pointure", en reprenant prix/stock du produit. Passe aussi le produit
-  // en "variable". Ne recrée pas une pointure déjà présente.
-  function generateShoeSizes() {
+  // generateSizes — remplit la grille de tailles de la famille du produit
+  // (Pointure 36→46 pour une chaussure, Taille S→XXXL pour un vêtement) en
+  // reprenant prix/stock du produit. Passe le produit en "variable". Ne
+  // recrée pas une taille déjà présente.
+  function generateSizes() {
     const existing = new Set(
       draft.variations
         .filter(variationHasSizeAttr)
-        .map((v) => String(v.attributes[SHOE_SIZE_ATTR] ?? Object.values(v.attributes)[0] ?? ''))
+        .map((v) => String(v.attributes[sizeAttr] ?? Object.values(v.attributes)[0] ?? ''))
     )
     const basePrice = draft.price_usd || ''
     const baseStock = draft.stock || '0'
-    const added: VariationRow[] = SHOE_SIZE_GRID.filter((s) => !existing.has(s)).map((size) => ({
+    const added: VariationRow[] = sizeGrid.filter((s) => !existing.has(s)).map((size) => ({
       sku: draft.sku ? `${draft.sku}-${size}` : '',
-      attributes: { [SHOE_SIZE_ATTR]: size },
+      attributes: { [sizeAttr]: size },
       price_usd: basePrice,
       stock: baseStock,
       image_url: '',
@@ -374,12 +407,13 @@ export function ProductForm() {
       setTab('variations')
       return
     }
-    // Blocage chaussures : toute chaussure/sandale/babouche… doit avoir des
-    // variations de taille (décision du 2026-08-28).
-    if (isShoeProduct && !hasSizeVariation) {
+    // Blocage tailles : toute chaussure (pointure) et tout vêtement
+    // homme/femme (taille S→XXXL) doit avoir des variations de taille
+    // (décision du 2026-08-28).
+    if (needsSize && !hasSizeVariation) {
       setError(
-        `« ${selectedCategoryName} » est une catégorie de chaussures : ce produit doit avoir des variations de pointure. ` +
-          'Utilisez le bouton « Générer les pointures 36–46 » dans l\'onglet Variations.'
+        `« ${selectedCategoryName} » est une catégorie de ${sizeFamilyLabel} : ce produit doit avoir des variations de ${isShoeProduct ? 'pointure' : 'taille'}. ` +
+          `Utilisez le bouton « Générer ${sizeGridLabel} » dans l'onglet Variations.`
       )
       setTab('variations')
       return
@@ -651,7 +685,7 @@ export function ProductForm() {
 
         {tab === 'variations' && (
           <div>
-            {isShoeProduct && (
+            {needsSize && (
               <div
                 className={hasSizeVariation ? 'hint' : 'error-text'}
                 style={{
@@ -662,13 +696,13 @@ export function ProductForm() {
                   background: hasSizeVariation ? '#f2faf4' : '#fdf3f3',
                 }}
               >
-                <strong>Catégorie chaussures « {selectedCategoryName} ».</strong>{' '}
+                <strong>Catégorie {sizeFamilyLabel} « {selectedCategoryName} ».</strong>{' '}
                 {hasSizeVariation
-                  ? 'Ce produit a bien des variations de pointure.'
-                  : 'Ce produit doit avoir des variations de pointure pour pouvoir être enregistré.'}
+                  ? `Ce produit a bien des variations de ${isShoeProduct ? 'pointure' : 'taille'}.`
+                  : `Ce produit doit avoir des variations de ${isShoeProduct ? 'pointure' : 'taille'} pour pouvoir être enregistré.`}
                 <div style={{ marginTop: 8 }}>
-                  <button className="btn-primary" type="button" onClick={generateShoeSizes}>
-                    Générer les pointures 36–46
+                  <button className="btn-primary" type="button" onClick={generateSizes}>
+                    Générer {sizeGridLabel}
                   </button>
                 </div>
               </div>
@@ -694,19 +728,20 @@ export function ProductForm() {
                     <tbody>
                       {draft.variations.map((v, idx) => {
                         // Un seul champ "libellé" : on édite l'attribut existant
-                        // (Pointure pour une chaussure, sinon Variante).
+                        // (Pointure/Taille pour une variation de taille, sinon Variante).
                         const attrKey = variationHasSizeAttr(v)
                           ? Object.keys(v.attributes).find((k) =>
                               ['pointure', 'taille', 'size'].includes(stripAccentsLower(k))
-                            ) || SHOE_SIZE_ATTR
+                            ) || sizeAttr
                           : 'Variante'
+                        const isSizeKey = ['pointure', 'taille', 'size'].includes(stripAccentsLower(attrKey))
                         const label = v.attributes[attrKey] ?? ''
                         return (
                           <tr key={v.id ?? `new-${idx}`}>
                             <td>
                               <input
                                 value={label}
-                                placeholder={attrKey === SHOE_SIZE_ATTR ? '40' : '1 pièce'}
+                                placeholder={isSizeKey ? (isShoeProduct ? '40' : 'M') : '1 pièce'}
                                 onChange={(e) => updateVariation(idx, { attributes: { ...v.attributes, [attrKey]: e.target.value } })}
                               />
                             </td>
@@ -736,14 +771,14 @@ export function ProductForm() {
                 <button className="btn-ghost" type="button" onClick={addVariation} style={{ marginTop: 12 }}>
                   + Ajouter une variation
                 </button>
-                {isShoeProduct && (
-                  <button className="btn-ghost" type="button" onClick={generateShoeSizes} style={{ marginTop: 12, marginLeft: 8 }}>
-                    Générer les pointures 36–46
+                {needsSize && (
+                  <button className="btn-ghost" type="button" onClick={generateSizes} style={{ marginTop: 12, marginLeft: 8 }}>
+                    Générer {sizeGridLabel}
                   </button>
                 )}
                 <p className="hint" style={{ marginTop: 8 }}>
-                  Le libellé (ex : "1 pièce", "3 pièces", "40") est stocké comme attribut
-                  {isShoeProduct ? ' "Pointure" pour les chaussures' : ' "Variante"'} — c'est ce libellé qui
+                  Le libellé (ex : "1 pièce", "3 pièces", "{isShoeProduct ? '40' : 'M'}") est stocké comme attribut
+                  {needsSize ? ` "${sizeAttr}"` : ' "Variante"'} — c'est ce libellé qui
                   s'affiche comme sélecteur sur la fiche produit.
                 </p>
               </>
