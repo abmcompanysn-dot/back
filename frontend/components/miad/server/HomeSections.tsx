@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { FoodServer } from './FoodServer'
+import { CategorySections } from './CategorySections'
 import { InfiniteProductFeed } from './InfiniteProductFeed'
 
 function SectionSkeleton() {
@@ -42,6 +43,11 @@ export function HomeSections({ lang = 'fr' }: { lang?: 'fr' | 'en' } = {}) {
           alimentation et le flux produits infini. */}
       <Suspense fallback={<SectionSkeleton />}>
         <FoodServer lang={lang} />
+      </Suspense>
+      {/* Rangées "par catégorie" — ajoutées le 2026-08-28, en plus de
+          l'accueil existant (demandé par le fondateur). */}
+      <Suspense fallback={<SectionSkeleton />}>
+        <CategorySections lang={lang} />
       </Suspense>
       <InfiniteProductFeed language={lang} />
     </>

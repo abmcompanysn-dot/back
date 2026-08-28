@@ -27,6 +27,10 @@ interface StreamedNavClickValue {
   // (~2-3s sans prefetch, signalé le 2026-07-23), alors que la vue pays n'a
   // besoin d'aucune donnée nouvelle (stores/allProducts déjà en mémoire).
   onViewAllCountry?: (code: string) => void
+  // Bouton "Voir tout" d'une rangée catégorie de l'accueil
+  // (CategoryRow.tsx) — bascule vers la vue catégorie sans round-trip
+  // serveur (setSelectedCategory + navigateTo('category')).
+  onViewAllCategory?: (slug: string) => void
 }
 
 const StreamedNavClickContext = createContext<StreamedNavClickValue | null>(null)

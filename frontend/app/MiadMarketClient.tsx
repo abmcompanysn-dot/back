@@ -1777,7 +1777,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   };
 
   return (
-    <StreamedNavClickProvider value={{ onVendorClick: handleVendorClick, onProductClick: handleProductClick, onViewAllCountry: handleViewAllCountry }}>
+    <StreamedNavClickProvider value={{ onVendorClick: handleVendorClick, onProductClick: handleProductClick, onViewAllCountry: handleViewAllCountry, onViewAllCategory: (slug: string) => { setSelectedCategory(slug); navigateTo('category'); } }}>
       <Header {...headerProps} />
 
       {countryWasAutoDetected && currentView !== 'login' && currentView !== 'checkout' && (

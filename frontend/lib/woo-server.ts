@@ -236,6 +236,39 @@ export async function fetchProductsByCategorySlug(categorySlug: string, limit = 
   return products.filter((p: any) => p.categorySlug === categorySlug).slice(0, limit)
 }
 
+// fetchCategoryRow — première page (N produits) d'une catégorie + son
+// nombre total de pages, pour les rangées catégorie de l'accueil
+// (CategoryRow.tsx). Résout d'abord le slug en id de terme (catalog-svc
+// GET /products attend category_id, pas le slug — même piège que
+// app/api/products/route.ts, cf. CLAUDE.md frontend), puis pagine.
+export async function fetchCategoryRow(
+  categorySlug: string,
+  perPage = 6,
+  lang: 'fr' | 'en' = 'fr'
+): Promise<{ products: any[]; totalPages: number }> {
+  try {
+    // slug -> id
+    const catRes = await fetch(`${CATALOG_SVC_URL}/categories?lang=${lang}`, { next: { revalidate: 3600 } })
+    if (!catRes.ok) return { products: [], totalPages: 0 }
+    const catData = await catRes.json()
+    const match = (catData.items || catData.categories || []).find((c: any) => c.slug === categorySlug)
+    if (!match?.id) return { products: [], totalPages: 0 }
+
+    const res = await fetch(
+      `${CATALOG_SVC_URL}/products?category_id=${match.id}&page=1&page_size=${perPage}&lang=${lang}`,
+      { next: { revalidate: 900, tags: ['products', `category-${categorySlug}`] } }
+    )
+    if (!res.ok) return { products: [], totalPages: 0 }
+    const data = await res.json()
+    return {
+      products: (data.items || []).map(mapProduct),
+      totalPages: data.total_pages || 1,
+    }
+  } catch {
+    return { products: [], totalPages: 0 }
+  }
+}
+
 // Regroupement produits+boutiques par pays pour les sections "Marché [Pays]"
 // de l'accueil. Le pays vient du vendeur (vendor.country côté catalog-svc,
 // pas d'attribut pays direct sur le produit) — cohérent avec vendorToDokanShape.
