@@ -635,23 +635,22 @@ func pawapayIsFinalFailure(status string) bool {
 
 // pawapayActiveProvider — un opérateur mobile money tel que renvoyé par
 // GET /v2/active-conf, avec son authType (détermine si le flux direct
-// est possible pour cet opérateur précis).
+// est possible pour cet opérateur précis). displayName existe côté API
+// mais n'est PAS repris ici (bug trouvé le 2026-08-28 : c'est une simple
+// string, pas {name: string} comme initialement supposé — provoquait un
+// échec de désérialisation systématique de tout /v2/active-conf) — les
+// libellés affichés au client sont générés côté frontend
+// (MobileMoneyDirectForm.tsx, PROVIDER_INFO), pas besoin de le dupliquer ici.
 type pawapayActiveProvider struct {
-	Provider  string `json:"provider"`
-	AuthType  string `json:"authType"` // PROVIDER_AUTH | PREAUTH | REDIRECT_AUTH
-	Displayed struct {
-		Name string `json:"name"`
-	} `json:"displayName"`
+	Provider string `json:"provider"`
+	AuthType string `json:"authType"` // PROVIDER_AUTH | PREAUTH | REDIRECT_AUTH
 }
 
 type pawapayActiveCountry struct {
 	Country   string `json:"country"` // ISO3
 	Providers []struct {
-		Provider  string `json:"provider"`
-		Displayed struct {
-			Name string `json:"name"`
-		} `json:"displayName"`
-		Deposit struct {
+		Provider string `json:"provider"`
+		Deposit  struct {
 			AuthType string `json:"authType"`
 		} `json:"depositProviderInfo"`
 	} `json:"providers"`
