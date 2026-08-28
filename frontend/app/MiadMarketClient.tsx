@@ -141,7 +141,7 @@ function MobileBottomNav({ currentView, cartCount, isLoggedIn, userType, languag
         />
       )}
 
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-border z-50 py-2 flex justify-around items-center shadow-[0_-2px_10px_rgba(0,0,0,0.05)]">
+      <div className="mobile-bottom-nav md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-border z-50 pt-2 flex justify-around items-center shadow-[0_-2px_10px_rgba(0,0,0,0.05)]">
         <button type="button" onClick={onHome} className={`flex flex-col items-center gap-0.5 ${currentView === 'home' ? 'text-accent' : 'text-muted-foreground'}`}>
           <Home size={20} />
           <span className="text-[10px] font-medium">{t.home}</span>
@@ -1811,7 +1811,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         </div>
       )}
 
-      <div className="w-full min-h-screen pb-20">
+      <div className="w-full min-h-screen">
         {renderMainContent()}
       </div>
 
@@ -1826,7 +1826,12 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         />
       )}
       {currentView !== 'login' && (
-        <Footer categories={categories} onCountryClick={handleCountryClick} selectedCountry={selectedCountryCode} language={language} />
+        // has-bottom-nav : réserve la hauteur de la MobileBottomNav (fixed)
+        // + la safe-area iOS, sinon le bas du footer (liste des pays,
+        // moyens de paiement) reste masqué derrière la barre sur mobile.
+        <div className="has-bottom-nav">
+          <Footer categories={categories} onCountryClick={handleCountryClick} selectedCountry={selectedCountryCode} language={language} />
+        </div>
       )}
       {currentView === 'home' && <ScrollToTopButton />}
       {currentView !== 'login' && (
