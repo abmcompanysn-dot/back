@@ -42,8 +42,16 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 5
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { cpu: 300m, memory: 256Mi }
+            # Relevé de 300m à 1000m le 2026-08-27 : la page d'accueil charge
+            # 270+ images en une fois (grille catégories + "découvrir plus"),
+            # toutes en passant par Caddy vers MinIO — sous cette charge,
+            # certaines requêtes restaient "pending" indéfiniment côté
+            # navigateur (jamais 200 ni erreur propre), déclenchant le
+            # fallback gris de LazyImage.tsx (logo MIAD en transparence)
+            # pour ~30% des cartes produit. Reproduit et confirmé en
+            # navigation réelle avant ce changement.
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: "1", memory: 256Mi }
       volumes:
         - name: caddyfile
           configMap: { name: caddyfile }

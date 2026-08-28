@@ -226,8 +226,12 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            # Relevé de 500m à 1000m le 2026-08-27, en même temps que Caddy
+            # (deploy/k8s/30-gateway.yaml) — voir le commentaire là-bas pour
+            # le diagnostic complet (images produit grises sous charge sur
+            # l'accueil, requêtes "pending" jamais résolues côté navigateur).
+            requests: { cpu: 150m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
   volumeClaimTemplates:
     - metadata:
         name: data
