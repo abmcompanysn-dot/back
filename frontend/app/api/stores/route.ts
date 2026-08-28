@@ -8,11 +8,19 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const perPage = searchParams.get('per_page') || '100'
+  // slug — ajouté le 2026-08-28 : recherche ciblée d'UNE boutique par slug,
+  // utilisée en secours par MiadMarketClient.tsx (v=vendor&slug=X) quand la
+  // boutique n'est pas dans le lot des 100 premières déjà en mémoire côté
+  // client (sinon le lien restait silencieusement sur l'accueil).
+  const slug = searchParams.get('slug')
   const kvKey = `stores:per_page=${perPage}`
 
   try {
-    const response = await fetch(`${VENDOR_SVC_URL}/stores?page_size=${perPage}`, {
-      next: { revalidate: 3600 },
+    const url = new URL(`${VENDOR_SVC_URL}/stores`)
+    url.searchParams.set('page_size', slug ? '1' : perPage)
+    if (slug) url.searchParams.set('slug', slug)
+    const response = await fetch(url.toString(), {
+      next: { revalidate: slug ? 300 : 3600 },
     })
     if (!response.ok) {
       throw new Error(`vendor-svc a répondu ${response.status}`)
@@ -43,18 +51,24 @@ export async function GET(req: Request) {
       ]
     })
 
-    await catalogCacheSet(kvKey, { stores })
+    // Cache KV de secours réservé à la liste complète — un résultat filtré
+    // par slug (1 boutique) ne doit jamais écraser ce cache global.
+    if (!slug) await catalogCacheSet(kvKey, { stores })
 
     return NextResponse.json(
       { stores },
       {
         headers: {
-          'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=31536000',
+          'Cache-Control': slug ? 'public, s-maxage=300' : 'public, s-maxage=300, stale-while-revalidate=31536000',
         },
       }
     )
   } catch (error: any) {
     console.error('[Route API Stores] Erreur:', error)
+
+    if (slug) {
+      return NextResponse.json({ stores: [], error: 'Service indisponible' }, { status: 500 })
+    }
 
     // Backend injoignable : on tente de servir la dernière liste de
     // boutiques connue depuis le cache de secours KV plutôt que de

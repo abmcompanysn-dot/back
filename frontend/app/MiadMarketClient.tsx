@@ -1060,9 +1060,22 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         setVendorKey(k => k + 1)
         setCurrentView('store')
         window.scrollTo(0, 0)
+        return
       }
-      // Sinon : limitation connue déjà présente pour forcedVendorSlug — pas de
-      // fetch de secours pour les boutiques au-delà des 100 premières.
+      // Pas dans les 100 premières boutiques déjà chargées côté client —
+      // fetch de secours ciblé (même mécanisme que v=product ci-dessus).
+      // Avant ce correctif (2026-08-28), le lien restait silencieusement
+      // sur l'accueil sans jamais afficher la boutique visée (signalé :
+      // clic sur "JMK Créations" depuis le carrousel Boutiques officielles).
+      const controller = new AbortController()
+      fetch(`/api/stores?slug=${encodeURIComponent(slug)}`, { signal: controller.signal })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          const s = data?.stores?.[0]
+          if (s) { setSelectedVendor(s); setVendorKey(k => k + 1); setCurrentView('store'); window.scrollTo(0, 0) }
+        })
+        .catch(() => {})
+      return () => controller.abort()
     }
   }, [searchParams, allProducts, stores, selectedProduct, selectedVendor, activeCountry, currentView])
 

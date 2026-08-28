@@ -135,6 +135,15 @@ func (s *server) listStores(w http.ResponseWriter, r *http.Request) {
 		where += " AND country = $1"
 		args = append(args, c)
 	}
+	// slug — ajouté le 2026-08-28 : le frontend (MiadMarketClient.tsx,
+	// v=vendor&slug=X) ne cherchait une boutique QUE dans les 100 déjà
+	// chargées en mémoire, sans aucun secours réseau au-delà — un lien
+	// vers une boutique hors de ce lot n'affichait rien (retombait
+	// silencieusement sur l'accueil). Permet un fetch ciblé par slug.
+	if slug := q.Get("slug"); slug != "" {
+		where += fmt.Sprintf(" AND slug = $%d", len(args)+1)
+		args = append(args, slug)
+	}
 
 	var total int64
 	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM vendors "+where, args...).Scan(&total); err != nil {
