@@ -205,8 +205,8 @@ func main() {
 	}
 
 	s := &server{
-		db:       db,
-		kafka:    kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		db:        db,
+		kafka:     kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
 		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
 	}
@@ -2098,20 +2098,25 @@ func (s *server) backfillShoeSizes(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) backfillClothingSizes(w http.ResponseWriter, r *http.Request) {
 	s.backfillSizes(w, r, backfillSpec{
-		matchCategory: isClothingCategoryName,
-		attrName:      clothingSizeAttrName,
-		grid:          clothingSizeGrid,
-		familyLabel:   "vêtements",
-		noMatchNote:   "aucune catégorie 'vêtements homme/femme' détectée par son nom (vêtement, homme, femme, robe, boubou, ...)",
+		matchCategory:    isClothingCategoryName,
+		matchProductName: isClothingProductName, // filtre supplémentaire : nom du produit
+		attrName:         clothingSizeAttrName,
+		grid:             clothingSizeGrid,
+		familyLabel:      "vêtements",
+		noMatchNote:      "aucune catégorie 'vêtements' détectée par son nom",
 	})
 }
 
 type backfillSpec struct {
 	matchCategory func(name string) bool
-	attrName      string
-	grid          []string
-	familyLabel   string // "chaussures" / "vêtements" — pour les messages
-	noMatchNote   string
+	// matchProductName — filtre optionnel sur le nom du produit (nil = tous
+	// les produits des catégories qui matchent). Utilisé pour les vêtements
+	// où la catégorie "Mode - Vêtements" contient aussi des non-vêtements.
+	matchProductName func(name string) bool
+	attrName         string
+	grid             []string
+	familyLabel      string // "chaussures" / "vêtements" — pour les messages
+	noMatchNote      string
 }
 
 func (s *server) backfillSizes(w http.ResponseWriter, r *http.Request, spec backfillSpec) {
@@ -2176,10 +2181,17 @@ func (s *server) backfillSizes(w http.ResponseWriter, r *http.Request, spec back
 	prodRows.Close()
 
 	scanned := len(products)
-	updated, varsCreated, skipped := 0, 0, 0
+	updated, varsCreated, skipped, filteredByName := 0, 0, 0, 0
 	details := []map[string]any{}
 
 	for _, p := range products {
+		// Filtre optionnel sur le nom du produit (vêtements : la catégorie
+		// "Mode - Vêtements" contient aussi des chapeaux, de la vaisselle…).
+		if spec.matchProductName != nil && !spec.matchProductName(p.name) {
+			filteredByName++
+			continue
+		}
+
 		existRows, err := s.db.Query(ctx,
 			`SELECT attributes FROM product_variations WHERE product_id = $1`, p.id)
 		if err != nil {
@@ -2258,6 +2270,7 @@ func (s *server) backfillSizes(w http.ResponseWriter, r *http.Request, spec back
 		"shoe_categories":    len(catIDs), // compat : ancienne clé lue par VariationsMaintenance.tsx
 		"category_names":     catNames,
 		"products_scanned":   scanned,
+		"products_filtered":  filteredByName, // écartés par le nom (non-vêtements)
 		"products_updated":   updated,
 		"products_skipped":   skipped, // déjà une variation de taille
 		"variations_created": varsCreated,
@@ -2651,6 +2664,53 @@ func isClothingCategoryName(name string) bool {
 		}
 	}
 	for _, kw := range clothingCategoryKeywords {
+		if strings.Contains(n, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// clothingProductNameKeywords — la base n'a qu'UNE catégorie vêtement
+// ("Mode - Vêtements", vérifié 2026-08-28 : pas de sous-catégories
+// Homme/Femme), et elle contient aussi des chapeaux et des produits mal
+// classés (couvre-verre…). On filtre donc au niveau du NOM DU PRODUIT :
+// on ne pose des tailles S→XXXL que si le nom évoque un vêtement porté.
+var clothingProductNameKeywords = []string{
+	"robe", "ensemble", "boubou", "kaftan", "caftan", "dashiki", "agbada",
+	"chemise", "chemisier", "pantalon", "jean", "jeans", "jupe", "short",
+	"t-shirt", "tshirt", "tee", "polo", "pull", "sweat", "veste", "blazer",
+	"blouse", "tunique", "kimono", "combinaison", "salopette", "gilet",
+	"cardigan", "manteau", "trench", "peignoir", "pyjama", "tenue", "top",
+	"jogging", "survetement", "bermuda", "bomber", "hoodie", "sweatshirt",
+	"deux pieces", "2 pieces", "3 pieces", "trois pieces", "abaya", "jellaba",
+	"djellaba", "gandoura", "grand boubou", "complet", "costume",
+}
+
+// clothingProductNameExclude — mots qui, dans le nom, disqualifient (objets
+// qui ne se portent pas / ne se déclinent pas en S/M/L).
+var clothingProductNameExclude = []string{
+	"chapeau", "casquette", "bonnet", "beret", "foulard", "echarpe",
+	"ceinture", "cravate", "noeud papillon", "gant", "gants", "chaussette",
+	"chaussettes", "collant", "collants", "sac", "pochette", "portefeuille",
+	"couvre-verre", "couvre verre", "set de", "lot de", "nappe", "coussin",
+	"rideau", "torchon", "serviette", "drap", "housse", "plaid",
+	"bijou", "collier", "bracelet", "bague", "boucle", "montre", "lunette",
+	"parfum", "huile", "creme", "savon", "beurre", "the ", "cafe",
+	"tableau", "statue", "sculpture", "panier", "vase", "bougie",
+	"metre", "au metre", "coupon", "tissu", "pagne", "wax", // vendus au mètre
+}
+
+// isClothingProductName — vrai si le nom du produit désigne un vêtement
+// porté (à l'intérieur de la catégorie "Mode - Vêtements").
+func isClothingProductName(name string) bool {
+	n := stripAccentsLower(name)
+	for _, ex := range clothingProductNameExclude {
+		if strings.Contains(n, ex) {
+			return false
+		}
+	}
+	for _, kw := range clothingProductNameKeywords {
 		if strings.Contains(n, kw) {
 			return true
 		}
