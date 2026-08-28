@@ -74,6 +74,22 @@ l'appel externe (jamais en stockage) :
   moyens de paiement mobile Wave/Orange Money) — converti via le taux lu sur
   `shipping-svc` (`GET /exchange-rates`, source UNIQUE des taux de change,
   remplace les 3 constantes dupliquées du PHP historique).
+- **PawaPay** (`payment-svc`, `pawapay.go`) facture dans la **devise locale
+  du pays choisi par le client** (XOF, XAF, GHS, KES, NGN, TZS, UGX, RWF,
+  ZMW, MWK, MZN, CDF, SLE — ~19 pays Afrique) — converti via
+  `shipping-svc/exchange-rates` en priorité, table figée
+  `pawapayFallbackRates` (datée, `pawapay.go`) en secours. Alternative à
+  PayDunya : un seul des deux actif à la fois, bascule par toggle admin
+  (Configuration → Paiements → « Fournisseur Mobile Money actif », écrit
+  `pawapay_enabled` / `paydunya_enabled`). Désactivé par défaut, démarre en
+  `sandbox` (`pawapay_environment`). Flux = **Payment Page hébergée**
+  (`POST /v2/paymentpage` → `redirectUrl`, le client choisit opérateur +
+  numéro chez PawaPay), retour sur `/order-received?provider=pawapay`,
+  confirmation par webhook serveur-à-serveur
+  (`POST /payments/webhook/pawapay`, une URL pour deposits/payouts/refunds,
+  re-vérification GET du statut authoritatif — jamais le corps du callback).
+  Payouts (versement vendeur) et refunds implémentés côté API
+  (`POST /payout-requests/{id}/pawapay`, `POST /refunds`).
 
 **Valeurs à confirmer avec le fondateur avant bascule prod** (documentées en
 commentaire à chaque endroit concerné dans le code) :
