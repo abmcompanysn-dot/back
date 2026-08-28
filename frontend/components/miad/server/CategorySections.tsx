@@ -13,20 +13,21 @@ import { CategoryRow } from '../CategoryRow'
 // l'accueil à l'infini — elles restent accessibles via "Voir tout".
 
 // Catégorie alimentation déjà rendue par FoodServer juste au-dessus — on
-// l'exclut ici pour ne pas la dupliquer.
-const EXCLUDE_SLUGS = new Set(['alimentation', 'alimentation-epicerie'])
+// l'exclut ici pour ne pas la dupliquer. Les slugs catalog-svc portent un
+// suffixe de langue (-fr / -en), on teste donc par inclusion.
+function isFood(slug: string) {
+  return /aliment|epicerie|grocery|food/i.test(slug)
+}
 
 const PER_PAGE = 6
 
 export async function CategorySections({ lang = 'fr' }: { lang?: 'fr' | 'en' } = {}) {
   const categories = await fetchInitialCategories()
 
-  // Catégories "principales" = pas de "-" dans le slug composé enfant, ou
-  // productCount élevé. catalog-svc n'expose pas toujours parent_id ici ;
-  // on se base sur productCount > 0 et on garde les 8 plus fournies pour
-  // borner la hauteur de l'accueil.
+  // Catégories racines avec des produits, les 8 plus fournies (borne la
+  // hauteur de l'accueil). isRoot vient de catalog-svc (parent_id === 0).
   const main = categories
-    .filter((c: any) => c.productCount > 0 && !EXCLUDE_SLUGS.has(c.slug))
+    .filter((c: any) => c.productCount > 0 && c.isRoot !== false && !isFood(c.slug))
     .sort((a: any, b: any) => b.productCount - a.productCount)
     .slice(0, 8)
 

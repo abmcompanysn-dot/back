@@ -188,12 +188,18 @@ export async function fetchInitialCategories(): Promise<any[]> {
     const res = await fetch(`${CATALOG_SVC_URL}/categories?lang=fr`, { next: { revalidate: 3600 } })
     if (!res.ok) return []
     const data = await res.json()
-    return (data.items || []).map((c: any) => ({
+    // catalog-svc renvoie { categories: [...] } avec productCount (camelCase)
+    // — pas { items } ni product_count. Sans ce fallback, fetchInitialCategories
+    // renvoyait [] (rangées catégorie de l'accueil jamais affichées, constaté
+    // le 2026-08-28).
+    const list = data.categories || data.items || []
+    return list.map((c: any) => ({
       id: String(c.id),
       name: c.name || '',
       slug: c.slug || '',
-      image: c.image_url || '',
-      productCount: c.product_count || 0,
+      image: c.image_url || c.image?.src || '',
+      productCount: c.productCount ?? c.product_count ?? c.count ?? 0,
+      isRoot: c.isRoot ?? (c.parent_id === 0 || c.parent === 0),
       lang: 'fr' as const,
     }))
   } catch {
