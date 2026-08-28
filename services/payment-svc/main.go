@@ -76,6 +76,25 @@ CREATE TABLE IF NOT EXISTS payment_routing_overrides (
   PRIMARY KEY (country_iso2, provider_code)
 );
 
+-- Activer/désactiver un opérateur ou un pays entier dans le sélecteur
+-- mobile money du checkout (2026-08-28, demande fondateur avec logos
+-- réels fournis) — distinct du routage ci-dessus (routage = QUEL agrégateur
+-- traite un opérateur ; ceci = si l'opérateur/pays est proposé au client
+-- DU TOUT). Clé sur operator_label normalisé (même convention que
+-- normalizeOperatorLabel dans payment-routing.go), pas un code brut d'agrégateur —
+-- une ligne désactivée masque l'opérateur pour TOUS les agrégateurs qui le
+-- supportent. Absence de ligne = activé par défaut (comportement historique).
+CREATE TABLE IF NOT EXISTS payment_operator_disabled (
+  country_iso2   TEXT NOT NULL,
+  operator_label TEXT NOT NULL, -- normalisé, ex. "ORANGE", "MTN", "WAVE"
+  disabled_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (country_iso2, operator_label)
+);
+CREATE TABLE IF NOT EXISTS payment_country_disabled (
+  country_iso2 TEXT PRIMARY KEY,
+  disabled_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Wallet vendeur (module Finances/Vendeurs) : solde dû, ledger des
 -- mouvements, demandes de retrait. Posé ici plutôt que vendor-svc car
 -- payment-svc gère déjà toutes les transactions/passerelles.
@@ -375,6 +394,8 @@ func main() {
 		mux.HandleFunc("GET /payments/routing", s.listPaymentRoutingHandler)
 		mux.HandleFunc("PUT /payments/routing", s.setPaymentRoutingHandler)
 		mux.HandleFunc("DELETE /payments/routing", s.deletePaymentRoutingHandler)
+		mux.HandleFunc("PUT /payments/operator-enabled", s.setOperatorEnabledHandler)
+		mux.HandleFunc("PUT /payments/country-enabled", s.setCountryEnabledHandler)
 		mux.HandleFunc("GET /wallet/{vendor_id}", s.getWallet)
 		mux.HandleFunc("GET /wallet/{vendor_id}/transactions", s.listWalletTransactions)
 		mux.HandleFunc("POST /payout-requests", s.createPayoutRequest)
@@ -450,19 +471,54 @@ func (s *server) listPawapayCountries(w http.ResponseWriter, r *http.Request) {
 		// pour tous les opérateurs) était totalement invisible.
 		slog.Warn("listPawapayCountries: /v2/active-conf indisponible, authType inconnu pour tous les providers", "err", cfgErr)
 	}
+	// Pays/opérateurs désactivés par l'admin (2026-08-28, écran Mobile
+	// Money) — filtrés ici pour que le checkout ne les propose plus, en
+	// plus du tableau admin (voir payment-routing.go, même tables).
+	disabledCountries := map[string]bool{}
+	if dcrows, err := s.db.Query(r.Context(), "SELECT country_iso2 FROM payment_country_disabled"); err == nil {
+		for dcrows.Next() {
+			var iso2 string
+			if dcrows.Scan(&iso2) == nil {
+				disabledCountries[iso2] = true
+			}
+		}
+		dcrows.Close()
+	}
+	disabledOperators := map[string]bool{}
+	if dorows, err := s.db.Query(r.Context(), "SELECT country_iso2, operator_label FROM payment_operator_disabled"); err == nil {
+		for dorows.Next() {
+			var iso2, op string
+			if dorows.Scan(&iso2, &op) == nil {
+				disabledOperators[iso2+"|"+op] = true
+			}
+		}
+		dorows.Close()
+	}
+
 	out := make([]map[string]any, 0, len(pawapayCountries))
 	for _, c := range pawapayCountries {
+		if disabledCountries[c.ISO2] {
+			continue
+		}
+		var enabledCodes []string
 		providers := make([]map[string]any, 0, len(c.Providers))
 		for _, p := range c.Providers {
+			if disabledOperators[c.ISO2+"|"+normalizeOperatorLabel(providerDisplayLabel(p))] {
+				continue
+			}
+			enabledCodes = append(enabledCodes, p)
 			providers = append(providers, map[string]any{
 				"code":     p,
 				"authType": providerAuthType(cfg, c.ISO3, p), // "" = inconnu, repli Payment Page
 			})
 		}
+		if len(enabledCodes) == 0 {
+			continue // tous les opérateurs de ce pays désactivés — masque le pays aussi
+		}
 		out = append(out, map[string]any{
 			"iso2": c.ISO2, "iso3": c.ISO3, "name": c.Name,
 			"currency": c.Currency, "dial_code": c.DialCode,
-			"providers":        c.Providers, // conservé pour compatibilité (frontend existant)
+			"providers":        enabledCodes, // conservé pour compatibilité (frontend existant), filtré
 			"providers_detail": providers,
 		})
 	}

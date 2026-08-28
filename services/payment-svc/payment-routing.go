@@ -40,6 +40,8 @@ type paymentRouteRow struct {
 	PaydunyaBehavior *string `json:"paydunya_behavior"`
 	ActiveAggregator string  `json:"active_aggregator"` // 'pawapay' | 'paydunya' — résolu (override ou défaut)
 	IsOverride       bool    `json:"is_override"`       // true = ligne éditée manuellement en base
+	OperatorEnabled  bool    `json:"operator_enabled"`  // false = masqué du sélecteur checkout (payment_operator_disabled)
+	CountryEnabled   bool    `json:"country_enabled"`   // false = tout le pays masqué (payment_country_disabled)
 }
 
 // listPaymentRoutingHandler — GET /payments/routing. Construit le
@@ -109,6 +111,31 @@ func (s *server) listPaymentRoutingHandler(w http.ResponseWriter, r *http.Reques
 		defaultAggregator = "pawapay"
 	}
 
+	// Opérateurs/pays désactivés — même logique "absence = activé" que les
+	// overrides de routage ci-dessus.
+	disabledOperators := map[string]bool{} // "{iso2}|{opérateur normalisé}"
+	dorows, err := s.db.Query(ctx, "SELECT country_iso2, operator_label FROM payment_operator_disabled")
+	if err == nil {
+		defer dorows.Close()
+		for dorows.Next() {
+			var iso2, op string
+			if dorows.Scan(&iso2, &op) == nil {
+				disabledOperators[iso2+"|"+op] = true
+			}
+		}
+	}
+	disabledCountries := map[string]bool{}
+	dcrows, err := s.db.Query(ctx, "SELECT country_iso2 FROM payment_country_disabled")
+	if err == nil {
+		defer dcrows.Close()
+		for dcrows.Next() {
+			var iso2 string
+			if dcrows.Scan(&iso2) == nil {
+				disabledCountries[iso2] = true
+			}
+		}
+	}
+
 	out := make([]paymentRouteRow, 0, len(rows))
 	for _, row := range rows {
 		row.ActiveAggregator = defaultAggregator
@@ -122,9 +149,70 @@ func (s *server) listPaymentRoutingHandler(w http.ResponseWriter, r *http.Reques
 				row.ActiveAggregator, row.IsOverride = agg, true
 			}
 		}
+		row.OperatorEnabled = !disabledOperators[row.CountryISO2+"|"+normalizeOperatorLabel(row.OperatorLabel)]
+		row.CountryEnabled = !disabledCountries[row.CountryISO2]
 		out = append(out, *row)
 	}
 	kit.JSON(w, 200, map[string]any{"routes": out})
+}
+
+// setOperatorEnabledHandler — PUT /payments/operator-enabled. Active ou
+// désactive un opérateur pour un pays donné (masqué du sélecteur checkout
+// pour TOUS les agrégateurs qui le supportent quand désactivé).
+func (s *server) setOperatorEnabledHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CountryISO2   string `json:"country_iso2"`
+		OperatorLabel string `json:"operator_label"`
+		Enabled       bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.CountryISO2 == "" || body.OperatorLabel == "" {
+		kit.Fail(w, 400, "invalid_body", "country_iso2 et operator_label obligatoires")
+		return
+	}
+	iso2 := strings.ToUpper(body.CountryISO2)
+	op := normalizeOperatorLabel(body.OperatorLabel)
+	var err error
+	if body.Enabled {
+		_, err = s.db.Exec(r.Context(),
+			"DELETE FROM payment_operator_disabled WHERE country_iso2=$1 AND operator_label=$2", iso2, op)
+	} else {
+		_, err = s.db.Exec(r.Context(), `
+			INSERT INTO payment_operator_disabled (country_iso2, operator_label) VALUES ($1, $2)
+			ON CONFLICT (country_iso2, operator_label) DO NOTHING`, iso2, op)
+	}
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// setCountryEnabledHandler — PUT /payments/country-enabled. Active ou
+// désactive tout un pays d'un coup (masque tous ses opérateurs du
+// sélecteur checkout, quel que soit l'agrégateur).
+func (s *server) setCountryEnabledHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CountryISO2 string `json:"country_iso2"`
+		Enabled     bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.CountryISO2 == "" {
+		kit.Fail(w, 400, "invalid_body", "country_iso2 obligatoire")
+		return
+	}
+	iso2 := strings.ToUpper(body.CountryISO2)
+	var err error
+	if body.Enabled {
+		_, err = s.db.Exec(r.Context(), "DELETE FROM payment_country_disabled WHERE country_iso2=$1", iso2)
+	} else {
+		_, err = s.db.Exec(r.Context(), `
+			INSERT INTO payment_country_disabled (country_iso2) VALUES ($1)
+			ON CONFLICT (country_iso2) DO NOTHING`, iso2)
+	}
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]string{"status": "ok"})
 }
 
 // setPaymentRoutingHandler — PUT /payments/routing. Enregistre un choix

@@ -399,6 +399,12 @@ func main() {
 		mux.HandleFunc("DELETE /admin/api/payments/routing", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodDelete, s.paymentURL+"/payments/routing")
 		}))
+		mux.HandleFunc("PUT /admin/api/payments/operator-enabled", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPut, s.paymentURL+"/payments/operator-enabled")
+		}))
+		mux.HandleFunc("PUT /admin/api/payments/country-enabled", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPut, s.paymentURL+"/payments/country-enabled")
+		}))
 		mux.HandleFunc("GET /admin/api/finance/overview", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/overview" })))
 		mux.HandleFunc("GET /admin/api/finance/transactions", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/transactions" })))
 		mux.HandleFunc("GET /admin/api/finance/gateways", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payment-methods" })))

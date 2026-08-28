@@ -22,6 +22,38 @@ interface RouteRow {
   paydunya_behavior: string | null
   active_aggregator: 'pawapay' | 'paydunya'
   is_override: boolean
+  operator_enabled: boolean
+  country_enabled: boolean
+}
+
+// Logos réels fournis par le fondateur (2026-08-28), même dossier que le
+// checkout public (frontend/public/logo/mobile-money/, dupliqué ici pour
+// le webui admin) — clé = premier mot du libellé en majuscules, même
+// convention que normalizeOperatorLabel côté Go.
+const OPERATOR_LOGOS: Record<string, string> = {
+  ORANGE: '/logo/mobile-money/orange-money.png',
+  WAVE: '/logo/mobile-money/wave.png',
+  MTN: '/logo/mobile-money/mtn-momo.png',
+  MOOV: '/logo/mobile-money/moov-money.png',
+  VODACOM: '/logo/mobile-money/vodacom.png',
+  AIRTEL: '/logo/mobile-money/at-money.png',
+  MPESA: '/logo/mobile-money/mpesa.png',
+  HALOPESA: '/logo/mobile-money/halopesa.png',
+  ZAMTEL: '/logo/mobile-money/zamtel.png',
+  TNM: '/logo/mobile-money/tnm.png',
+  MOVITEL: '/logo/mobile-money/movitel.png',
+  DJAMO: '/logo/mobile-money/djamo.png',
+  CELTIIS: '/logo/mobile-money/celtiis-cash.jpg',
+  MIXX: '/logo/mobile-money/mixx-yas.png',
+  YAS: '/logo/mobile-money/mixx-yas.png',
+  TELECEL: '/logo/mobile-money/telecel-cash.png',
+  EXPRESSO: '/logo/mobile-money/expresso.png',
+  FREE: '/logo/mobile-money/orange-money.png', // pas de logo dédié fourni — repli texte géré par logoFor()
+}
+
+function logoFor(operatorLabel: string): string | undefined {
+  const key = operatorLabel.split(/\s+/)[0]?.toUpperCase()
+  return key ? OPERATOR_LOGOS[key] : undefined
 }
 
 function supportBadge(supported: boolean, detail?: string | null) {
@@ -91,6 +123,35 @@ export function PaymentRouting() {
     }
   }
 
+  async function toggleOperator(row: RouteRow, enabled: boolean) {
+    const key = row.country_iso2 + '|' + row.operator_label
+    setSaving(key)
+    try {
+      await api.put('/admin/api/payments/operator-enabled', {
+        country_iso2: row.country_iso2,
+        operator_label: row.operator_label,
+        enabled,
+      })
+      load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'échec du changement')
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  async function toggleCountry(countryIso2: string, enabled: boolean) {
+    setSaving(countryIso2)
+    try {
+      await api.put('/admin/api/payments/country-enabled', { country_iso2: countryIso2, enabled })
+      load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'échec du changement')
+    } finally {
+      setSaving(null)
+    }
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -110,7 +171,33 @@ export function PaymentRouting() {
       {loading ? (
         <p className="hint">Chargement…</p>
       ) : (
-        <div className="table-wrap">
+        <>
+          <div className="form-card" style={{ marginBottom: 16 }}>
+            <h3 style={{ marginTop: 0, fontSize: 14 }}>Pays proposés au checkout</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Décocher un pays le retire entièrement du sélecteur mobile money du checkout, quel que
+              soit l'agrégateur.
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+              {[...new Map(rows.map((r) => [r.country_iso2, r])).values()]
+                .sort((a, b) => a.country_name.localeCompare(b.country_name))
+                .map((r) => (
+                  <label
+                    key={r.country_iso2}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: saving === r.country_iso2 ? 'default' : 'pointer' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={r.country_enabled}
+                      disabled={saving === r.country_iso2}
+                      onChange={(e) => toggleCountry(r.country_iso2, e.target.checked)}
+                    />
+                    {r.country_name}
+                  </label>
+                ))}
+            </div>
+          </div>
+          <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -119,6 +206,7 @@ export function PaymentRouting() {
                 <th>PawaPay</th>
                 <th>PayDunya</th>
                 <th>Agrégateur actif</th>
+                <th>Proposé au checkout</th>
                 <th></th>
               </tr>
             </thead>
@@ -126,10 +214,22 @@ export function PaymentRouting() {
               {rows.map((row) => {
                 const key = row.country_iso2 + '|' + row.operator_label
                 const bothSupported = !!row.pawapay_code && !!row.paydunya_code
+                const logo = logoFor(row.operator_label)
+                const rowDisabled = !row.operator_enabled || !row.country_enabled
                 return (
-                  <tr key={key}>
-                    <td>{row.country_name}</td>
-                    <td>{row.operator_label}</td>
+                  <tr key={key} style={rowDisabled ? { opacity: 0.5 } : undefined}>
+                    <td>
+                      {row.country_name}
+                      {!row.country_enabled && <span className="badge" style={{ marginLeft: 6 }}>Pays désactivé</span>}
+                    </td>
+                    <td>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {logo && (
+                          <img src={logo} alt="" style={{ width: 24, height: 24, objectFit: 'contain', borderRadius: 4 }} />
+                        )}
+                        {row.operator_label}
+                      </span>
+                    </td>
                     <td>{supportBadge(!!row.pawapay_code, row.pawapay_auth_type)}</td>
                     <td>{supportBadge(!!row.paydunya_code, row.paydunya_behavior)}</td>
                     <td>
@@ -148,6 +248,17 @@ export function PaymentRouting() {
                       )}
                     </td>
                     <td>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: saving === key ? 'default' : 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={row.operator_enabled}
+                          disabled={saving === key || !row.country_enabled}
+                          onChange={(e) => toggleOperator(row, e.target.checked)}
+                        />
+                        {row.operator_enabled ? 'Actif' : 'Masqué'}
+                      </label>
+                    </td>
+                    <td>
                       {row.is_override && (
                         <button className="btn-link" disabled={saving === key} onClick={() => resetToDefault(row)}>
                           Réinitialiser
@@ -160,7 +271,8 @@ export function PaymentRouting() {
             </tbody>
           </table>
           {rows.length === 0 && <p className="hint">Aucun opérateur trouvé.</p>}
-        </div>
+          </div>
+        </>
       )}
     </div>
   )
