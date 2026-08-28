@@ -1091,7 +1091,19 @@ func (s *server) sendWhatsApp(ctx context.Context, to, recipientType string, ord
 		form.Set("To", "whatsapp:"+strings.TrimPrefix(to, "whatsapp:"))
 		form.Set("From", "whatsapp:"+strings.TrimPrefix(s.twilioWhatsappFrom, "whatsapp:"))
 		if contentSid != "" {
-			varsJSON, _ := json.Marshal(vars)
+			// Twilio rejette ContentVariables si UNE valeur est vide
+			// (erreur 21656 "The Content Variables parameter is invalid").
+			// Ça arrivait dès qu'une commande n'avait pas d'adresse client
+			// complète (addr.fullName()/oneLine() = "") — constaté le
+			// 2026-08-28. On remplace toute valeur vide par "—".
+			cleaned := make(map[string]string, len(vars))
+			for k, v := range vars {
+				if strings.TrimSpace(v) == "" {
+					v = "—"
+				}
+				cleaned[k] = v
+			}
+			varsJSON, _ := json.Marshal(cleaned)
 			form.Set("ContentSid", contentSid)
 			form.Set("ContentVariables", string(varsJSON))
 			bodyLogged = fmt.Sprintf("[template %s] %s", contentSid, string(varsJSON))
