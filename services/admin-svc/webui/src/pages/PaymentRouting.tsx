@@ -31,24 +31,24 @@ interface RouteRow {
 // le webui admin) — clé = premier mot du libellé en majuscules, même
 // convention que normalizeOperatorLabel côté Go.
 const OPERATOR_LOGOS: Record<string, string> = {
-  ORANGE: '/logo/mobile-money/orange-money.png',
-  WAVE: '/logo/mobile-money/wave.png',
-  MTN: '/logo/mobile-money/mtn-momo.png',
-  MOOV: '/logo/mobile-money/moov-money.png',
-  VODACOM: '/logo/mobile-money/vodacom.png',
-  AIRTEL: '/logo/mobile-money/at-money.png',
-  MPESA: '/logo/mobile-money/mpesa.png',
-  HALOPESA: '/logo/mobile-money/halopesa.png',
-  ZAMTEL: '/logo/mobile-money/zamtel.png',
-  TNM: '/logo/mobile-money/tnm.png',
-  MOVITEL: '/logo/mobile-money/movitel.png',
-  DJAMO: '/logo/mobile-money/djamo.png',
-  CELTIIS: '/logo/mobile-money/celtiis-cash.jpg',
-  MIXX: '/logo/mobile-money/mixx-yas.png',
-  YAS: '/logo/mobile-money/mixx-yas.png',
-  TELECEL: '/logo/mobile-money/telecel-cash.png',
-  EXPRESSO: '/logo/mobile-money/expresso.png',
-  FREE: '/logo/mobile-money/orange-money.png', // pas de logo dédié fourni — repli texte géré par logoFor()
+  ORANGE: '/admin/logo/mobile-money/orange-money.png',
+  WAVE: '/admin/logo/mobile-money/wave.png',
+  MTN: '/admin/logo/mobile-money/mtn-momo.png',
+  MOOV: '/admin/logo/mobile-money/moov-money.png',
+  VODACOM: '/admin/logo/mobile-money/vodacom.png',
+  AIRTEL: '/admin/logo/mobile-money/at-money.png',
+  MPESA: '/admin/logo/mobile-money/mpesa.png',
+  HALOPESA: '/admin/logo/mobile-money/halopesa.png',
+  ZAMTEL: '/admin/logo/mobile-money/zamtel.png',
+  TNM: '/admin/logo/mobile-money/tnm.png',
+  MOVITEL: '/admin/logo/mobile-money/movitel.png',
+  DJAMO: '/admin/logo/mobile-money/djamo.png',
+  CELTIIS: '/admin/logo/mobile-money/celtiis-cash.jpg',
+  MIXX: '/admin/logo/mobile-money/mixx-yas.png',
+  YAS: '/admin/logo/mobile-money/mixx-yas.png',
+  TELECEL: '/admin/logo/mobile-money/telecel-cash.png',
+  EXPRESSO: '/admin/logo/mobile-money/expresso.png',
+  FREE: '/admin/logo/mobile-money/orange-money.png', // pas de logo dédié fourni — repli texte géré par logoFor()
 }
 
 function logoFor(operatorLabel: string): string | undefined {
