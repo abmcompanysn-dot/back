@@ -10,7 +10,7 @@ export const runtime = 'edge';
 // ISR : revalidate toutes les 60s — les données arrivent du serveur WooCommerce directement
 export const revalidate = 60
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com'
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca'
 
 // Échappe "<" pour empêcher toute évasion de balise (ex: "</script>") quand le
 // JSON est injecté brut dans le HTML via dangerouslySetInnerHTML.

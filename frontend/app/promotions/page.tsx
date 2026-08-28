@@ -13,7 +13,7 @@ import { CouponsSection } from '@/components/miad/CouponsSection'
 export const runtime = 'edge'
 export const revalidate = 300
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com'
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca'
 
 export const metadata: Metadata = {
   title: 'Promotions en cours | MIAD Market',

@@ -11,7 +11,7 @@ interface ProductPageProps {
   params: Promise<{ slug: string }>
 }
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com'
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca'
 
 // Regroupe COUNTRY_TO_ZONE (lib/shipping-utils.ts) par zone, pour le JSON-LD
 // "shippingDetails" — un OfferShippingDetails par zone MIAD réelle plutôt

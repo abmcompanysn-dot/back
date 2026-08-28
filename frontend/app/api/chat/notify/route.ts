@@ -3,7 +3,7 @@ import { LOYALTY_SVC_URL, EMAIL_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com').replace(/\/$/, '')
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca').replace(/\/$/, '')
 
 /**
  * Notifie un représentant qu'un client lui a écrit. email-svc a un modèle

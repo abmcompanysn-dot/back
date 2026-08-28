@@ -3,7 +3,7 @@ import { CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge'
 
-const BASE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com').replace(/\/$/, '')
+const BASE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca').replace(/\/$/, '')
 
 interface CatalogProduct {
   id: number

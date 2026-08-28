@@ -158,7 +158,7 @@ function OgImage() {
         fontWeight: 600,
         letterSpacing: 1,
       }}>
-        <span>miadmarket.com</span>
+        <span>miadmarket.ca</span>
         <span style={{ color: '#ea580c' }}>•</span>
         <span>Wave · Orange Money · Carte bancaire</span>
       </div>
@@ -167,7 +167,7 @@ function OgImage() {
 }
 
 export async function GET() {
-  const text = 'MIAD Market — Made in Africa, Shared with the World 🌍 Marketplace Panafricaine 🛒 Artisanat 👗 Mode 🌿 Alimentation 💄 Beauté miadmarket.com • Wave · Orange Money · Carte bancaire'
+  const text = 'MIAD Market — Made in Africa, Shared with the World 🌍 Marketplace Panafricaine 🛒 Artisanat 👗 Mode 🌿 Alimentation 💄 Beauté miadmarket.ca • Wave · Orange Money · Carte bancaire'
 
   const [regular, bold, black] = await Promise.all([
     loadGoogleFont('Inter', 400, text),

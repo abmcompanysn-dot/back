@@ -15,7 +15,7 @@ const inter = Inter({
   variable: '--font-inter'
 });
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com'
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca'
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

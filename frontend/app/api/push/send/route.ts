@@ -4,7 +4,7 @@ import { getGoogleAccessToken } from '@/lib/firebase-custom-token'
 export const runtime = 'edge';
 
 const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || ''
-const SITE_URL = 'https://www.miadmarket.com'
+const SITE_URL = 'https://miadmarket.ca'
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging'
 const CONCURRENCY = 20
 

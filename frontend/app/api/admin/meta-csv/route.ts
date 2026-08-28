@@ -3,7 +3,7 @@ import { fetchWpUser, isAdmin, CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/mia
 
 export const runtime = 'edge';
 
-const SITE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://www.miadmarket.com').replace(/\/$/, '')
+const SITE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca').replace(/\/$/, '')
 
 interface CatalogProduct {
   id: number
