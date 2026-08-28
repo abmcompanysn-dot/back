@@ -133,11 +133,12 @@ CREATE INDEX IF NOT EXISTS idx_whatsapp_logs_created ON whatsapp_logs (created_a
 `
 
 type server struct {
-	db        *pgxpool.Pool
-	kafka     sarama.SyncProducer
-	vendorURL string
-	orderURL  string
-	emailURL  string
+	db             *pgxpool.Pool
+	kafka          sarama.SyncProducer
+	vendorURL      string
+	orderURL       string
+	emailURL       string
+	fulfillmentURL string
 
 	settings *kit.SettingsStore
 	// Champs pointés par settings (voir NewSettingsStore) — mêmes garanties
@@ -189,11 +190,12 @@ func main() {
 	}
 
 	s := &server{
-		db:        db,
-		kafka:     kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
-		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
-		emailURL:  kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
+		db:             db,
+		kafka:          kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		vendorURL:      kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+		orderURL:       kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
+		emailURL:       kit.Env("EMAIL_SVC_URL", "http://email-svc:8089"),
+		fulfillmentURL: kit.Env("FULFILLMENT_SVC_URL", "http://fulfillment-svc:8090"),
 
 		twilioAccountSID:   kit.Env("TWILIO_ACCOUNT_SID", ""),
 		twilioAuthToken:    kit.Env("TWILIO_AUTH_TOKEN", ""),
@@ -1153,10 +1155,11 @@ func (s *server) sendWhatsApp(ctx context.Context, to, recipientType string, ord
 // notifications représentant au lieu d'une par pays réellement concerné.
 func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID int64) {
 	var order struct {
-		Reference     string `json:"reference"`
-		TotalUSD      string `json:"total"`
-		ShippingTotal string `json:"shipping_total"`
-		LineItems     []struct {
+		Reference       string          `json:"reference"`
+		TotalUSD        string          `json:"total"`
+		ShippingTotal   string          `json:"shipping_total"`
+		ShippingAddress json.RawMessage `json:"shipping_address"`
+		LineItems       []struct {
 			VendorID int64  `json:"vendor_id"`
 			Name     string `json:"name"`
 			Quantity int    `json:"quantity"`
@@ -1170,12 +1173,16 @@ func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID 
 		return
 	}
 
-	// Adresse de livraison — le format parent (getParentOrder) n'expose pas
-	// encore shipping_address (limitation connue, à ajouter séparément côté
-	// order-svc si besoin) : les templates représentant l'affichent via
-	// {{.5}}/shipping_summary, laissés vides pour l'instant plutôt que de
-	// bloquer la notification sur un appel supplémentaire non garanti.
-	var addr parsedAddress
+	// Adresse de livraison — getParentOrder l'expose désormais (order-svc).
+	// Sert aux variables {{4}} (nom client) et {{5}} (adresse) des templates
+	// rep/admin. Le mode de livraison n'est pas persisté côté order-svc :
+	// on le déduit du shipping_total (0 = gratuit, sinon "Standard") pour
+	// rester aligné avec le format PHP {{5}} = "…adresse… — Livraison : X".
+	addr := parseAddress(order.ShippingAddress)
+	deliveryMethod := "Standard"
+	if order.ShippingTotal == "0.00" || order.ShippingTotal == "0" {
+		deliveryMethod = "Livraison offerte"
+	}
 	productsSummary := summarizeVendorLines(order.LineItems)
 	totalFmt := order.TotalUSD + " $"
 
@@ -1216,11 +1223,14 @@ func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID 
 				fallback := fmt.Sprintf("🛒 *Nouvelle commande #%s*\nBoutique : %s\nMontant total : *%s*\nProduits : %s",
 					order.Reference, vendor.Name, totalFmt, productsSummary)
 				s.sendWhatsApp(ctx, *wa, "representative", &orderID, s.twilioTemplateRepNewOrder, map[string]string{
-					"1": order.Reference + " — " + productsSummary,
+					"1": "#" + order.Reference + " — " + productsSummary,
 					"2": vendor.Name,
 					"3": totalFmt,
 					"4": addr.fullName(),
-					"5": addr.oneLine(),
+					// {{5}} = adresse + " — Livraison : X" (format aligné sur le
+					// plugin PHP miad_notify_rep_new_order, pour ne pas retoucher
+					// le template Twilio approuvé).
+					"5": addr.oneLine() + " — Livraison : " + deliveryMethod,
 					"6": productsSummary,
 				}, fallback)
 			}
@@ -1256,10 +1266,26 @@ func (s *server) notifyOrderPaid(ctx context.Context, log *slog.Logger, orderID 
 				"1": order.Reference,
 				"2": addr.fullName(),
 				"3": totalFmt,
-				"4": time.Now().Format("02/01/2006 15:04"),
-				"5": addr.oneLine(),
+				// Format PHP : "d/m/Y à H:i" (avec "à" entre date et heure).
+				"4": time.Now().Format("02/01/2006 à 15:04"),
+				"5": addr.oneLine() + " — Livraison : " + deliveryMethod,
 			}, fallback)
 		}
+	}
+
+	// ---------- Client : confirmation de paiement ----------
+	// Le plugin PHP (miad_notify_client_on_status → 'processing') envoie au
+	// client un message de confirmation dès le paiement. Le backend Go ne le
+	// faisait à aucun moment. Template client_confirm : {{1}}=prénom,
+	// {{2}}=n° commande, {{3}}=nom du site. Fallback texte + lien de suivi.
+	if s.twilioEnableClient == "yes" && addr.phone != "" {
+		fallback := fmt.Sprintf("🙏 Merci %s pour votre commande #%s sur MIAD Market !\nNous la préparons avec soin.\nSuivre ma commande : https://miadmarket.ca/suivi/%d",
+			addr.firstName(), order.Reference, orderID)
+		s.sendWhatsApp(ctx, addr.phone, "client", &orderID, s.twilioTemplateClientConfirm, map[string]string{
+			"1": addr.firstName(),
+			"2": order.Reference,
+			"3": "MIAD Market",
+		}, fallback)
 	}
 }
 
@@ -1326,10 +1352,19 @@ func (s *server) notifyDeliveryStage(ctx context.Context, log *slog.Logger, orde
 
 	fallback := fmt.Sprintf(tmpl, addr.firstName(), strconv.FormatInt(orderID, 10))
 	if stage == "intl_handoff" {
+		// {{3}} = vrai n° de suivi DHL (fulfillment-svc) plutôt que "N/A"
+		// codé en dur — aligné sur le plugin PHP (_miad_dhl_tracking_number).
+		tracking := "N/A"
+		var ship struct {
+			TrackingNumber string `json:"tracking_number"`
+		}
+		if err := fetchJSONInto(ctx, fmt.Sprintf("%s/shipments/order/%d", s.fulfillmentURL, orderID), &ship); err == nil && ship.TrackingNumber != "" {
+			tracking = ship.TrackingNumber
+		}
 		s.sendWhatsApp(ctx, addr.phone, "client", &orderID, s.twilioTemplateClientShipped, map[string]string{
 			"1": addr.firstName(),
 			"2": strconv.FormatInt(orderID, 10),
-			"3": "N/A",
+			"3": tracking,
 		}, fallback)
 		return
 	}
