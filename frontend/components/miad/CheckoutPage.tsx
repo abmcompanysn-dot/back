@@ -471,33 +471,19 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
         }
       }
       else if (resolvedMethod === 'paydunya' && data.paydunyaToken) {
+        // Flux SoftPay sans redirection (2026-08-28) — même formulaire
+        // que PawaPay (MobileMoneyDirectForm, prop aggregator='paydunya').
+        // L'ancien SDK modal PayDunyaCheckout n'est plus utilisé ici : le
+        // client saisit désormais son opérateur/numéro directement sur
+        // MIAD, PayDunya n'affiche plus jamais son interface pour les
+        // opérateurs mobile money (reste utilisé en interne pour les
+        // providers "redirect" comme Wave/Djamo, géré par
+        // MobileMoneyDirectForm elle-même, transparent ici).
         setCreatedOrderId(data.orderId);
         setParentOrderIdForRedirect(data.parentOrderId ?? data.orderId);
-        // Ouverture de la modal PayDunya via le SDK chargé par Script
-        if (typeof (window as any).PayDunyaCheckout !== 'undefined') {
-          (window as any).PayDunyaCheckout.setup({
-            token: data.paydunyaToken,
-            onSuccess: () => {
-              trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod: 'paydunya' } })
-              setStep('confirm');
-              window.scrollTo(0, 0)
-              trackEvent('checkout_step', { checkoutStepNumber: 3, metadata: { step: 'confirm', paymentMethod: 'paydunya' } })
-              setTimeout(onOrderComplete, 5000);
-            },
-            onFailure: () => {
-              trackEvent('payment_failed', { cartValue: total, paymentFailureReason: 'paydunya_failure', metadata: { paymentMethod: 'paydunya' } })
-              toast.error("Le paiement a échoué. Veuillez réessayer.");
-            },
-            onClose: () => {
-              trackEvent('cart_abandoned', { cartValue: total, metadata: { step: 'payment', paymentMethod: 'paydunya' } })
-              toast("Paiement annulé.");
-            }
-          });
-          (window as any).PayDunyaCheckout.open();
-        } else {
-          // Si le SDK n'est pas prêt, redirection vers l'URL directe
-          window.location.href = data.paydunyaUrl;
-        }
+        trackEvent('checkout_step', { checkoutStepNumber: 2, metadata: { step: 'mobile_money_form', paymentMethod: 'paydunya' } })
+        setShowMobileMoneyForm(true)
+        window.scrollTo(0, 0)
       }
       else {
         // resolvedMethod ne peut plus valoir 'pawapay' ici : le bloc
@@ -595,17 +581,20 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
               <p className="text-sm text-muted-foreground mt-2 font-medium">Commande #{createdOrderId} · Total : {fp(total)}</p>
             </div>
             <MobileMoneyDirectForm
+              aggregator={mobileMoneyProvider}
               orderId={createdOrderId}
               countryISO2={formData.country}
               phoneHint={formData.phone}
+              customerName={`${formData.first_name} ${formData.last_name}`.trim()}
+              customerEmail={formData.email}
               onSuccess={() => {
-                trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod: 'pawapay' } })
+                trackEvent('payment_success', { cartValue: total, metadata: { paymentMethod: mobileMoneyProvider } })
                 setStep('confirm')
                 window.scrollTo(0, 0)
                 setTimeout(onOrderComplete, 5000)
               }}
               onFailure={(message) => {
-                trackEvent('payment_failed', { cartValue: total, paymentFailureReason: 'pawapay_failure', metadata: { paymentMethod: 'pawapay' } })
+                trackEvent('payment_failed', { cartValue: total, paymentFailureReason: `${mobileMoneyProvider}_failure`, metadata: { paymentMethod: mobileMoneyProvider } })
                 toast.error(message)
               }}
               onNeedsFormRestart={() => { setShowMobileMoneyForm(false); setStep('form') }}

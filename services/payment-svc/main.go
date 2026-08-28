@@ -348,6 +348,8 @@ func main() {
 		mux.HandleFunc("GET /settings", s.getSettings)
 		mux.HandleFunc("PUT /settings", s.putSettings)
 		mux.HandleFunc("POST /payments/init", s.initPayment)
+		mux.HandleFunc("POST /payments/paydunya/softpay-deposit", s.paydunyaSoftpayDepositHandler)
+		mux.HandleFunc("POST /payments/paydunya/wizall-confirm", s.paydunyaWizallConfirmHandler)
 		mux.HandleFunc("GET /payments", s.listPayments)
 		mux.HandleFunc("GET /payments/order/{order_id}", s.getPayment)
 		mux.HandleFunc("GET /payment-methods", s.listPaymentMethods)
@@ -355,6 +357,7 @@ func main() {
 		mux.HandleFunc("POST /payments/webhook/paydunya", s.paydunyaCallback)
 		mux.HandleFunc("POST /payments/webhook/pawapay", s.pawapayWebhook)
 		mux.HandleFunc("GET /pawapay/countries", s.listPawapayCountries)
+		mux.HandleFunc("GET /paydunya/softpay-providers", s.listPaydunyaSoftpayProviders)
 		mux.HandleFunc("GET /wallet/{vendor_id}", s.getWallet)
 		mux.HandleFunc("GET /wallet/{vendor_id}/transactions", s.listWalletTransactions)
 		mux.HandleFunc("POST /payout-requests", s.createPayoutRequest)
@@ -2119,6 +2122,80 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		"client_secret": clientSecret, // Stripe Elements (vide pour PayDunya/PawaPay)
 		"redirect_url":  redirect,     // PayDunya (facture) ou PawaPay (Payment Page)
 	})
+}
+
+// paydunyaSoftpayDepositHandler — POST /payments/paydunya/softpay-deposit
+// (2026-08-28). Étape 2 du flux SoftPay : suppose que POST /payments/init
+// a déjà été appelé pour cette commande (provider='paydunya'), ce qui a
+// déjà créé l'invoice PayDunya classique et stocké son token dans
+// payments.provider_ref — cet endpoint réutilise ce token tel quel, ne
+// recrée jamais d'invoice.
+func (s *server) paydunyaSoftpayDepositHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OrderID       int64  `json:"order_id"`
+		Provider      string `json:"provider"` // ex. "ORANGE_SN", voir paydunyaSoftpayProviders
+		CustomerName  string `json:"customer_name"`
+		CustomerEmail string `json:"customer_email"`
+		Phone         string `json:"phone"`
+		OTP           string `json:"otp"` // requis seulement pour les providers RequiresOTP
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrderID == 0 || body.Provider == "" {
+		kit.Fail(w, 400, "invalid_body", "order_id et provider obligatoires")
+		return
+	}
+	ctx := r.Context()
+
+	var invoiceToken string
+	if err := s.db.QueryRow(ctx,
+		"SELECT provider_ref FROM payments WHERE order_id=$1 AND provider='paydunya' ORDER BY id DESC LIMIT 1", body.OrderID,
+	).Scan(&invoiceToken); err != nil || invoiceToken == "" {
+		slog.Error("paydunyaSoftpayDepositHandler: aucune invoice PayDunya trouvée — /payments/init a-t-il été appelé avant ?", "order_id", body.OrderID, "err", err)
+		kit.Fail(w, 404, "invoice_not_found", "aucune facture PayDunya pour cette commande — appelez /payments/init d'abord")
+		return
+	}
+
+	result, err := s.initiateSoftpayDeposit(ctx, body.Provider, body.CustomerName, body.CustomerEmail, body.Phone, invoiceToken, body.OTP)
+	if err != nil {
+		slog.Error("paydunyaSoftpayDepositHandler: appel SoftPay échoué", "order_id", body.OrderID, "provider", body.Provider, "err", err)
+		kit.Fail(w, 502, "paydunya_softpay_error", err.Error())
+		return
+	}
+	if !result.Success {
+		kit.Fail(w, 402, "paydunya_softpay_rejected", result.Message)
+		return
+	}
+
+	// WizallTxID présent = flux à 3 étapes, le frontend doit encore
+	// appeler /payments/paydunya/wizall-confirm avec l'OTP reçu par SMS —
+	// PAS encore payé malgré success=true ici.
+	kit.JSON(w, 200, map[string]any{
+		"success":      true,
+		"message":      result.Message,
+		"redirect_url": result.RedirectURL, // non vide = provider "redirect" (Wave, Djamo, Orange CI QR)
+		"wizall_tx_id": result.WizallTxID,  // non vide = provider WIZALL_SN, confirm requis
+	})
+}
+
+// paydunyaWizallConfirmHandler — POST /payments/paydunya/wizall-confirm
+// (2026-08-28). 3e étape spécifique à Wizall (OTP reçu par SMS après
+// paydunyaSoftpayDepositHandler ci-dessus).
+func (s *server) paydunyaWizallConfirmHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Phone         string `json:"phone"`
+		TransactionID string `json:"transaction_id"`
+		AuthCode      string `json:"auth_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.TransactionID == "" || body.AuthCode == "" {
+		kit.Fail(w, 400, "invalid_body", "transaction_id et auth_code obligatoires")
+		return
+	}
+	result, err := s.confirmWizallDeposit(r.Context(), body.Phone, body.TransactionID, body.AuthCode)
+	if err != nil {
+		slog.Error("paydunyaWizallConfirmHandler: confirmation échouée", "transaction_id", body.TransactionID, "err", err)
+		kit.Fail(w, 502, "paydunya_wizall_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"success": result.Success, "message": result.Message})
 }
 
 func (s *server) listPayments(w http.ResponseWriter, r *http.Request) {

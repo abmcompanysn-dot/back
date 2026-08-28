@@ -72,6 +72,12 @@
 	handle /pawapay/* {
 		reverse_proxy payment-svc:8084
 	}
+	# GET /paydunya/softpay-providers (checkout mobile money sans
+	# redirection, 2026-08-28) — même piège que /pawapay/* ci-dessus,
+	# ajouté directement cette fois pour ne pas le redécouvrir en 404.
+	handle /paydunya/* {
+		reverse_proxy payment-svc:8084
+	}
 
 	# Livraison — shipping-svc (zone internationale + national Sénégal)
 	handle /shipping-rates* {

@@ -8,16 +8,21 @@ import { Input } from '@/components/ui/input'
 
 // MobileMoneyDirectForm — flux "sans redirection" (2026-08-28) : le client
 // choisit son opérateur + saisit son numéro directement sur notre page,
-// au lieu d'être envoyé sur une page hébergée par l'agrégateur. Conçu
-// agrégateur-agnostique (le nom "PawaPay" n'apparaît nulle part dans ce
-// composant) même si PawaPay est le seul branché aujourd'hui — voir le
-// plan pawapay-sans-redirection.md.
+// au lieu d'être envoyé sur une page hébergée par l'agrégateur.
 //
-// Certains opérateurs (authType=REDIRECT_AUTH côté PawaPay) exigent
-// quand même une redirection : gérée de façon TRANSPARENTE côté backend
-// (initiateMobileMoneyDeposit bascule automatiquement), ce composant ne
-// s'en préoccupe pas — il reçoit soit un redirectUrl (à suivre), soit un
-// depositId (à interroger).
+// Supporte DEUX agrégateurs (prop `aggregator`, déterminée côté
+// CheckoutPage.tsx par lequel est actif en Configuration) :
+// - PawaPay : schéma de requête uniforme, sélecteur pays PUIS opérateur
+//   (liste dépend du pays). Certains opérateurs (authType=REDIRECT_AUTH)
+//   exigent quand même une redirection — gérée en transparent côté
+//   backend (initiateMobileMoneyDeposit), ce composant reçoit juste soit
+//   un redirectUrl (à suivre), soit rien (passe en polling).
+// - PayDunya (SoftPay) : chaque opérateur a son PROPRE format de requête
+//   (géré côté backend, paydunya-softpay.go) — la liste de providers
+//   n'est PAS filtrée par pays choisi ici (chaque provider EST déjà lié
+//   à un pays, ex. "MTN_CI"), certains exigent un OTP saisi par le
+//   client AVANT l'appel (Orange Money CI/BF), un (Wizall) a un flux à
+//   3 étapes (dépôt → OTP par SMS → confirmation séparée).
 
 interface MobileMoneyProvider {
   code: string
@@ -31,6 +36,14 @@ interface MobileMoneyCountry {
   dial_code: string
   providers: string[]
   providers_detail?: MobileMoneyProvider[]
+}
+interface PaydunyaProvider {
+  code: string
+  country_iso2: string
+  label: string
+  behavior: 'sync' | 'pending' | 'redirect'
+  requires_otp: boolean
+  otp_instruction: string
 }
 
 // Libellés + logos pour les codes provider PawaPay (ex. ORANGE_SEN) —
@@ -70,9 +83,12 @@ function providerInfo(code: string): { label: string; logo?: string } {
 }
 
 interface Props {
+  aggregator: 'pawapay' | 'paydunya'
   orderId: number
   countryISO2: string // pré-rempli depuis l'adresse de livraison déjà saisie
   phoneHint: string   // numéro déjà saisi au checkout, pré-rempli mais modifiable
+  customerName?: string
+  customerEmail?: string
   onSuccess: () => void
   onFailure: (message: string) => void
   onNeedsFormRestart: () => void // si la commande doit être recréée (échec avant tout dépôt)
@@ -81,32 +97,46 @@ interface Props {
 const POLL_INTERVAL_MS = 3000
 const WAITING_MESSAGE_AFTER_MS = 90_000
 
-export function MobileMoneyDirectForm({ orderId, countryISO2, phoneHint, onSuccess, onFailure }: Props) {
+export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneHint, customerName, customerEmail, onSuccess, onFailure }: Props) {
   const [countries, setCountries] = useState<MobileMoneyCountry[]>([])
+  const [paydunyaProviders, setPaydunyaProviders] = useState<PaydunyaProvider[]>([])
   const [countriesLoading, setCountriesLoading] = useState(true)
   const [country, setCountry] = useState(countryISO2.toUpperCase())
   const [provider, setProvider] = useState('')
   const [phone, setPhone] = useState(phoneHint)
+  const [otp, setOtp] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [waiting, setWaiting] = useState(false)
   const [showWaitingMessage, setShowWaitingMessage] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Wizall (PayDunya) uniquement : dépôt initial accepté, en attente de
+  // l'OTP reçu par SMS pour la 3e étape (confirm) — voir handleWizallConfirm.
+  const [wizallTxId, setWizallTxId] = useState<string | null>(null)
+  const [wizallOtp, setWizallOtp] = useState('')
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const waitingMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    fetch('/api/payment-gateways/mobile-money-countries')
-      .then((r) => r.json())
-      .then((data) => {
-        setCountries(data.countries || [])
-        if (!data.countries?.some((c: MobileMoneyCountry) => c.iso2 === country)) {
-          setCountry(data.default_iso2 || 'SN')
-        }
-      })
-      .catch(() => {})
-      .finally(() => setCountriesLoading(false))
+    if (aggregator === 'pawapay') {
+      fetch('/api/payment-gateways/mobile-money-countries')
+        .then((r) => r.json())
+        .then((data) => {
+          setCountries(data.countries || [])
+          if (!data.countries?.some((c: MobileMoneyCountry) => c.iso2 === country)) {
+            setCountry(data.default_iso2 || 'SN')
+          }
+        })
+        .catch(() => {})
+        .finally(() => setCountriesLoading(false))
+    } else {
+      fetch('/api/payment-gateways/paydunya-providers')
+        .then((r) => r.json())
+        .then((data) => setPaydunyaProviders(data.providers || []))
+        .catch(() => {})
+        .finally(() => setCountriesLoading(false))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [aggregator])
 
   useEffect(() => {
     return () => {
@@ -116,17 +146,32 @@ export function MobileMoneyDirectForm({ orderId, countryISO2, phoneHint, onSucce
   }, [])
 
   const selectedCountry = countries.find((c) => c.iso2 === country)
-  const providers = selectedCountry?.providers_detail?.length
-    ? selectedCountry.providers_detail
-    : (selectedCountry?.providers || []).map((code) => ({ code, authType: '' }))
+  // PawaPay : opérateurs filtrés par le pays choisi (providers_detail).
+  // PayDunya : chaque provider code EST déjà lié à un pays (ex. MTN_CI),
+  // donc filtré directement sur countryISO2 initial (pas de sélecteur
+  // pays séparé pour PayDunya — le pays de livraison déjà saisi au
+  // checkout suffit, contrairement à PawaPay où le client peut vouloir
+  // payer depuis un pays différent du pays de livraison).
+  const providers = aggregator === 'pawapay'
+    ? (selectedCountry?.providers_detail?.length
+        ? selectedCountry.providers_detail
+        : (selectedCountry?.providers || []).map((code) => ({ code, authType: '' })))
+    : paydunyaProviders.filter((p) => p.country_iso2 === countryISO2.toUpperCase()).map((p) => ({ code: p.code, authType: '' }))
+  const selectedPaydunyaProvider = aggregator === 'paydunya' ? paydunyaProviders.find((p) => p.code === provider) : null
 
+  // Endpoint de statut commun aux deux agrégateurs : confirm-pawapay et
+  // confirm-paydunya relisent tous deux le statut agrégé de la commande
+  // depuis order-svc (déjà mis à jour par leur webhook respectif) — même
+  // contrat de réponse ({status: 'pending'|'completed'|'failed'}),
+  // seul le chemin change.
   function startPolling() {
+    const statusEndpoint = aggregator === 'pawapay' ? 'confirm-pawapay' : 'confirm-paydunya'
     setWaiting(true)
     setShowWaitingMessage(false)
     waitingMessageTimer.current = setTimeout(() => setShowWaitingMessage(true), WAITING_MESSAGE_AFTER_MS)
     pollTimer.current = setInterval(async () => {
       try {
-        const res = await fetch(`/api/orders/${orderId}/confirm-pawapay`, { method: 'POST' })
+        const res = await fetch(`/api/orders/${orderId}/${statusEndpoint}`, { method: 'POST' })
         const data = await res.json()
         if (data.status === 'completed') {
           if (pollTimer.current) clearInterval(pollTimer.current)
@@ -152,32 +197,115 @@ export function MobileMoneyDirectForm({ orderId, countryISO2, phoneHint, onSucce
       setError('Choisissez votre opérateur et saisissez votre numéro.')
       return
     }
+    if (aggregator === 'paydunya' && selectedPaydunyaProvider?.requires_otp && !otp.trim()) {
+      setError('Saisissez le code reçu après avoir suivi les instructions ci-dessus.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
       const token = localStorage.getItem('miad_token') || localStorage.getItem('token')
-      const res = await fetch(`/api/orders/${orderId}/mobile-money-deposit`, {
+
+      if (aggregator === 'pawapay') {
+        const res = await fetch(`/api/orders/${orderId}/mobile-money-deposit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ provider, phone, country }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Échec du paiement')
+        if (data.redirectUrl) {
+          // Cet opérateur précis exige une redirection côté agrégateur
+          // (REDIRECT_AUTH) — transparent pour le client, juste amené
+          // sur la page de son opérateur comme avant ce nouveau flux.
+          window.location.href = data.redirectUrl
+          return
+        }
+        startPolling()
+        return
+      }
+
+      // PayDunya SoftPay
+      const res = await fetch(`/api/orders/${orderId}/paydunya-softpay-deposit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ provider, phone, country }),
+        body: JSON.stringify({ provider, phone, customerName, customerEmail, otp }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Échec du paiement')
-
       if (data.redirectUrl) {
-        // Cet opérateur précis exige une redirection côté agrégateur
-        // (REDIRECT_AUTH) — transparent pour le client, juste amené sur
-        // la page de son opérateur comme avant ce nouveau flux.
+        // Provider "redirect" (Wave, Djamo, Orange Money CI en QR) —
+        // même principe que REDIRECT_AUTH côté PawaPay.
         window.location.href = data.redirectUrl
         return
       }
-      // Pas de redirectUrl : dépôt direct accepté, on passe en polling.
+      if (data.wizallTxId) {
+        // Flux à 3 étapes : le dépôt est accepté mais PAS confirmé — le
+        // client va recevoir un OTP par SMS à saisir dans l'écran suivant.
+        setWizallTxId(data.wizallTxId)
+        setSubmitting(false)
+        return
+      }
+      // sync ou pending : dans les deux cas success=true à ce stade, mais
+      // "pending" veut dire que le client doit encore agir sur son
+      // téléphone (composer un code, confirmer un SMS...) — le polling
+      // couvre les deux : pour "sync" le webhook confirmera quasi
+      // instantanément, pour "pending" ça prendra le temps que le client
+      // termine son geste.
       startPolling()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Échec du paiement')
     } finally {
       setSubmitting(false)
     }
+  }
+
+  async function handleWizallConfirm() {
+    if (!wizallOtp.trim()) {
+      setError('Saisissez le code reçu par SMS.')
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      const token = localStorage.getItem('miad_token') || localStorage.getItem('token')
+      const res = await fetch(`/api/orders/${orderId}/paydunya-wizall-confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ phone, transactionId: wizallTxId, authCode: wizallOtp }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) throw new Error(data.error || data.message || 'Confirmation échouée')
+      startPolling()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Confirmation échouée')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (wizallTxId) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-2xl text-[11px] text-blue-800 font-bold leading-snug">
+          <Smartphone size={15} className="shrink-0 mt-0.5 text-blue-600" />
+          <span>Un code vous a été envoyé par SMS. Saisissez-le ci-dessous pour finaliser votre paiement.</span>
+        </div>
+        <div>
+          <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1.5 block">Code reçu par SMS</label>
+          <Input value={wizallOtp} onChange={(e) => setWizallOtp(e.target.value)} placeholder="123456" className="h-12" />
+        </div>
+        {error && (
+          <div className="flex items-start gap-2.5 px-4 py-3 bg-red-50 border border-red-200 rounded-2xl text-[11px] text-red-800 font-bold leading-snug">
+            <AlertCircle size={15} className="shrink-0 mt-0.5 text-red-600" />
+            <span>{error}</span>
+          </div>
+        )}
+        <Button onClick={handleWizallConfirm} disabled={submitting} className="w-full h-12 font-bold">
+          {submitting ? <Loader2 size={18} className="animate-spin" /> : 'Confirmer le paiement'}
+        </Button>
+      </div>
+    )
   }
 
   if (waiting) {
@@ -207,19 +335,21 @@ export function MobileMoneyDirectForm({ orderId, countryISO2, phoneHint, onSucce
 
   return (
     <div className="space-y-4">
-      <div>
-        <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1.5 block">Pays</label>
-        <select
-          value={country}
-          onChange={(e) => { setCountry(e.target.value); setProvider('') }}
-          disabled={countriesLoading}
-          className="w-full h-12 rounded-xl border border-input bg-background px-3 text-sm"
-        >
-          {countries.map((c) => (
-            <option key={c.iso2} value={c.iso2}>{c.name}</option>
-          ))}
-        </select>
-      </div>
+      {aggregator === 'pawapay' && (
+        <div>
+          <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1.5 block">Pays</label>
+          <select
+            value={country}
+            onChange={(e) => { setCountry(e.target.value); setProvider('') }}
+            disabled={countriesLoading}
+            className="w-full h-12 rounded-xl border border-input bg-background px-3 text-sm"
+          >
+            {countries.map((c) => (
+              <option key={c.iso2} value={c.iso2}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div>
         <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1.5 block">Opérateur</label>
@@ -259,6 +389,19 @@ export function MobileMoneyDirectForm({ orderId, countryISO2, phoneHint, onSucce
           className="h-12"
         />
       </div>
+
+      {selectedPaydunyaProvider?.requires_otp && (
+        <>
+          <div className="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-2xl text-[11px] text-blue-800 font-bold leading-snug">
+            <AlertCircle size={15} className="shrink-0 mt-0.5 text-blue-600" />
+            <span>{selectedPaydunyaProvider.otp_instruction}</span>
+          </div>
+          <div>
+            <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1.5 block">Code reçu</label>
+            <Input value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="123456" className="h-12" />
+          </div>
+        </>
+      )}
 
       {error && (
         <div className="flex items-start gap-2.5 px-4 py-3 bg-red-50 border border-red-200 rounded-2xl text-[11px] text-red-800 font-bold leading-snug">
