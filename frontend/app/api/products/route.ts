@@ -185,7 +185,18 @@ export async function GET(req: Request) {
           next: { revalidate: 3600, tags: ['categories'] },
         });
         const catData = catRes.ok ? await catRes.json().catch(() => ({})) : {};
-        const match = (catData.items || catData.categories || []).find((c: any) => c.slug === category);
+        // Les slugs en base portent un suffixe de langue (`mode-vetements-fr`,
+        // `mode-vetements-en`) — voir catalog-svc listCategories, qui renvoie
+        // le slug brut filtré par c.lang. Or plusieurs appelants (le menu
+        // d'onglets de l'accueil HOME_CATEGORY_TABS, d'anciens liens) envoient
+        // le slug SANS suffixe. On matche donc de façon tolérante : slug exact,
+        // slug + `-<lang>`, ou slug de base (suffixe -fr/-en retiré) égal.
+        const wanted = category.replace(/-(fr|en)$/, '');
+        const cats = catData.items || catData.categories || [];
+        const match =
+          cats.find((c: any) => c.slug === category) ||
+          cats.find((c: any) => c.slug === `${wanted}-${lang || 'fr'}`) ||
+          cats.find((c: any) => String(c.slug || '').replace(/-(fr|en)$/, '') === wanted);
         categoryId = match ? String(match.id) : null;
       }
     }
