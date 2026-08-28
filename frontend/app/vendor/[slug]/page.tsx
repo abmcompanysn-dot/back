@@ -1,6 +1,6 @@
 import { Metadata } from 'next'
 import { notFound } from 'next/navigation'
-import { fetchStores, fetchProductsByVendor } from '@/lib/woo-server'
+import { fetchStores, fetchVendorBySlug, fetchProductsByVendor } from '@/lib/woo-server'
 import { VendorStoreWrapper } from '@/components/miad/VendorStoreWrapper'
 
 export const runtime = 'edge';
@@ -20,7 +20,10 @@ const findVendor = (stores: any[], slug: string) =>
 
 export async function generateMetadata({ params }: VendorPageProps): Promise<Metadata> {
   const [{ slug }, stores] = await Promise.all([params, fetchStores()])
-  const vendor = findVendor(stores, slug)
+  // Secours : boutique hors des 100 premières (déjà chargées par
+  // fetchStores) — sans ça, une URL /vendor/X pourtant valide affichait un
+  // faux "Boutique introuvable" (bug trouvé le 2026-08-28).
+  const vendor = findVendor(stores, slug) || (await fetchVendorBySlug(slug))
 
   if (!vendor) return { title: 'Boutique introuvable - MIAD Market' }
 
@@ -64,7 +67,7 @@ export async function generateMetadata({ params }: VendorPageProps): Promise<Met
 
 export default async function VendorSlugPage({ params }: VendorPageProps) {
   const [{ slug }, stores] = await Promise.all([params, fetchStores()])
-  const vendor = findVendor(stores, slug)
+  const vendor = findVendor(stores, slug) || (await fetchVendorBySlug(slug))
 
   if (!vendor) notFound()
 

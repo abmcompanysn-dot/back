@@ -754,7 +754,12 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, router])
 
   const handleVendorClick = useCallback((v: WooVendor) => {
-    // Meme raison que handleProductClick : pas de vrai chemin /vendor/[slug] ici.
+    // Meme raison que handleProductClick : pas de vrai chemin /vendor/[slug] ici
+    // (le composant reste "dans" l'app SPA — même header, panier synchronisé
+    // instantanément — plutôt qu'une vraie navigation de page. /vendor/[slug]
+    // existe bien séparément pour l'accès direct/SEO, cf. app/vendor/[slug]/
+    // page.tsx, corrigé aussi le 2026-08-28 pour ne plus planter au-delà des
+    // 100 premières boutiques).
     const vendorUrl = v.slug ? `/?v=vendor&slug=${v.slug}` : undefined
     if (currentView === 'store') {
       navStack.current.push({

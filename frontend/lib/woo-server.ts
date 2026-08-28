@@ -130,6 +130,29 @@ export const fetchStores = cache(async (perPage = 100): Promise<any[]> => {
   }
 })
 
+// fetchVendorBySlug — recherche ciblée d'UNE boutique (?slug=X côté
+// vendor-svc, ajouté le 2026-08-28). app/vendor/[slug]/page.tsx cherchait
+// jusqu'ici la boutique via fetchStores() (limité aux 100 premières,
+// triées par note) — une boutique hors de ce lot donnait un faux
+// notFound() malgré une URL /vendor/X valide.
+export const fetchVendorBySlug = cache(async (slug: string): Promise<any | null> => {
+  try {
+    const res = await fetch(`${VENDOR_SVC_URL}/stores?slug=${encodeURIComponent(slug)}&page_size=1`, {
+      next: { revalidate: 300, tags: [`vendor-${slug}`] },
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const list = data.items || data.stores || []
+    const raw = list[0]
+    if (!raw) return null
+    const name = raw.store_name || raw.name
+    if (!name || name.trim() === '') return null
+    return mapStore(raw)
+  } catch {
+    return null
+  }
+})
+
 export const fetchInitialProducts = cache(async (perPage = 100, lang: 'fr' | 'en' = 'fr'): Promise<any[]> => {
   try {
     const res = await fetch(`${CATALOG_SVC_URL}/products?page_size=${perPage}&lang=${lang}`, {
