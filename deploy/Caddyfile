@@ -65,6 +65,13 @@
 	handle /payment-methods {
 		reverse_proxy payment-svc:8084
 	}
+	# GET /pawapay/countries (liste pays/opérateurs pour le checkout mobile
+	# money sans redirection, 2026-08-28) — jamais routé jusqu'ici malgré
+	# son existence côté payment-svc (piège Caddyfile déjà documenté :
+	# éditer ce fichier ne suffit pas, il faut aussi le redéployer).
+	handle /pawapay/* {
+		reverse_proxy payment-svc:8084
+	}
 
 	# Livraison — shipping-svc (zone internationale + national Sénégal)
 	handle /shipping-rates* {
