@@ -726,7 +726,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     prevView.current = returnTarget
     setCurrentView(view)
     if (scrollToTop) window.scrollTo(0, 0)
-  }, [currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, router])
+  }, [currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, router])
 
   // searchQuery n'est volontairement pas dans le snapshot (une recherche ne
   // définit pas d'entrée d'historique dédiée) — mais retomber sur l'accueil
@@ -828,7 +828,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       setSelectedProduct(p)
       navigateTo('product', true, p.slug ? `/?v=product&slug=${p.slug}` : undefined)
     }
-  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, router])
+  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, router])
 
   const handleVendorClick = useCallback((v: WooVendor) => {
     // Meme raison que handleProductClick : pas de vrai chemin /vendor/[slug] ici
@@ -858,7 +858,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       setVendorKey(k => k + 1)
       navigateTo('store', true, vendorUrl)
     }
-  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, router])
+  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, router])
 
   // Onglets catégorie de la barre d'accueil (HomeCategoryTabs : "Explorer",
   // "Sacs", "Pagnes"…). On reste sur la vue 'home' — seul homeTab change —
