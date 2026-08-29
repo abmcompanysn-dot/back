@@ -304,6 +304,14 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   const isRep = useRef(false)
   const [activeHelpTopic, setActiveHelpTopic] = useState<string | undefined>()
   const prevView = useRef<View | null>(null)
+  // Passe à true dès que l'accueil (avec ses homeSections) a été rendu au
+  // moins une fois dans CE montage de MiadMarketClient. Sert à décider si un
+  // retour arrière vers 'home' a besoin d'un router.refresh() (flash
+  // skeleton) : inutile — et donc à éviter — quand l'accueil est déjà en
+  // mémoire (cas normal des nav SPA ?v=). Le refresh n'est vraiment
+  // nécessaire que si on a atterri directement sur une route externe
+  // (/product/[slug]) sans jamais peindre l'accueil, puis qu'on revient.
+  const homeRenderedRef = useRef(currentView === 'home' && Boolean(homeSections))
   const [quickProduct, setQuickProduct] = useState<WooProduct | null>(null)
   const [hideEmptyCategories, setHideEmptyCategories] = useState(false)
   const [pendingDashboardSection, setPendingDashboardSection] = useState<string | undefined>()
@@ -356,6 +364,14 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       localStorage.setItem('miad_referral_code', ref)
     }
   }, [searchParams])
+
+  // Mémorise qu'on a affiché l'accueil au moins une fois dans ce montage :
+  // un retour arrière ultérieur vers 'home' n'aura alors plus besoin d'un
+  // router.refresh() (plus de flash skeleton du bas de page). Voir
+  // restoreFromStack / handlePopState.
+  useEffect(() => {
+    if (currentView === 'home') homeRenderedRef.current = true
+  }, [currentView])
 
   useEffect(() => {
     if (!forcedView) {
@@ -721,18 +737,16 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     setSelectedVendor(snapshot.selectedVendor)
     setSelectedCategory(snapshot.selectedCategory)
     setActiveCountry(snapshot.activeCountry)
-    // router.refresh() uniquement quand on revient à l'accueil : homeSections
-    // est une prop Server Component figée au tout premier montage de
-    // MiadMarketClient (voir son commentaire plus haut), jamais rechargée
-    // par un simple setCurrentView. Un détour par une VRAIE page Next.js
-    // externe (/vendor/[slug] ou /product/[slug], atteinte via <Link> —
-    // pas navigateTo) puis un retour arrière restaurait bien view:'home'
-    // depuis la pile, mais avec l'ancien homeSections (potentiellement
-    // jamais valorisé sur ce remontage) — accueil sans aucune section
-    // produit visible (hero + bandeau boutiques puis vide), signalé le
-    // 2026-08-28 avec capture à l'appui. refresh() redemande homeSections
-    // au serveur sans perdre le reste du state client (panier, navStack).
-    if (snapshot.view === 'home') {
+    // router.refresh() en revenant à l'accueil : à ne faire QUE si l'accueil
+    // n'a jamais été peint dans ce montage (homeRenderedRef === false) —
+    // c.-à-d. arrivée directe sur une route externe /product|/vendor/[slug]
+    // puis retour, où homeSections serait vide (hero + bandeau boutiques
+    // puis rien, signalé le 2026-08-28). Dans le cas NORMAL des navigations
+    // SPA (?v=product…), l'accueil est déjà en mémoire : un refresh
+    // re-suspendrait l'arbre RSC et ferait clignoter <HomeShell> (le bas de
+    // page en skeleton une fraction de seconde avant le vrai contenu),
+    // signalé le 2026-08-29 comme « écran flash de transition » au retour.
+    if (snapshot.view === 'home' && !homeRenderedRef.current) {
       router.refresh()
     }
   }, [router])
@@ -758,13 +772,13 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         restoreFromStack()
       } else {
         // Pile vide : on est a l'accueil (ou a l'entree-garde initiale).
-        // router.refresh() — meme raison que dans restoreFromStack
-        // ci-dessus (homeSections figé, retour depuis une vraie page
-        // Next.js externe).
+        // router.refresh() seulement si l'accueil n'a jamais ete peint dans
+        // ce montage (meme raison que restoreFromStack ci-dessus : eviter le
+        // flash <HomeShell> au retour quand l'accueil est deja en memoire).
         setCurrentView('home')
         setSearchQuery('')
         window.scrollTo(0, 0)
-        router.refresh()
+        if (!homeRenderedRef.current) router.refresh()
       }
     }
     window.addEventListener('popstate', handlePopState)
