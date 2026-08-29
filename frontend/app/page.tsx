@@ -150,6 +150,39 @@ async function HomeData({ searchParams }: { searchParams: Promise<PageSearchPara
   // (cf. MiadMarketClient.tsx, handleLanguageChange).
   const explicitLang: 'fr' | 'en' | undefined = params.lang === 'en' ? 'en' : params.lang === 'fr' ? 'fr' : undefined
   const lang: 'fr' | 'en' = explicitLang || 'fr'
+
+  // Navigation client-side (produit / boutique / pays) : `handleProductClick`
+  // & co. font router.push('/?v=product&slug=X'), ce qui re-exécute ce
+  // Server Component (il consomme searchParams). S'il RE-`await`
+  // getInitialData() ici, le <Suspense> parent retombe sur <HomeShell/> et
+  // TOUTE la page semble se recharger (skeleton plein écran) alors que
+  // MiadMarketClient, jamais démonté, a déjà toutes ses données en mémoire
+  // (catégories via SWR, produit via son fetch de secours). Signalé le
+  // 2026-08-29 : "on clique un produit, la page se recharge en entier".
+  // Donc pour une navigation `?v=...` : rendu SYNCHRONE, aucun await, aucun
+  // nouveau fetch serveur. getInitialData() n'est fait QUE pour un
+  // chargement direct de l'accueil (isHomeNavigation) ou d'un lien profond.
+  if (!isHomeNavigation) {
+    const headersList = await headers()
+    const raw = headersList.get('x-vercel-ip-country') || headersList.get('cf-ipcountry') || ''
+    return (
+      <MiadMarketClient
+        initialProducts={[]}
+        initialCategories={[]}
+        initialStores={[]}
+        initialUserCountryCode={raw.toUpperCase()}
+        forcedView={(params.v === 'vendor' ? 'store' : params.v) as any}
+        forcedProductSlug={params.v === 'product' ? params.slug : undefined}
+        forcedVendorSlug={params.v === 'vendor' ? params.slug : undefined}
+        shippingRates={SHIPPING_FALLBACK}
+        stripeReturn={params.payment_success === '1' ? { orderId: Number(params.order_id) || 0, paymentIntentId: params.payment_intent } : undefined}
+        sharedCartId={params.cart}
+        homeSections={undefined}
+        initialLang={explicitLang}
+      />
+    )
+  }
+
   const data = await getInitialData(isHomeNavigation)
 
   return (
@@ -158,13 +191,13 @@ async function HomeData({ searchParams }: { searchParams: Promise<PageSearchPara
       initialCategories={data.categories}
       initialStores={[]}
       initialUserCountryCode={data.userCountryCode}
-      forcedView={(params.v === 'vendor' ? 'store' : params.v) as any}
-      forcedProductSlug={params.v === 'product' ? params.slug : undefined}
-      forcedVendorSlug={params.v === 'vendor' ? params.slug : undefined}
+      forcedView={undefined}
+      forcedProductSlug={undefined}
+      forcedVendorSlug={undefined}
       shippingRates={data.shippingRates}
       stripeReturn={params.payment_success === '1' ? { orderId: Number(params.order_id) || 0, paymentIntentId: params.payment_intent } : undefined}
       sharedCartId={params.cart}
-      homeSections={isHomeNavigation ? <HomeSections lang={lang} /> : undefined}
+      homeSections={<HomeSections lang={lang} />}
       initialLang={explicitLang}
     />
   )
