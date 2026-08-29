@@ -86,8 +86,15 @@ export function HomeCategoryTabSection({ categorySlug, allProducts, userCountry,
 
   const products: WooProduct[] = useMemo(() => {
     if (data?.products?.length) return data.products
-    // Repli le temps du premier fetch : filtre les produits déjà en mémoire.
-    return allProducts.filter(p => p.categorySlug === categorySlug)
+    // Repli instantané le temps du (re)fetch : filtre les produits déjà en
+    // mémoire. categorySlug vient du menu (sans suffixe langue, ex.
+    // "sacs-maroquinerie") alors que p.categorySlug porte le suffixe DB
+    // ("sacs-maroquinerie-fr") — on compare donc sur le slug de base des
+    // deux côtés. Sans ça, ce repli renvoyait [] → skeleton plein écran à
+    // chaque (re)montage de l'onglet, notamment au retour arrière depuis
+    // une fiche produit (« flash de transition », signalé le 2026-08-29).
+    const base = categorySlug.replace(/-(fr|en)$/, '')
+    return allProducts.filter(p => (p.categorySlug || '').replace(/-(fr|en)$/, '') === base)
   }, [data, allProducts, categorySlug])
 
   return (
