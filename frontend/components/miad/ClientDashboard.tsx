@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { ProductCard } from './ProductCard'
 import { type WooProduct } from '@/lib/woocommerce'
 import { fetchRecentlyViewedProducts, fetchRecommendedProducts } from '@/lib/recommendations'
+import { useStreamedNavClick } from '@/contexts/StreamedNavClickContext'
 
 interface ClientDashboardProps {
   onBack: () => void
@@ -217,6 +218,16 @@ function OrderDeliveryProgress({ order }: { order: any }) {
 }
 
 export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, onLanguageChange, initialSection }: ClientDashboardProps) {
+  // Navigation vers une fiche produit : ClientDashboard est rendu DANS le SPA
+  // (MiadMarketClient), donc on passe par le contexte de navigation client —
+  // un window.location.href rechargeait toute la page et basculait vers la
+  // route SEO /product/[slug] (autre système, panier/scroll perdus). Signalé
+  // le 2026-08-29. Fallback vers l'URL SPA ?v=product si hors provider.
+  const nav = useStreamedNavClick()
+  const goToProduct = (p: WooProduct) => {
+    if (nav?.onProductClick) nav.onProductClick(p)
+    else window.location.href = `/?v=product&slug=${p.slug || p.id}`
+  }
   // Récupération du profil complet (incluant adresses et stats) via l'API proxy
   // Cela garantit que toutes les sections (adresses, emails, etc.) sont à jour.
   const token = typeof window !== 'undefined' ? localStorage.getItem('miad_token') : null;
@@ -880,8 +891,8 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                       <ProductCard
                         key={p.id}
                         product={p}
-                        onClick={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
-                        onAddToCart={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
+                        onClick={goToProduct}
+                        onAddToCart={goToProduct}
                       />
                     ))}
                   </div>
@@ -917,8 +928,8 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                         <ProductCard
                           key={p.id}
                           product={p}
-                          onClick={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
-                          onAddToCart={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
+                          onClick={goToProduct}
+                          onAddToCart={goToProduct}
                         />
                       ))}
                     </div>
@@ -946,8 +957,8 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                         <ProductCard
                           key={p.id}
                           product={p}
-                          onClick={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
-                          onAddToCart={(prod) => { window.location.href = `/product/${prod.slug || prod.id}` }}
+                          onClick={goToProduct}
+                          onAddToCart={goToProduct}
                         />
                       ))}
                     </div>

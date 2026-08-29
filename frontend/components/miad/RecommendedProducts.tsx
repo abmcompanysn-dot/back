@@ -10,7 +10,10 @@ interface RecommendedProductsProps {
   title?: string
 }
 
-const goToProduct = (p: WooProduct) => { window.location.href = `/product/${p.slug || p.id}` }
+// Rendu sur /success & /order-received (hors SPA) : un rechargement est
+// inévitable ici, mais on vise l'URL SPA ?v=product (app complète : header,
+// panier, nav) plutôt que la route SEO isolée /product/[slug].
+const goToProduct = (p: WooProduct) => { window.location.href = `/?v=product&slug=${p.slug || p.id}` }
 
 /** Suggestions affichées sur les pages de confirmation de commande. */
 export function RecommendedProducts({ excludeIds = [], title = 'Vous pourriez aussi aimer' }: RecommendedProductsProps) {

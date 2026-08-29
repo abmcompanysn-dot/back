@@ -239,7 +239,7 @@ function OrderReceivedContent() {
                     ))}
                     <button
                       type="button"
-                      onClick={() => window.location.href = '/?view=clientDashboard'}
+                      onClick={() => window.location.href = '/?v=clientDashboard'}
                       className="text-xs font-black text-accent hover:underline pt-1"
                     >
                       Voir le détail complet de la commande →
@@ -273,14 +273,14 @@ function OrderReceivedContent() {
           {isFailed ? (
             <>
               <Button
-                onClick={() => window.location.href = `/checkout?order_id=${orderId}`}
+                onClick={() => window.location.href = '/?v=cart'}
                 className="flex-1 h-16 rounded-2xl font-black bg-accent text-white gap-3 shadow-xl shadow-accent/20 hover:scale-[1.03] transition-all"
               >
                 <RefreshCw size={20} /> Réessayer le paiement
               </Button>
               <Button
                 variant="outline"
-                onClick={() => window.location.href = '/?view=clientDashboard'}
+                onClick={() => window.location.href = '/?v=clientDashboard'}
                 className="flex-1 h-16 rounded-2xl font-black border-2 gap-3 hover:bg-muted group"
               >
                 Mes Commandes <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />
@@ -296,7 +296,7 @@ function OrderReceivedContent() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => window.location.href = '/?view=clientDashboard'}
+                onClick={() => window.location.href = '/?v=clientDashboard'}
                 className="flex-1 h-16 rounded-2xl font-black border-2 gap-3 hover:bg-muted group"
               >
                 Mes Commandes <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />

@@ -216,7 +216,7 @@ function SuccessContent() {
                         ))}
                         <button
                           type="button"
-                          onClick={() => window.location.href = '/?view=clientDashboard'}
+                          onClick={() => window.location.href = '/?v=clientDashboard'}
                           className="text-xs font-black text-accent hover:underline pt-1"
                         >
                           Voir le détail complet de la commande →
@@ -256,7 +256,7 @@ function SuccessContent() {
           </Button>
           <Button 
             variant="outline" 
-            onClick={() => window.location.href = '/?view=clientDashboard'} 
+            onClick={() => window.location.href = '/?v=clientDashboard'} 
             className="flex-1 h-16 rounded-2xl font-black border-2 gap-3 hover:bg-muted group"
           >
              Mes Commandes <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />
