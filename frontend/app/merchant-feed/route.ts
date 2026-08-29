@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge'
+// Généré à la demande au runtime, jamais au build (2026-08-29) : comme
+// app/sitemap.ts, ce flux pagine tout le catalogue via CATALOG_SVC_URL —
+// indisponible au build, ce qui bloquait la génération jusqu'au timeout.
+export const dynamic = 'force-dynamic'
 
 const BASE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca').replace(/\/$/, '')
 

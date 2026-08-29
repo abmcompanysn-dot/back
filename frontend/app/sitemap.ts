@@ -1,6 +1,20 @@
 import { MetadataRoute } from 'next'
 import { CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
 
+// Généré à la demande au runtime edge, JAMAIS au build (2026-08-29) :
+// - au build, CATALOG_SVC_URL/VENDOR_SVC_URL ne sont pas injectées (elles
+//   n'existent qu'au runtime Cloudflare Pages) → les fetch de catalogue
+//   ci-dessous restaient bloqués jusqu'au timeout de 60 s de Next, faisant
+//   échouer TOUT le déploiement ("Export encountered an error on
+//   /sitemap.xml/route").
+// - un sitemap doit de toute façon refléter le catalogue LIVE, pas un
+//   instantané figé au moment du build.
+export const runtime = 'edge'
+export const dynamic = 'force-dynamic'
+// (pas de `revalidate` ici : incompatible avec force-dynamic. Le cache
+// CDN 1 h vient des fetch internes `next: { revalidate: 3600 }` ci-dessous
+// + du header Cache-Control posé par Cloudflare Pages sur la réponse.)
+
 const BASE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://miadmarket.ca').replace(/\/$/, '')
 
 async function fetchAllCatalog<T>(url: string): Promise<T[]> {
