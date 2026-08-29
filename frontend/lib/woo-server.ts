@@ -8,6 +8,7 @@
 
 import { cache } from 'react'
 import { CATALOG_SVC_URL, VENDOR_SVC_URL, LOYALTY_SVC_URL } from './miad-server-auth'
+import { decodeHtmlEntities } from './utils'
 
 function getCountryCode(store: any): string {
   if (!store?.address || typeof store.address !== 'object' || Array.isArray(store.address)) return ''
@@ -17,10 +18,12 @@ function getCountryCode(store: any): string {
 function mapProduct(p: any): any {
   return {
     id: p.id || null,
-    name: p.name || '',
+    // Décodage entités HTML — catalog-svc renvoie des noms échappés hérités
+    // de WooCommerce ("Rouge &amp; Blanc"). Cf. app/api/products/route.ts.
+    name: decodeHtmlEntities(p.name || ''),
     slug: p.slug || '',
     sku: p.sku || '',
-    description: p.description || '',
+    description: decodeHtmlEntities(p.description || ''),
     price: parseFloat(p.price || '0'),
     regularPrice: parseFloat(p.regular_price || p.price || '0'),
     salePrice: p.on_sale && p.sale_price ? parseFloat(p.sale_price) : undefined,

@@ -4,6 +4,7 @@ import { catalogCacheGet, catalogCacheSet } from '@/lib/catalog-cache'
 import { getCloudflareBindings, embedOne } from '@/lib/cloudflare-ai'
 import { fetchWooProductsByIds } from '@/lib/woo-catalog'
 import { CATALOG_SVC_URL, VENDOR_SVC_URL, fetchWpUser } from '@/lib/miad-server-auth'
+import { decodeHtmlEntities } from '@/lib/utils'
 
 export const runtime = 'edge';
 
@@ -356,10 +357,13 @@ export async function GET(req: Request) {
       const store = vendorsById[String(p.vendor_id)];
       return {
         id: p.id || null,
-        name: p.name || '',
+        // Décodage des entités HTML : catalog-svc stocke encore des noms
+        // échappés hérités de l'import WooCommerce (ex. "Rouge &amp; Blanc"
+        // affiché littéralement sur les cartes produit — vu le 2026-08-29).
+        name: decodeHtmlEntities(p.name || ''),
         slug: p.slug || '',
         sku: p.sku || '',
-        description: p.description || '',
+        description: decodeHtmlEntities(p.description || ''),
         price: parseFloat(p.price || p.price_usd || '0'),
         regularPrice: parseFloat(p.regular_price || p.price || p.price_usd || '0'),
         salePrice: p.on_sale && p.sale_price ? parseFloat(p.sale_price) : undefined,
