@@ -72,7 +72,16 @@ export function HomeCategoryTabSection({ categorySlug, allProducts, userCountry,
   const { data, isLoading } = useSWR(
     `/api/products?category=${categorySlug}&per_page=60&userCountry=${userCountry}`,
     fetcher,
-    { revalidateOnFocus: false }
+    {
+      revalidateOnFocus: false,
+      // Le cache SWR (module) survit au démontage : en revenant sur cet
+      // onglet après avoir ouvert une fiche produit, la réponse déjà en
+      // cache s'affiche immédiatement, pas de skeleton. keepPreviousData
+      // évite en plus tout état "vide + isLoading" transitoire au remontage.
+      keepPreviousData: true,
+      revalidateIfStale: false,
+      dedupingInterval: 60_000,
+    }
   )
 
   const products: WooProduct[] = useMemo(() => {

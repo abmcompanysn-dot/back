@@ -184,6 +184,11 @@ type NavSnapshot = {
   selectedVendor: WooVendor | null
   selectedCategory: string | null
   activeCountry: Country | null
+  // Onglet catégorie actif de l'accueil ('explore' ou un slug). Doit être
+  // restauré au retour arrière : sans lui, ouvrir un produit depuis
+  // l'onglet "Sacs" puis revenir retombait sur l'onglet mémorisé "au
+  // hasard" (state React non réinitialisé) — fragile.
+  homeTab: string
   scrollY: number
 }
 
@@ -698,6 +703,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       selectedVendor,
       selectedCategory,
       activeCountry,
+      homeTab,
       scrollY: window.scrollY,
     })
 
@@ -737,6 +743,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     setSelectedVendor(snapshot.selectedVendor)
     setSelectedCategory(snapshot.selectedCategory)
     setActiveCountry(snapshot.activeCountry)
+    setHomeTab(snapshot.homeTab ?? 'explore')
     // router.refresh() en revenant à l'accueil : à ne faire QUE si l'accueil
     // n'a jamais été peint dans ce montage (homeRenderedRef === false) —
     // c.-à-d. arrivée directe sur une route externe /product|/vendor/[slug]
@@ -795,6 +802,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         selectedVendor,
         selectedCategory,
         activeCountry,
+        homeTab,
         scrollY: window.scrollY,
       })
       // Note : on n'utilise jamais le vrai chemin /product/[slug] ici car c'est
@@ -825,6 +833,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         selectedVendor,
         selectedCategory,
         activeCountry,
+        homeTab,
         scrollY: window.scrollY,
       })
       router.push(vendorUrl || (window.location.pathname + window.location.search), { scroll: false })

@@ -61,20 +61,35 @@ export function CategoryRow({ categoryName, categorySlug, initialProducts, total
     }
   }, [loading, hasMore, page, categorySlug, totalPages])
 
-  const onScroll = useCallback(() => {
+  // Ne déclenche loadMore() QUE sur un vrai scroll horizontal de
+  // l'utilisateur, jamais au montage. Avant : le useEffect ci-dessous
+  // appelait onScroll() au montage ; sur une rangée dont le contenu tient
+  // déjà à l'écran, `nearEnd` est vrai d'emblée → loadMore() → skeletons.
+  // Au retour arrière depuis une fiche produit, MiadMarketClient remonte
+  // l'accueil et ses 7+ CategoryRow d'un coup → 7 loadMore() simultanés →
+  // 40-70 skeletons qui clignotent (« écran flash de transition », signalé
+  // le 2026-08-29). Le premier passage ne fait que positionner les flèches.
+  const userScrolledRef = useRef(false)
+
+  const onScroll = useCallback((userInitiated: boolean) => {
     const el = scrollRef.current
     if (!el) return
     setAtStart(el.scrollLeft <= 4)
     const nearEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 300
     setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 4)
-    if (nearEnd) loadMore()
+    if (nearEnd && userInitiated && userScrolledRef.current) loadMore()
   }, [loadMore])
 
+  // Positionne les flèches gauche/droite sans jamais charger de page —
+  // recalcul quand la liste change (nouveaux produits paginés).
   useEffect(() => {
-    onScroll()
+    onScroll(false)
   }, [products, onScroll])
 
   const scrollBy = (dir: 'left' | 'right') => {
+    // Clic sur une flèche = interaction utilisateur → autorise le
+    // chargement de la page suivante quand on atteint la fin.
+    userScrolledRef.current = true
     scrollRef.current?.scrollBy({ left: dir === 'left' ? -320 : 320, behavior: 'smooth' })
   }
 
@@ -125,7 +140,7 @@ export function CategoryRow({ categoryName, categorySlug, initialProducts, total
 
         <div
           ref={scrollRef}
-          onScroll={onScroll}
+          onScroll={() => { userScrolledRef.current = true; onScroll(true) }}
           className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 snap-x"
         >
           {products.map((p) => (
