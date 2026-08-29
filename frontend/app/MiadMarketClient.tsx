@@ -394,6 +394,32 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     return () => controller.abort()
   }, [forcedView, forcedProductSlug, selectedProduct])
 
+  // Même protection pour un lien direct BOUTIQUE (/?v=vendor&slug=X, favori,
+  // partage) : la boutique n'est pas forcément dans les 100 premiers
+  // initialStores. Sans ce fetch de secours + le ref pendingVendorFetch,
+  // le garde-fou anti-skeleton (currentView === 'store' && !selectedVendor
+  // → home) renvoyait à l'accueil AVANT que la boutique ait pu être
+  // chargée — asymétrie avec le produit, signalée à l'audit nav mobile du
+  // 2026-08-29 (et déjà notée dans CLAUDE.md comme "skeleton indéfini").
+  const pendingVendorFetch = useRef(Boolean(forcedVendorSlug) && !selectedVendor)
+  const [vendorFetchSettled, setVendorFetchSettled] = useState(false)
+  useEffect(() => {
+    if (forcedView !== 'store' || !forcedVendorSlug || selectedVendor) return
+    const controller = new AbortController()
+    fetch(`/api/stores?slug=${encodeURIComponent(forcedVendorSlug)}`, { signal: controller.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const s = data?.stores?.[0]
+        if (s) { setSelectedVendor(s); setVendorKey(k => k + 1) }
+      })
+      .catch(() => {})
+      .finally(() => {
+        pendingVendorFetch.current = false
+        setVendorFetchSettled(true)
+      })
+    return () => controller.abort()
+  }, [forcedView, forcedVendorSlug, selectedVendor])
+
   // Bascule FR/EN pendant qu'une fiche produit est affichée : sans ceci, le
   // switcher du Header changeait `language` (état global) mais la fiche
   // produit restait figée dans sa langue de chargement initial — le
@@ -577,7 +603,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   }, []);
 
   const isInitialMount = useRef(true)
-  const touchStartX = useRef<number | null>(null)
   const scrollPositions = useRef<Map<string, number>>(new Map())
   const pendingScrollY = useRef<number | null>(null)
   const navStack = useRef<NavSnapshot[]>([])
@@ -813,30 +838,16 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     if (c) { setActiveCountry(c); navigateTo('country') }
   }, [navigateTo])
 
-  // Détection du Swipe (glisser de gauche à droite pour revenir)
-  useEffect(() => {
-    const handleTouchStart = (e: TouchEvent) => { 
-      touchStartX.current = e.touches[0].clientX 
-    }
-    const handleTouchEnd = (e: TouchEvent) => {
-      if (!touchStartX.current) return
-      const touchEndX = e.changedTouches[0].clientX
-      const diff = touchEndX - touchStartX.current
-      // Si on glisse de plus de 100px vers la droite depuis le bord gauche (< 50px)
-      if (diff > 100 && touchStartX.current < 50 && currentView !== 'home') {
-        navigateBack()
-      }
-      touchStartX.current = null
-    }
-
-    window.addEventListener('touchstart', handleTouchStart, { passive: true })
-    window.addEventListener('touchend', handleTouchEnd, { passive: true })
-
-    return () => {
-      window.removeEventListener('touchstart', handleTouchStart)
-      window.removeEventListener('touchend', handleTouchEnd)
-    }
-  }, [currentView])
+  // Geste swipe-retour : RETIRÉ le 2026-08-29 (audit nav mobile).
+  //
+  // Ce handler custom (glisser depuis le bord gauche → navigateBack) faisait
+  // DOUBLON avec le geste natif de retour d'iOS Safari / Chrome Android, qui
+  // déclenche déjà un popstate — lui-même déjà intercepté plus haut
+  // (handlePopState → restoreFromStack). Résultat sur mobile : un seul swipe
+  // reculait de DEUX vues au lieu d'une, et un scroll vertical dont le doigt
+  // dérapait horizontalement depuis le bord déclenchait un retour
+  // involontaire. Le retour gestuel reste pleinement fonctionnel via le
+  // geste natif + navStack ; plus besoin de le réimplémenter.
 
   // --- 2. FONCTIONS DE FETCH ---
   // sessionExpired=true : la déconnexion est déclenchée par un rejet serveur
@@ -1140,7 +1151,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         setSearchQuery('')
       }
     }
-    if (currentView === 'store' && !selectedVendor) {
+    if (currentView === 'store' && !selectedVendor && !pendingVendorFetch.current) {
       setCurrentView('home')
       setSearchQuery('')
     }
@@ -1148,7 +1159,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       setCurrentView('home')
       setSearchQuery('')
     }
-  }, [currentView, categoriesLoading, categories, selectedCategory, selectedVendor, selectedProduct, productFetchSettled])
+  }, [currentView, categoriesLoading, categories, selectedCategory, selectedVendor, selectedProduct, productFetchSettled, vendorFetchSettled])
 
   // Groupement par code pays pour l'accueil (Amazon-style sessions)
   const productsByCountry = useMemo(() => {

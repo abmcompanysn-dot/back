@@ -12,7 +12,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
-import Link from 'next/link'
 import Image from 'next/image'
 import { type WooProduct, type WooProductVariation, type WooVendor, translations } from '@/lib/woocommerce'
 import { recordRecentlyViewed } from '@/lib/recently-viewed'
@@ -1125,10 +1124,19 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
               <div>
                 <div className="flex justify-between items-center mb-6">
                   <h2 className="text-xl font-bold">Plus de chez {product.vendor?.name}</h2>
-                  {product.vendor?.slug && (
-                    <Link href={`/vendor/${product.vendor.slug}`} className="inline-flex items-center gap-1 text-accent font-bold hover:underline text-sm">
+                  {product.vendor && (
+                    // Bouton (pas <Link href="/vendor/[slug]">) : la vraie page
+                    // Next /vendor/[slug] fait un rechargement complet sur
+                    // mobile (sortie du SPA, panier/scroll perdus). onStoreClick
+                    // bascule la vue en client, comme les autres boutons vendeur
+                    // de cette page. Signalé le 2026-08-29 (audit nav mobile).
+                    <button
+                      type="button"
+                      onClick={() => product.vendor && onStoreClick(product.vendor)}
+                      className="inline-flex items-center gap-1 text-accent font-bold hover:underline text-sm"
+                    >
                       Voir toute la boutique <ChevronRight size={16} />
-                    </Link>
+                    </button>
                   )}
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
