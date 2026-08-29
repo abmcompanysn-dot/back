@@ -189,6 +189,11 @@ type NavSnapshot = {
   // l'onglet "Sacs" puis revenir retombait sur l'onglet mémorisé "au
   // hasard" (state React non réinitialisé) — fragile.
   homeTab: string
+  // Terme de recherche au moment où on quitte la vue 'search'. Restauré au
+  // retour pour ré-afficher les résultats ET le champ rempli (avant, le
+  // retour vers une recherche ré-affichait la grille mais avec le champ
+  // vide, les gardes anti-skeleton le nettoyant volontairement).
+  searchQuery: string
   scrollY: number
 }
 
@@ -704,6 +709,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       selectedCategory,
       activeCountry,
       homeTab,
+      searchQuery,
       scrollY: window.scrollY,
     })
 
@@ -744,6 +750,11 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     setSelectedCategory(snapshot.selectedCategory)
     setActiveCountry(snapshot.activeCountry)
     setHomeTab(snapshot.homeTab ?? 'explore')
+    // On ne restaure searchQuery QUE si on revient sur la vue 'search' :
+    // sinon on ré-armerait `filterActive` sur l'accueil (grille filtrée au
+    // lieu de homeSections) — c'est justement ce que les gardes
+    // anti-skeleton nettoient.
+    setSearchQuery(snapshot.view === 'search' ? (snapshot.searchQuery ?? '') : '')
     // router.refresh() en revenant à l'accueil : à ne faire QUE si l'accueil
     // n'a jamais été peint dans ce montage (homeRenderedRef === false) —
     // c.-à-d. arrivée directe sur une route externe /product|/vendor/[slug]
@@ -803,6 +814,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         selectedCategory,
         activeCountry,
         homeTab,
+        searchQuery,
         scrollY: window.scrollY,
       })
       // Note : on n'utilise jamais le vrai chemin /product/[slug] ici car c'est
@@ -834,6 +846,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         selectedCategory,
         activeCountry,
         homeTab,
+        searchQuery,
         scrollY: window.scrollY,
       })
       router.push(vendorUrl || (window.location.pathname + window.location.search), { scroll: false })
@@ -846,6 +859,32 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       navigateTo('store', true, vendorUrl)
     }
   }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, router])
+
+  // Onglets catégorie de la barre d'accueil (HomeCategoryTabs : "Explorer",
+  // "Sacs", "Pagnes"…). On reste sur la vue 'home' — seul homeTab change —
+  // mais on pousse quand même une VRAIE entrée d'historique + un snapshot
+  // navStack, pour que le bouton retour du navigateur revienne à l'onglet
+  // précédent (typiquement "Explorer") au lieu de sortir de l'accueil / du
+  // site. Signalé le 2026-08-29. Pas de router.push d'URL nouvelle (l'onglet
+  // n'a pas d'URL propre) : window.history.pushState suffit, l'entrée est
+  // ré-associée à navStack au popstate comme les autres.
+  const handleSelectHomeTab = useCallback((slug: string) => {
+    if (slug === homeTab) return
+    scrollPositions.current.set(currentView, window.scrollY)
+    navStack.current.push({
+      view: currentView,
+      selectedProduct,
+      selectedVendor,
+      selectedCategory,
+      activeCountry,
+      homeTab,
+      searchQuery,
+      scrollY: window.scrollY,
+    })
+    window.history.pushState({}, '', window.location.pathname + window.location.search)
+    setHomeTab(slug)
+    window.scrollTo(0, 0)
+  }, [homeTab, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, searchQuery])
 
   // Même logique que handleProductClick/handleVendorClick : navigateTo met à
   // jour currentView de façon synchrone (sans attendre le router.push), donc
@@ -1342,7 +1381,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     toast.success(`${product.name} ajouté au panier`, {
       action: {
         label: 'Voir Panier',
-        onClick: () => setCurrentView('cart')
+        onClick: () => navigateTo('cart')
       },
       duration: 3000,
       position: 'bottom-right',
@@ -1513,7 +1552,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
           const t = translations[language]
           return (
             <main className="bg-muted/20 min-h-screen">
-              <HomeCategoryTabs activeTab={homeTab} onSelectTab={setHomeTab} language={language} />
+              <HomeCategoryTabs activeTab={homeTab} onSelectTab={handleSelectHomeTab} language={language} />
               {homeTab === 'explore' ? (
                 <>
                   <TopVendorsStrip stores={stores} onStoreClick={(v: WooVendor) => { handleVendorClick(v) }} />
@@ -1524,7 +1563,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
                     onSelectCategory={(slug: string | null) => { setSelectedCategory(slug); if (slug) { navigateTo('category'); } }}
                   />
                   {homeSections}
-                  <VendorCTA onBecomeVendor={() => setCurrentView('login')} t={t} />
+                  <VendorCTA onBecomeVendor={() => navigateTo('login')} t={t} />
                 </>
               ) : (
                 <HomeCategoryTabSection
@@ -1550,7 +1589,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
             onStoreClick={(v: WooVendor) => { handleVendorClick(v) }}
             onViewAllCountry={handleViewAllCountry}
             categories={rootCategories}
-            onBecomeVendor={() => setCurrentView('login')}
+            onBecomeVendor={() => navigateTo('login')}
             productsByCountry={productsByCountry}
             storesByCountry={storesByCountry}
           />
