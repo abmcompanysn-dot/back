@@ -151,6 +151,7 @@ type server struct {
 	shippingURL string
 	catalogURL  string // restock au moment de l'annulation (module Commandes)
 	vendorURL   string // résolution du taux de commission par vendeur (module Commandes §1.2.A)
+	paymentURL  string // re-vérification avant expiration (expireUnpaidLoop)
 
 	settings *kit.SettingsStore
 	// platformCommissionRate : taux plateforme par défaut si le vendeur n'a
@@ -209,6 +210,7 @@ func main() {
 		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
 		catalogURL:  kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
 		vendorURL:   kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+		paymentURL:  kit.Env("PAYMENT_SVC_URL", "http://payment-svc:8084"),
 
 		platformCommissionRate: kit.Env("PLATFORM_COMMISSION_RATE", "0.10"),
 	}
@@ -1409,27 +1411,93 @@ func (s *server) updateShippingAddress(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{"success": true, "shipping_address": json.RawMessage(body.ShippingAddress)})
 }
 
+// reverifyBeforeExpire — dernier filet avant d'expirer une commande par
+// timeout : demande à payment-svc de re-vérifier le statut authoritatif
+// auprès du fournisseur (PawaPay pour l'instant) avant de trancher. Sans
+// ça, un webhook perdu (panne réseau, timing serré) faisait expirer une
+// commande même quand le client avait RÉELLEMENT payé — l'argent partait
+// sans que la commande soit honorée, découvert le 2026-08-29 en creusant
+// la fiabilité des confirmations Mobile Money sur demande du fondateur.
+// Retourne true si la re-vérification a confirmé/tranché le paiement
+// ailleurs (dans ce cas order.status_changed via payment.confirmed a déjà
+// dû se déclencher côté payment-svc — cette commande précise ne doit
+// SURTOUT PAS être expirée dans le même passage du reaper). Best effort :
+// payment-svc injoignable ou provider non couvert (Stripe/PayDunya) ne
+// bloque jamais l'expiration — juste pas de garde-fou supplémentaire pour
+// ce cas, comportement identique à avant ce correctif.
+func (s *server) reverifyBeforeExpire(ctx context.Context, orderID int64, log interface{ Info(string, ...any) }) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s/payments/order/%d/reverify", s.paymentURL, orderID), nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Info("reaper: reverify payment-svc injoignable, expiration normale appliquée", "order_id", orderID, "err", err.Error())
+		return false
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Status     string `json:"status"`
+		Reverified bool   `json:"reverified"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.Status == "confirmed" || out.Status == "pending" {
+		log.Info("reaper: paiement toujours en cours ou confirmé via reverify — expiration annulée pour cette commande", "order_id", orderID, "status", out.Status)
+		return true
+	}
+	return false
+}
+
 // expireUnpaidLoop — gestion explicite du cas "commande créée,
 // confirmation de paiement jamais reçue".
 func (s *server) expireUnpaidLoop(log interface{ Info(string, ...any) }) {
 	tick := time.NewTicker(time.Minute)
 	for range tick.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		res, err := s.db.Exec(ctx, `
-			UPDATE orders SET status = 'payment_expired', payment_status = 'expired', fulfillment_stage = 'pending', updated_at = now()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		rows, err := s.db.Query(ctx, `
+			SELECT id FROM orders
 			WHERE status = 'pending_payment' AND created_at < now() - $1::interval`,
 			fmt.Sprintf("%d minutes", int(s.timeout.Minutes())))
-		cancel()
 		if err != nil {
-			log.Info("reaper: erreur", "err", err.Error())
+			log.Info("reaper: erreur lecture candidats", "err", err.Error())
+			cancel()
 			continue
 		}
-		if res.RowsAffected() > 0 {
-			log.Info("reaper: commandes expirées (paiement jamais confirmé)", "n", res.RowsAffected())
-			kit.Publish(s.kafka, "order.status_changed", "reaper", map[string]any{
-				"status": "payment_expired", "expired_count": res.RowsAffected(),
-			})
+		var candidates []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err == nil {
+				candidates = append(candidates, id)
+			}
 		}
+		rows.Close()
+
+		toExpire := make([]int64, 0, len(candidates))
+		for _, id := range candidates {
+			if s.reverifyBeforeExpire(ctx, id, log) {
+				continue // paiement réellement en cours/confirmé — ne pas expirer
+			}
+			toExpire = append(toExpire, id)
+		}
+
+		if len(toExpire) > 0 {
+			res, err := s.db.Exec(ctx, `
+				UPDATE orders SET status = 'payment_expired', payment_status = 'expired', fulfillment_stage = 'pending', updated_at = now()
+				WHERE id = ANY($1) AND status = 'pending_payment'`, toExpire)
+			if err != nil {
+				log.Info("reaper: erreur", "err", err.Error())
+				cancel()
+				continue
+			}
+			if res.RowsAffected() > 0 {
+				log.Info("reaper: commandes expirées (paiement jamais confirmé)", "n", res.RowsAffected())
+				kit.Publish(s.kafka, "order.status_changed", "reaper", map[string]any{
+					"status": "payment_expired", "expired_count": res.RowsAffected(),
+				})
+			}
+		}
+		cancel()
 	}
 }
 

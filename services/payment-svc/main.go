@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -385,6 +386,7 @@ func main() {
 		mux.HandleFunc("POST /payments/paydunya/wizall-confirm", s.paydunyaWizallConfirmHandler)
 		mux.HandleFunc("GET /payments", s.listPayments)
 		mux.HandleFunc("GET /payments/order/{order_id}", s.getPayment)
+		mux.HandleFunc("POST /payments/order/{order_id}/reverify", s.reverifyOrderPaymentHandler)
 		mux.HandleFunc("GET /payment-methods", s.listPaymentMethods)
 		mux.HandleFunc("POST /payments/webhook/stripe", s.stripeWebhook)
 		mux.HandleFunc("POST /payments/webhook/paydunya", s.paydunyaCallback)
@@ -1717,6 +1719,66 @@ func (s *server) pawapayWebhook(w http.ResponseWriter, r *http.Request) {
 	default:
 		slog.Error("pawapayWebhook: aucun identifiant reconnu dans le corps", "body_prefix", string(body[:min(200, len(body))]))
 		kit.JSON(w, 200, map[string]string{"received": "ignored"})
+	}
+}
+
+// reverifyOrderPaymentHandler — POST /payments/order/{order_id}/reverify.
+// Appelé par order-svc (expireUnpaidLoop) juste AVANT de marquer une
+// commande 'payment_expired' par timeout : si le webhook PawaPay s'est
+// perdu (panne réseau, timing serré), le timeout expirait la commande même
+// quand le client avait réellement payé — l'argent partait sans que la
+// commande soit honorée. Best effort : provider inconnu/non pris en
+// charge (PayDunya, Stripe — pas encore câblés ici) ou paiement déjà
+// tranché renvoie simplement le statut actuel, order-svc garde alors son
+// comportement de timeout habituel.
+func (s *server) reverifyOrderPaymentHandler(w http.ResponseWriter, r *http.Request) {
+	var orderID int64
+	fmt.Sscanf(r.PathValue("order_id"), "%d", &orderID)
+	if orderID == 0 {
+		kit.Fail(w, 400, "invalid_order_id", "order_id invalide")
+		return
+	}
+	var provider, ref, status string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT provider, provider_ref, status FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1", orderID,
+	).Scan(&provider, &ref, &status); err != nil {
+		kit.Fail(w, 404, "payment_not_found", fmt.Sprintf("aucun paiement pour la commande %d", orderID))
+		return
+	}
+	if status != "initiated" || provider != "pawapay" || ref == "" {
+		// Déjà confirmé/échoué, ou provider pas encore couvert par cette
+		// re-vérification active — rien à faire, statut actuel renvoyé tel
+		// quel.
+		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": status, "reverified": false})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	pawapayStatus, failureCode, err := s.pawapayDepositStatus(ctx, ref)
+	if err != nil {
+		slog.Error("reverifyOrderPayment: PawaPay injoignable", "order_id", orderID, "deposit_id", ref, "err", err)
+		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": status, "reverified": false})
+		return
+	}
+	slog.Info("reverifyOrderPayment: statut PawaPay authoritatif", "order_id", orderID, "deposit_id", ref, "authoritative_status", pawapayStatus, "failure_code", failureCode)
+	switch {
+	case pawapayIsFinalSuccess(pawapayStatus):
+		// confirmPayment écrit sa propre réponse HTTP ({"received":"true"}) —
+		// on utilise httptest.NewRecorder pour capter cet effet de bord
+		// (crédit du wallet vendeur inclus) sans laisser cette réponse
+		// atteindre l'appelant, puis on répond nous-mêmes avec le format
+		// attendu par order-svc (champ "status").
+		rec := httptest.NewRecorder()
+		s.confirmPayment(rec, r, orderID, "pawapay", ref)
+		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": "confirmed", "reverified": true})
+	case pawapayIsFinalFailure(pawapayStatus):
+		rec := httptest.NewRecorder()
+		s.markFailed(rec, r, orderID, "pawapay")
+		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": "failed", "reverified": true})
+	default:
+		// Toujours en cours côté PawaPay (ACCEPTED/PROCESSING/IN_RECONCILIATION)
+		// — order-svc ne doit PAS expirer cette commande maintenant.
+		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": "pending", "reverified": true})
 	}
 }
 
