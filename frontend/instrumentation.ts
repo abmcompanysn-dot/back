@@ -1,18 +1,11 @@
-// Point d'entrée d'instrumentation Next.js (App Router).
-// Charge la config Sentry côté serveur Node ET côté edge runtime selon
-// l'environnement d'exécution. La config client vit dans
-// instrumentation-client.ts (chargé automatiquement par @sentry/nextjs).
-import * as Sentry from '@sentry/nextjs'
-
+// Sentry frontend DÉSACTIVÉ le 2026-08-29 — incompatibilité
+// @sentry/nextjs × @cloudflare/next-on-pages v1.13 (« duplicated
+// identifier », build Cloudflare Pages en échec). Voir next.config.mjs.
+//
+// register() reste exporté (Next l'appelle au démarrage) mais ne fait
+// plus rien. Le suivi d'erreurs backend Go (internal/kit) n'est pas
+// concerné. Restaurer depuis .sentry-disabled/ le jour où on repasse
+// sur @opennextjs/cloudflare ou un next-on-pages compatible.
 export async function register() {
-  if (process.env.NEXT_RUNTIME === 'nodejs') {
-    await import('./sentry.server.config')
-  }
-  if (process.env.NEXT_RUNTIME === 'edge') {
-    await import('./sentry.edge.config')
-  }
+  // no-op
 }
-
-// Capture les erreurs des Server Components / route handlers / server actions
-// (nouveau hook Next 15 — sans ça, seules les erreurs client remontaient).
-export const onRequestError = Sentry.captureRequestError

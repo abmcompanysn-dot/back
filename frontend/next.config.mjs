@@ -1,5 +1,21 @@
 /** @type {import('next').NextConfig} */
-import { withSentryConfig } from '@sentry/nextjs';
+
+// Sentry FRONTEND désactivé le 2026-08-29.
+//
+// @sentry/nextjs (withSentryConfig + instrumentation.ts) est incompatible
+// avec @cloudflare/next-on-pages v1.13.16 : l'étape de bundling des edge
+// functions échoue avec « ERROR: A duplicated identifier has been detected
+// in the same function file, aborting ». `next build` réussit, mais le
+// déploiement Cloudflare Pages non — 16+ builds en Failure d'affilée
+// depuis le commit d'intégration Sentry (a917ddb), bloquant TOUS les
+// autres correctifs.
+//
+// Le suivi d'erreurs BACKEND Go (via internal/kit) n'est pas concerné et
+// reste actif. Pour réactiver Sentry frontend il faudra soit migrer vers
+// @opennextjs/cloudflare, soit un workaround next-on-pages validé —
+// jusque-là ce fichier NE réimporte PAS @sentry/nextjs et n'enveloppe
+// PAS la config.
+// import { withSentryConfig } from '@sentry/nextjs';
 
 // CSP est géré dynamiquement par middleware.ts (nonce par requête)
 // On garde ici uniquement les autres en-têtes de sécurité
@@ -102,32 +118,6 @@ const nextConfig = {
   },
 };
 
-// --- Sentry (suivi des erreurs) ---------------------------------------------
-// withSentryConfig instrumente le build : upload des source maps (stack
-// traces lisibles) + tunneling optionnel. Tout est piloté par des variables
-// d'environnement — sans SENTRY_AUTH_TOKEN, le build fonctionne quand même,
-// il n'uploade juste pas les source maps.
-export default withSentryConfig(nextConfig, {
-  org: process.env.SENTRY_ORG,
-  project: process.env.SENTRY_PROJECT,
-  authToken: process.env.SENTRY_AUTH_TOKEN,
-
-  // Silencieux en CI, verbeux en local.
-  silent: !process.env.CI,
-
-  // Ne bloque jamais le build si l'upload des source maps échoue
-  // (token absent sur un preview, réseau, etc.).
-  errorHandler: (err) => {
-    console.warn('[sentry] upload source maps ignoré:', err?.message || err);
-  },
-
-  // Réduit la taille du bundle client : tree-shake le code de debug Sentry.
-  webpack: {
-    treeshake: { removeDebugLogging: true },
-  },
-
-  // Route de tunnel pour contourner les bloqueurs de pub côté navigateur.
-  // (les requêtes vers *.sentry.io sont souvent bloquées par uBlock etc.)
-  // La CSP autorise déjà *.ingest.sentry.io en repli si le tunnel échoue.
-  tunnelRoute: '/monitoring',
-});
+// --- Sentry frontend : DÉSACTIVÉ (voir le bloc en tête de fichier) ---------
+// Anciennement : export default withSentryConfig(nextConfig, { … })
+export default nextConfig;

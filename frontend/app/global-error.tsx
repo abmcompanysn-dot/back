@@ -2,7 +2,8 @@
 
 import { useEffect } from 'react'
 import Image from 'next/image'
-import * as Sentry from '@sentry/nextjs'
+// Sentry frontend désactivé le 2026-08-29 (voir next.config.mjs) — l'erreur
+// globale est loguée en console ; le suivi backend Go reste actif.
 
 const primaryButtonStyle: React.CSSProperties = {
   width: '100%', padding: '14px', background: '#e85d04',
@@ -25,9 +26,6 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error('[MIAD] Global error:', error)
-    // Remonte l'erreur globale (celle qui casse toute la page) dans Sentry —
-    // no-op si le DSN n'est pas configuré.
-    Sentry.captureException(error)
   }, [error])
 
   return (

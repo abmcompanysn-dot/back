@@ -39,3 +39,4 @@ woocommerce-snippets/miad-r2-offload.php
 .dev.vars*
 !.dev.vars.example
 .gstack/
+.sentry-disabled/
