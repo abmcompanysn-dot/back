@@ -35,6 +35,9 @@ spec:
             - name: caddyfile
               mountPath: /etc/caddy/Caddyfile
               subPath: Caddyfile
+            - name: caddyfile
+              mountPath: /etc/caddy/k8s-dashboard-login.html
+              subPath: k8s-dashboard-login.html
             - name: data
               mountPath: /data
           readinessProbe:

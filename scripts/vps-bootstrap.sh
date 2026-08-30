@@ -64,8 +64,12 @@ kubectl apply -f deploy/k8s/10-infra.yaml
 kubectl apply -f deploy/k8s/20-services.yaml
 kubectl apply -f deploy/k8s/25-admin.yaml
 # Le Caddyfile vient du dépôt : source unique avec docker-compose.
+# k8s-dashboard-login.html ajouté le 2026-08-30 (page de connexion devant
+# k8s.miadmarket.ca — voir le bloc k8s.miadmarket.ca du Caddyfile).
 kubectl -n miad create configmap caddyfile \
-  --from-file=Caddyfile=deploy/Caddyfile --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=Caddyfile=deploy/Caddyfile \
+  --from-file=k8s-dashboard-login.html=deploy/k8s-dashboard-login.html \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f deploy/k8s/30-gateway.yaml
 
 # ---------- 6. Build des images + import containerd (pas de registry) ----------

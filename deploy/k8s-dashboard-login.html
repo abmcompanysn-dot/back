@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Connexion — Kubernetes Dashboard</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:#f0f2f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; }
+  .card { background:#fff; padding:32px; border-radius:12px; box-shadow:0 2px 16px rgba(0,0,0,0.1); width:340px; max-width:90vw; }
+  h1 { font-size:1.1rem; color:#005826; margin:0 0 20px; text-align:center; }
+  label { display:block; font-size:12px; color:#555; margin:14px 0 4px; }
+  input { width:100%; padding:10px 12px; border:1px solid #ccc; border-radius:6px; font-size:14px; box-sizing:border-box; }
+  button { width:100%; margin-top:22px; padding:12px; background:#005826; color:#fff; border:none; border-radius:6px; font-size:14px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:0.6; cursor:default; }
+  .error { color:#c0392b; font-size:13px; margin-top:12px; text-align:center; }
+  .totp-field { display:none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Connexion — Surveillance du cluster</h1>
+    <form id="loginForm">
+      <label>Email</label>
+      <input type="email" id="email" required autocomplete="username">
+      <label>Mot de passe</label>
+      <input type="password" id="password" required autocomplete="current-password">
+      <div class="totp-field" id="totpField">
+        <label>Code Google Authenticator</label>
+        <input type="text" id="totp" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+      </div>
+      <button type="submit" id="submitBtn">Se connecter</button>
+      <div class="error" id="errorMsg"></div>
+    </form>
+  </div>
+  <script>
+    const form = document.getElementById('loginForm');
+    const errorMsg = document.getElementById('errorMsg');
+    const totpField = document.getElementById('totpField');
+    const submitBtn = document.getElementById('submitBtn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorMsg.textContent = '';
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/dashboard-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value,
+            totp_code: document.getElementById('totp').value,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.session && data.session.jwt) {
+          window.location.href = '/';
+          return;
+        }
+        if (data.totp_required) {
+          totpField.style.display = 'block';
+          errorMsg.textContent = 'Entrez votre code à 6 chiffres.';
+        } else {
+          errorMsg.textContent = data.message || data.error && data.error.message || 'Identifiants incorrects.';
+        }
+      } catch (err) {
+        errorMsg.textContent = 'Erreur réseau.';
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

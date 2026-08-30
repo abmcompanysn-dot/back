@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -214,6 +215,8 @@ func main() {
 		mux.HandleFunc("POST /auth/reset-password", s.resetPassword)
 		mux.HandleFunc("POST /auth/login", s.loginCustomer)
 		mux.HandleFunc("POST /auth/admin/login", s.adminLogin)
+		mux.HandleFunc("POST /auth/dashboard-login", s.dashboardLoginHandler) // garde k8s.miadmarket.ca (Caddy forward_auth) — voir Caddyfile
+		mux.HandleFunc("GET /auth/verify-cookie", s.verifyCookieHandler)      // idem, appelé par forward_auth à chaque requête
 		mux.HandleFunc("POST /auth/admin/firebase", s.firebaseAdminLogin)
 		mux.HandleFunc("POST /auth/firebase", s.firebaseCustomerLogin)
 		mux.HandleFunc("POST /auth/admin/2fa/setup", s.setup2FA) // exige un JWT role=admin déjà valide (post-login sans 2FA, ou 2FA déjà active pour la remplacer)
@@ -387,6 +390,71 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		"role":    role,
 		"email":   body.Email,
 	})
+}
+
+// dashboardLoginHandler — garde devant k8s.miadmarket.ca (Kubernetes
+// Dashboard, installé le 2026-08-30, protégé par mot de passe + code
+// Google Authenticator sur demande explicite du fondateur : un token
+// cluster-admin statique sans 2FA exposé publiquement était jugé trop
+// risqué). Réutilise adminLogin telle quelle (même identifiants, même
+// 2FA que kante.miadmarket.ca) plutôt que dupliquer sa logique — la
+// seule différence est le TRANSPORT du JWT obtenu : un cookie httpOnly
+// (miad_k8s_session) au lieu du corps JSON, pour que Caddy forward_auth
+// puisse le relire à chaque requête vers le Dashboard sans que le
+// navigateur n'ait à rejouer le login.
+func (s *server) dashboardLoginHandler(w http.ResponseWriter, r *http.Request) {
+	rec := httptest.NewRecorder()
+	s.adminLogin(rec, r)
+	// adminLogin a déjà consommé r.Body — on relaie sa réponse telle
+	// quelle (mêmes codes d'erreur : identifiants invalides, TOTP requis,
+	// TOTP invalide, compte désactivé) après en avoir extrait le JWT en
+	// cas de succès.
+	var out struct {
+		TOTPSetupRequired bool `json:"totp_setup_required"`
+		Session           struct {
+			JWT       string `json:"jwt"`
+			ExpiresAt string `json:"expires_at"`
+		} `json:"session"`
+	}
+	body := rec.Body.Bytes()
+	if rec.Code == 200 {
+		_ = json.Unmarshal(body, &out)
+		if out.Session.JWT != "" {
+			expiresAt, err := time.Parse(time.RFC3339, out.Session.ExpiresAt)
+			maxAge := int(s.jwtTTL.Seconds())
+			if err == nil {
+				maxAge = int(time.Until(expiresAt).Seconds())
+			}
+			http.SetCookie(w, &http.Cookie{
+				Name:     "miad_k8s_session",
+				Value:    out.Session.JWT,
+				Path:     "/",
+				HttpOnly: true,
+				Secure:   true,
+				SameSite: http.SameSiteLaxMode,
+				MaxAge:   maxAge,
+			})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(rec.Code)
+	_, _ = w.Write(body)
+}
+
+// verifyCookieHandler — endpoint interrogé par Caddy forward_auth (voir
+// Caddyfile, bloc k8s.miadmarket.ca) avant CHAQUE requête vers le
+// Dashboard. 200 = laisse passer, 401 = Caddy redirige vers l'écran de
+// connexion. claimsFromRequest lit le cookie miad_k8s_session en repli
+// de l'en-tête Authorization absent ici (requête interne Caddy, pas un
+// vrai appel API) — même vérification signature/expiration/révocation
+// que pour un JWT porté en Bearer.
+func (s *server) verifyCookieHandler(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil || claims["role"] != "admin" {
+		kit.Fail(w, 401, "unauthorized", "session invalide ou expirée")
+		return
+	}
+	kit.JSON(w, 200, map[string]string{"status": "ok"})
 }
 
 /* ---------- Firebase ---------- */
@@ -1694,10 +1762,24 @@ func (s *server) requireRole(r *http.Request, role string) error {
 func (s *server) claimsFromRequest(r *http.Request) (map[string]any, error) {
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
-	if !strings.HasPrefix(h, prefix) {
+	token := ""
+	switch {
+	case strings.HasPrefix(h, prefix):
+		token = h[len(prefix):]
+	default:
+		// Repli cookie — utilisé par verifyCookieHandler (garde
+		// k8s.miadmarket.ca via Caddy forward_auth, voir Caddyfile) : un
+		// navigateur qui appelle cet endpoint pour se faire authentifier
+		// ne porte pas d'en-tête Authorization, juste le cookie posé au
+		// login (voir dashboardLoginHandler).
+		if c, err := r.Cookie("miad_k8s_session"); err == nil {
+			token = c.Value
+		}
+	}
+	if token == "" {
 		return nil, fmt.Errorf("Authorization: Bearer <jwt> attendu")
 	}
-	parts := strings.Split(h[len(prefix):], ".")
+	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("JWT malformé")
 	}

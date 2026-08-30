@@ -176,14 +176,39 @@ origin.miadmarket.ca {
 # le Dashboard lui-même) — tls_insecure_skip_verify ici concerne
 # uniquement la connexion Caddy → pod à l'intérieur du cluster, PAS la
 # connexion visiteur → Caddy (celle-ci reste un vrai certificat Let's
-# Encrypt, HTTPS complet de bout en bout côté utilisateur). Connexion
-# par token (compte admin-user, cluster-admin) — voir scratchpad de la
-# session d'installation pour le jeton, à ne jamais commiter ici.
+# Encrypt, HTTPS complet de bout en bout côté utilisateur).
+#
+# Protection ajoutée le 2026-08-30 (demande explicite du fondateur : un
+# token cluster-admin statique sans 2FA, exposé publiquement, était jugé
+# trop risqué) — mot de passe + code Google Authenticator devant TOUTE
+# la page, via forward_auth vers auth-svc (mêmes identifiants admin que
+# kante.miadmarket.ca, voir dashboardLoginHandler/verifyCookieHandler
+# dans services/auth-svc/main.go). /login et /dashboard-login restent
+# accessibles sans être déjà connecté (sinon impossible de se
+# connecter) ; tout le reste exige le cookie miad_k8s_session valide.
 k8s.miadmarket.ca {
-	reverse_proxy kubernetes-dashboard.kubernetes-dashboard.svc.cluster.local:443 {
-		transport http {
-			tls_insecure_skip_verify
+	handle /login {
+		root * /etc/caddy
+		rewrite * /k8s-dashboard-login.html
+		file_server
+	}
+	handle /dashboard-login {
+		rewrite * /auth/dashboard-login
+		reverse_proxy auth-svc:8086
+	}
+	handle {
+		forward_auth auth-svc:8086 {
+			uri /auth/verify-cookie
 		}
+		reverse_proxy kubernetes-dashboard.kubernetes-dashboard.svc.cluster.local:443 {
+			transport http {
+				tls_insecure_skip_verify
+			}
+		}
+	}
+	handle_errors {
+		@unauthorized expression {http.error.status_code} == 401
+		redir @unauthorized /login 302
 	}
 }
 

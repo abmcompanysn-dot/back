@@ -54,10 +54,16 @@ Caddyfile` n'est **pas auto-synchronisé** avec le cluster — éditer ce
 fichier ne suffit pas. Après toute modification, il faut explicitement :
 
 ```bash
-kubectl -n miad create configmap caddyfile --from-file=Caddyfile=deploy/Caddyfile \
+kubectl -n miad create configmap caddyfile \
+  --from-file=Caddyfile=deploy/Caddyfile \
+  --from-file=k8s-dashboard-login.html=deploy/k8s-dashboard-login.html \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n miad rollout restart deployment/caddy
 ```
+
+(le second `--from-file` sert la page de connexion devant k8s.miadmarket.ca,
+ajoutée le 30/08/2026 — inutile si ce fichier n'existe pas encore dans une
+copie plus ancienne du dépôt, mais sans danger de l'inclure par défaut)
 
 Oublier cette étape après avoir ajouté une route = 404/502 silencieux sur
 la nouvelle route, alors même que le service cible tourne parfaitement.
