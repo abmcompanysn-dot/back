@@ -169,6 +169,24 @@ origin.miadmarket.ca {
 	import api_routes
 }
 
+# ---------- k8s.miadmarket.ca : Kubernetes Dashboard (surveillance cluster) ----------
+# Installé le 2026-08-30 (demande du fondateur : voir l'état de santé de
+# tous les pods/services depuis un navigateur). Le service dashboard
+# écoute en HTTPS avec un certificat AUTO-SIGNÉ en interne (généré par
+# le Dashboard lui-même) — tls_insecure_skip_verify ici concerne
+# uniquement la connexion Caddy → pod à l'intérieur du cluster, PAS la
+# connexion visiteur → Caddy (celle-ci reste un vrai certificat Let's
+# Encrypt, HTTPS complet de bout en bout côté utilisateur). Connexion
+# par token (compte admin-user, cluster-admin) — voir scratchpad de la
+# session d'installation pour le jeton, à ne jamais commiter ici.
+k8s.miadmarket.ca {
+	reverse_proxy kubernetes-dashboard.kubernetes-dashboard.svc.cluster.local:443 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
 # ---------- kante.miadmarket.ca : dashboard admin uniquement ----------
 # /auth/admin/* ajouté car le webui admin (api.ts) suppose que /auth/*
 # passe par la même origine que le dashboard — sans cette route, login
