@@ -199,16 +199,22 @@ k8s.miadmarket.ca {
 	handle {
 		forward_auth auth-svc:8086 {
 			uri /auth/verify-cookie
+			# handle_response plutôt que handle_errors : forward_auth (qui
+			# est un reverse_proxy déguisé) ne fait remonter son 401 comme
+			# une VRAIE erreur Caddy (déclenchant handle_errors) que dans
+			# certaines conditions peu fiables en pratique — testé le
+			# 2026-08-30, le 401 passait tel quel au visiteur (JSON brut
+			# d'auth-svc) sans jamais déclencher la redirection.
+			@denied status 401
+			handle_response @denied {
+				redir * /login 302
+			}
 		}
 		reverse_proxy kubernetes-dashboard.kubernetes-dashboard.svc.cluster.local:443 {
 			transport http {
 				tls_insecure_skip_verify
 			}
 		}
-	}
-	handle_errors {
-		@unauthorized expression {http.error.status_code} == 401
-		redir @unauthorized /login 302
 	}
 }
 
