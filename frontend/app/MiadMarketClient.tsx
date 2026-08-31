@@ -1513,6 +1513,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     onCategoryClick: (slug: string) => { setSelectedCategory(slug); navigateTo('category'); },
     onCountryClick: undefined,
     onSearch: handleSearch,
+    searchQuery,
     onLoginClick: () => { prevView.current = currentView; navigateTo('login'); },
     onHelpClick: (topic?: string) => {
       setActiveHelpTopic(topic);

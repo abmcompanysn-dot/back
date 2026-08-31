@@ -33,6 +33,11 @@ interface HeaderProps {
   onCategoryClick: (slug: string) => void
   onCountryClick?: (code: string, view?: any) => void
   onSearch: (query: string) => void
+  // Terme de recherche piloté par le parent (MiadMarketClient) : sans ça le
+  // Header gardait son propre useState local, jamais remis à jour quand le
+  // parent restaure searchQuery au retour arrière → le champ revenait vide
+  // en revenant sur des résultats de recherche (signalé le 2026-08-31).
+  searchQuery?: string
   onLoginClick: () => void
   onDashboardClick: () => void
   onDashboardSectionClick?: (section: string) => void
@@ -74,6 +79,7 @@ export function Header({
   onHomeClick,
   onCategoryClick,
   onSearch,
+  searchQuery: searchQueryProp,
   onLoginClick,
   onDashboardClick,
   onDashboardSectionClick,
@@ -82,7 +88,15 @@ export function Header({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [helpMenuOpen, setHelpMenuOpen] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
+  // Contrôlé par le parent quand searchQueryProp est fourni ; sinon état
+  // local (Header réutilisé hors MiadMarketClient). setSearchQuery met à
+  // jour le local ET remonte au parent via onSearch pour rester synchrones.
+  const [searchQueryLocal, setSearchQueryLocal] = useState('')
+  const searchQuery = searchQueryProp ?? searchQueryLocal
+  const setSearchQuery = (v: string) => {
+    setSearchQueryLocal(v)
+    if (searchQueryProp !== undefined) onSearch(v)
+  }
   const [searchCategory, setSearchCategory] = useState('')
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
