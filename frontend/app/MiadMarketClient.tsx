@@ -713,11 +713,24 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       scrollY: window.scrollY,
     })
 
-    // router.push (et non window.history.pushState) : Next App Router doit
-    // lui-meme connaitre cette entree d'historique, sinon un retour arriere
-    // vers elle declenche un rechargement complet de la page par securite
-    // (verifie en conditions reelles, meme avec une URL inchangee).
-    router.push(pushUrl || (window.location.pathname + window.location.search), { scroll: false })
+    // Création de l'entrée d'historique.
+    //
+    // - pushUrl fourni ET différent de l'URL courante (product/vendor/
+    //   country → /?v=...) : router.push, pour que Next App Router connaisse
+    //   cette entrée (sinon un retour arrière la recharge en entier).
+    // - sinon (vues sans URL propre : category, search, cart, dashboards…,
+    //   ou pushUrl === URL courante) : router.push('/') sur une URL déjà
+    //   égale à '/' ne crée AUCUNE entrée d'historique — le bouton retour
+    //   sortait alors du site (ex. "Voir tout" d'une rangée catégorie de
+    //   l'accueil, signalé le 2026-08-31). window.history.pushState, lui,
+    //   empile toujours une entrée ; le popstate + navStack la restaurent
+    //   comme les autres.
+    const here = window.location.pathname + window.location.search
+    if (pushUrl && pushUrl !== here) {
+      router.push(pushUrl, { scroll: false })
+    } else {
+      window.history.pushState({}, '', here)
+    }
 
     const returnTarget = loginReturnTo || currentView
     if (view === 'login') {
