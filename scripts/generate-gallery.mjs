@@ -102,6 +102,12 @@ const DRY_RUN = has('--dry-run')
 const LIMIT = optv('--limit') ? parseInt(optv('--limit'), 10) : Infinity
 const ONLY_IDS = optv('--ids') ? new Set(optv('--ids').split(',').map((s) => s.trim())) : null
 const ONLY_VENDOR = optv('--vendor') || null
+// --exclude-vendor 13,66,18,27 — boutiques à ne PAS traiter (demande du
+// fondateur le 2026-08-31 : 4 boutiques précises écartées du lot en cours,
+// sans toucher aux catégories déjà exclues par isExcludedCategory).
+const EXCLUDE_VENDORS = optv('--exclude-vendor')
+  ? new Set(optv('--exclude-vendor').split(',').map((s) => s.trim()))
+  : null
 const RESUME = has('--resume')
 // wan2.6-image : seul modèle image-to-image provisionné sur le workspace
 // DashScope actuel (ws-u3naq5kzbkdg0tyo, us-east-1). Les qwen-image-edit*
@@ -215,6 +221,7 @@ async function listSingleImageProducts() {
       if (imgs.length !== 1) continue
       // --ids force le traitement même sur une catégorie exclue (test ciblé).
       if (!ONLY_IDS && isExcludedCategory(p.category_slug || p.category)) continue
+      if (EXCLUDE_VENDORS && EXCLUDE_VENDORS.has(String(p.vendor_id))) continue
       const trid = p.trid || `id-${p.id}`
       if (byTrid.has(trid)) continue
       byTrid.set(trid, {
@@ -261,12 +268,32 @@ function promptsFor(name, categorySlug) {
   }
 }
 
+// AVIF non décodable côté DashScope ("cannot identify image file") — 110
+// des 131 produits restants (2026-08-31) ont leur photo d'origine en .avif
+// (migration WooCommerce récente, format déjà courant côté image-utils.ts
+// frontend). Reconvertit en JPEG et réhéberge sur MinIO AVANT l'appel
+// DashScope plutôt que de renoncer sur ce sous-ensemble — même chemin
+// d'upload que la publication finale (uploadToMinio), juste un prefix
+// distinct pour ne pas confondre ces JPEG intermédiaires avec les vrais
+// visuels publiés.
+const dashscopeSourceCache = new Map()
+async function dashscopeCompatibleUrl(sourceUrl) {
+  if (!/\.avif(\?|$)/i.test(sourceUrl)) return sourceUrl
+  if (dashscopeSourceCache.has(sourceUrl)) return dashscopeSourceCache.get(sourceUrl)
+  const avifBuffer = await downloadBuffer(sourceUrl)
+  const jpegBuffer = await sharp(avifBuffer).jpeg({ quality: 90 }).toBuffer()
+  const jpegUrl = await uploadToMinio(jpegBuffer, `dashscope-src-${Date.now()}.jpg`)
+  dashscopeSourceCache.set(sourceUrl, jpegUrl)
+  return jpegUrl
+}
+
 // ---- DashScope image-to-image (Qwen-Image edit) ----------------
 async function qwenEdit(sourceUrl, prompt) {
+  const compatibleUrl = await dashscopeCompatibleUrl(sourceUrl)
   const url = `${DASHSCOPE_BASE}/api/v1/services/aigc/multimodal-generation/generation`
   const payload = {
     model: MODEL,
-    input: { messages: [{ role: 'user', content: [{ image: sourceUrl }, { text: prompt }] }] },
+    input: { messages: [{ role: 'user', content: [{ image: compatibleUrl }, { text: prompt }] }] },
     parameters: {
       watermark: false,
       negative_prompt: 'lowres, blurry, distorted, deformed, extra limbs, text, watermark, added logo',
