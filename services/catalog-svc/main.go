@@ -818,14 +818,14 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 		where += fmt.Sprintf(" AND rating = $%d", len(args))
 	}
 	if q.Get("with_photos") == "true" {
-		where += " AND jsonb_array_length(photos) > 0"
+		where += " AND jsonb_array_length(COALESCE(NULLIF(photos, 'null'::jsonb), '[]'::jsonb)) > 0"
 	}
 	orderBy := "created_at DESC"
 	switch q.Get("sort") {
 	case "top":
 		orderBy = "rating DESC, helpful_count DESC, created_at DESC"
 	case "photos":
-		orderBy = "jsonb_array_length(photos) DESC, created_at DESC"
+		orderBy = "jsonb_array_length(COALESCE(NULLIF(photos, 'null'::jsonb), '[]'::jsonb)) DESC, created_at DESC"
 	}
 
 	// En-tête : note moyenne + répartition par étoile (toutes les colonnes
@@ -835,7 +835,7 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 	star := [6]int64{} // star[1..5]
 	var withPhotos int64
 	brk, err := s.db.Query(r.Context(),
-		`SELECT rating, count(*), count(*) FILTER (WHERE jsonb_array_length(photos) > 0)
+		`SELECT rating, count(*), count(*) FILTER (WHERE jsonb_array_length(COALESCE(NULLIF(photos, 'null'::jsonb), '[]'::jsonb)) > 0)
 		 FROM reviews WHERE product_id=$1 AND status='approved' AND review_type='product'
 		 GROUP BY rating`, productID)
 	if err != nil {
@@ -862,7 +862,7 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 	photoStrip := []string{}
 	prow, _ := s.db.Query(r.Context(),
 		`SELECT photos FROM reviews
-		 WHERE product_id=$1 AND status='approved' AND review_type='product' AND jsonb_array_length(photos) > 0
+		 WHERE product_id=$1 AND status='approved' AND review_type='product' AND jsonb_array_length(COALESCE(NULLIF(photos, 'null'::jsonb), '[]'::jsonb)) > 0
 		 ORDER BY created_at DESC LIMIT 12`, productID)
 	if prow != nil {
 		for prow.Next() {
@@ -1656,11 +1656,11 @@ func (s *server) seedCommunityReviews(w http.ResponseWriter, r *http.Request) {
 		rating := bank.min + rand.Intn(bank.max-bank.min+1)
 		comment := bank.text[rand.Intn(len(bank.text))]
 		// 1 photo sur 2, tirée de la galerie
-		var photos []string
+		photos := []string{}
 		if len(gallery) > 0 && rand.Intn(2) == 0 {
 			photos = []string{gallery[rand.Intn(len(gallery))]}
 		}
-		photosJSON, _ := json.Marshal(photos)
+		photosJSON, _ := json.Marshal(photos) // toujours un tableau JSON, jamais "null"
 		// avatar : représentant du pays si fourni, sinon vendeur, sinon rien
 		avatar := body.RepAvatar
 		if avatar == "" {
