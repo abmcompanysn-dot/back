@@ -12,8 +12,14 @@ interface Review {
   guest_name: string
   guest_email: string
   rating: number
+  title?: string
   comment: string
+  photos?: string[]
   verified_purchase: boolean
+  is_community?: boolean
+  review_type?: string
+  moderation_reason?: string
+  reviewer_country?: string
   status: string
   admin_reply: string
   created_at: string
@@ -70,6 +76,33 @@ export function Reviews() {
     }
   }
 
+  // ── Seed d'avis "de la communauté" sur un produit recommandé ──
+  const [seedOpen, setSeedOpen] = useState(false)
+  const [seed, setSeed] = useState({ product_id: '', count: '6', vendor_avatar: '', rep_avatar: '', countries: 'SN,CI,CM,BJ,GN,ML' })
+  const [seedBusy, setSeedBusy] = useState(false)
+  const [seedMsg, setSeedMsg] = useState<string | null>(null)
+
+  async function runSeed() {
+    if (!seed.product_id.trim()) return
+    setSeedBusy(true)
+    setSeedMsg(null)
+    try {
+      const body = await api.post<{ created: number }>('/admin/api/reviews/seed', {
+        product_id: Number(seed.product_id),
+        count: Number(seed.count) || 6,
+        vendor_avatar: seed.vendor_avatar.trim() || undefined,
+        rep_avatar: seed.rep_avatar.trim() || undefined,
+        countries: seed.countries.split(',').map((c) => c.trim().toUpperCase()).filter(Boolean),
+      })
+      setSeedMsg(`${body.created} avis de la communauté créés.`)
+      if (status === '' || status === 'approved') await load()
+    } catch (err) {
+      setSeedMsg(err instanceof ApiError ? err.message : 'échec du seed')
+    } finally {
+      setSeedBusy(false)
+    }
+  }
+
   async function sendReply(r: Review) {
     const reply = (replyDraft[r.id] || '').trim()
     if (!reply) return
@@ -93,7 +126,47 @@ export function Reviews() {
           <h2>Avis &amp; Modération</h2>
           <p className="subtitle">Réputation des produits et retours clients</p>
         </div>
+        <button className="btn-ghost" onClick={() => setSeedOpen((v) => !v)}>
+          {seedOpen ? 'Fermer' : 'Avis de la communauté…'}
+        </button>
       </div>
+
+      {seedOpen && (
+        <div className="form-card" style={{ marginBottom: 16, background: '#fafbfc' }}>
+          <p style={{ fontWeight: 700, marginTop: 0 }}>Générer des avis « de la communauté » sur un produit recommandé</p>
+          <p className="subtitle" style={{ marginTop: 0 }}>
+            Avis crédibles SANS badge « Achat vérifié » (mention « Avis de la communauté »). Nom + pays
+            tirés au sort, avatar = photo du vendeur ou du représentant du pays, photos réutilisées de la
+            galerie du produit. À réserver aux produits mis en avant.
+          </p>
+          <div className="form-grid">
+            <div className="form-field">
+              <label>ID produit (version FR)</label>
+              <input value={seed.product_id} onChange={(e) => setSeed({ ...seed, product_id: e.target.value })} placeholder="ex. 199" />
+            </div>
+            <div className="form-field">
+              <label>Nombre d'avis</label>
+              <input type="number" value={seed.count} onChange={(e) => setSeed({ ...seed, count: e.target.value })} />
+            </div>
+            <div className="form-field full">
+              <label>Photo du représentant du pays (URL, prioritaire pour l'avatar)</label>
+              <input value={seed.rep_avatar} onChange={(e) => setSeed({ ...seed, rep_avatar: e.target.value })} placeholder="https://img.miadmarket.ca/…" />
+            </div>
+            <div className="form-field full">
+              <label>Photo du vendeur (URL, avatar de repli)</label>
+              <input value={seed.vendor_avatar} onChange={(e) => setSeed({ ...seed, vendor_avatar: e.target.value })} placeholder="https://img.miadmarket.ca/…" />
+            </div>
+            <div className="form-field full">
+              <label>Pays à faire tourner (codes ISO2, séparés par des virgules)</label>
+              <input value={seed.countries} onChange={(e) => setSeed({ ...seed, countries: e.target.value })} />
+            </div>
+          </div>
+          <button className="btn-primary" disabled={seedBusy || !seed.product_id.trim()} onClick={runSeed}>
+            {seedBusy ? 'Génération…' : 'Générer les avis'}
+          </button>
+          {seedMsg && <span style={{ marginLeft: 12, fontSize: 13 }}>{seedMsg}</span>}
+        </div>
+      )}
 
       <div className="subnav" style={{ marginBottom: 16 }}>
         {STATUS_TABS.map((t) => (
@@ -136,7 +209,34 @@ export function Reviews() {
               </div>
               <Stars n={r.rating} />
             </div>
-            <p style={{ margin: '10px 0' }}>{r.comment || <em style={{ color: '#999' }}>Sans commentaire</em>}</p>
+            {(r.is_community || r.review_type === 'delivery' || r.moderation_reason) && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
+                {r.is_community && <span className="badge" style={{ background: '#eef1f4', color: '#5a6270' }}>Avis de la communauté</span>}
+                {r.review_type === 'delivery' && <span className="badge" style={{ background: '#e8f5e9', color: '#2e7d32' }}>Confirmation de livraison</span>}
+                {r.moderation_reason && (
+                  <span className="badge" style={{ background: '#fff3cd', color: '#8a6d1d' }}>
+                    ⚠ {r.moderation_reason}
+                  </span>
+                )}
+                {r.reviewer_country && <span className="badge">{r.reviewer_country}</span>}
+              </div>
+            )}
+            {r.title && <p style={{ margin: '8px 0 2px', fontWeight: 700 }}>{r.title}</p>}
+            <p style={{ margin: '4px 0 10px' }}>{r.comment || <em style={{ color: '#999' }}>Sans commentaire</em>}</p>
+
+            {Array.isArray(r.photos) && r.photos.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                {r.photos.map((src) => (
+                  <a key={src} href={src} target="_blank" rel="noreferrer">
+                    <img
+                      src={src}
+                      alt=""
+                      style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #e0e0e0' }}
+                    />
+                  </a>
+                ))}
+              </div>
+            )}
 
             {r.admin_reply && (
               <div style={{ background: '#f4f5f7', borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 10 }}>

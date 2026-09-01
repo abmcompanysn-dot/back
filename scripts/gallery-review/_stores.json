@@ -1,0 +1,1852 @@
+[
+ {
+  "address": {
+   "city": "",
+   "country": "CI"
+  },
+  "banner": "https://img.miadmarket.ca/vendors/1787885162390690402-logo.jpg",
+  "banner_url": "https://img.miadmarket.ca/vendors/1787885162390690402-logo.jpg",
+  "city": "",
+  "country": "CI",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/vendors/1787885155377916045-logo.jpg",
+  "id": 1,
+  "logo_url": "https://img.miadmarket.ca/vendors/1787885155377916045-logo.jpg",
+  "name": "JMK Créations",
+  "product_count": 7,
+  "products_count": 7,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "jmk-creations",
+  "store_name": "JMK Créations",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/07/store-banner.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/07/store-banner.jpg",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/07/store-banner-1.jpg",
+  "id": 2,
+  "logo_url": "https://img.miadmarket.ca/2026/07/store-banner-1.jpg",
+  "name": "Myana fashion",
+  "product_count": 9,
+  "products_count": 9,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "myana-fashion",
+  "store_name": "Myana fashion",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/07/teranga-perle-logo.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/07/teranga-perle-logo.jpeg",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/07/teranga-perle-logo-1.jpeg",
+  "id": 3,
+  "logo_url": "https://img.miadmarket.ca/2026/07/teranga-perle-logo-1.jpeg",
+  "name": "Teranga Perle",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "teranga-perle",
+  "store_name": "Teranga Perle",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Bobo-Dioulasso",
+   "country": "BF"
+  },
+  "banner": "https://img.miadmarket.ca/2026/07/hanis-logo.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/07/hanis-logo.jpg",
+  "city": "Bobo-Dioulasso",
+  "country": "BF",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/07/hanis-logo-1.jpg",
+  "id": 4,
+  "logo_url": "https://img.miadmarket.ca/2026/07/hanis-logo-1.jpg",
+  "name": "Hani's",
+  "product_count": 29,
+  "products_count": 29,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "hanis",
+  "store_name": "Hani's",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Thies",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/07/touba-store-prestique-banniere.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/07/touba-store-prestique-banniere.jpg",
+  "city": "Thies",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/07/touba-store-prestique-photo-profil.jpg",
+  "id": 5,
+  "logo_url": "https://img.miadmarket.ca/2026/07/touba-store-prestique-photo-profil.jpg",
+  "name": "Touba store prestique",
+  "product_count": 17,
+  "products_count": 17,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "touba-store-prestique",
+  "store_name": "Touba store prestique",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "CM"
+  },
+  "banner": "",
+  "banner_url": "",
+  "city": "",
+  "country": "CM",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/05/cropped-IMG-20260529-WA0019-scaled-1.jpg",
+  "id": 6,
+  "logo_url": "https://img.miadmarket.ca/2026/05/cropped-IMG-20260529-WA0019-scaled-1.jpg",
+  "name": "RicardoDesign",
+  "product_count": 2,
+  "products_count": 2,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "ricardodesign",
+  "store_name": "RicardoDesign",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "abidjan",
+   "country": "CI"
+  },
+  "banner": "https://img.miadmarket.ca/2026/05/WhatsApp-Image-2026-05-20-at-00.14.49-2.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/05/WhatsApp-Image-2026-05-20-at-00.14.49-2.jpeg",
+  "city": "abidjan",
+  "country": "CI",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/05/cropped-WhatsApp-Image-2026-05-20-at-00.14.52.jpeg",
+  "id": 7,
+  "logo_url": "https://img.miadmarket.ca/2026/05/cropped-WhatsApp-Image-2026-05-20-at-00.14.52.jpeg",
+  "name": "attiale",
+  "product_count": 16,
+  "products_count": 16,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "attiale",
+  "store_name": "attiale",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/05/Capture-decran-2026-05-18-103300-1.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/05/Capture-decran-2026-05-18-103300-1.jpg",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/05/cropped-Capture-decran-2026-05-18-103300.jpg",
+  "id": 8,
+  "logo_url": "https://img.miadmarket.ca/2026/05/cropped-Capture-decran-2026-05-18-103300.jpg",
+  "name": "MAHU STORE",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "brunel-atekossi",
+  "store_name": "MAHU STORE",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/05/cropped-robe-brocard-accessoirisee-pour-enfant-0-1.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/05/cropped-robe-brocard-accessoirisee-pour-enfant-0-1.avif",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/05/cropped-robe-brocard-accessoirisee-pour-enfant-0.avif",
+  "id": 9,
+  "logo_url": "https://img.miadmarket.ca/2026/05/cropped-robe-brocard-accessoirisee-pour-enfant-0.avif",
+  "name": "Fall",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "abibatou-fall",
+  "store_name": "Fall",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/05/cropped-ensemble-deux-pieces-homme-0-1-1.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/05/cropped-ensemble-deux-pieces-homme-0-1-1.avif",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/05/cropped-ensemble-deux-pieces-homme-0-1.avif",
+  "id": 10,
+  "logo_url": "https://img.miadmarket.ca/2026/05/cropped-ensemble-deux-pieces-homme-0-1.avif",
+  "name": "Fallou mode",
+  "product_count": 9,
+  "products_count": 9,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "fallou-diaw",
+  "store_name": "Fallou mode",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Cotonou",
+   "country": "BJ"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/IMG_7988.JPG-1-scaled.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/IMG_7988.JPG-1-scaled.jpeg",
+  "city": "Cotonou",
+  "country": "BJ",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/05/cropped-IMG_7988.JPG-1-scaled-1.jpeg",
+  "id": 11,
+  "logo_url": "https://img.miadmarket.ca/2026/05/cropped-IMG_7988.JPG-1-scaled-1.jpeg",
+  "name": "garellemode",
+  "product_count": 2,
+  "products_count": 2,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "selome-dorcas",
+  "store_name": "garellemode",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Cotonou",
+   "country": "BJ"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-14-at-10.53.08-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-14-at-10.53.08-1.jpeg",
+  "city": "Cotonou",
+  "country": "BJ",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-14-at-10.53.08.jpeg",
+  "id": 12,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-14-at-10.53.08.jpeg",
+  "name": "atelier MK",
+  "product_count": 4,
+  "products_count": 4,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "merveille-kpatenon",
+  "store_name": "atelier MK",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": ""
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-cropped-WhatsApp-Image-2026-02-28-at-21.16.48-2.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-cropped-WhatsApp-Image-2026-02-28-at-21.16.48-2.jpeg",
+  "city": "",
+  "country": "",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-28-at-21.16.48-2.jpeg",
+  "id": 13,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-28-at-21.16.48-2.jpeg",
+  "name": "jamta-sport",
+  "product_count": 10,
+  "products_count": 10,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "marie-louise",
+  "store_name": "jamta-sport",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-GFTY4-scaled-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-GFTY4-scaled-1.jpeg",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-00.01.11.jpeg",
+  "id": 14,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-00.01.11.jpeg",
+  "name": "Bijouterie Dabakh",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "thiam-ndiaga",
+  "store_name": "Bijouterie Dabakh",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-cropped-WhatsApp-Image-2026-03-10-at-20.51.55-1-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-cropped-WhatsApp-Image-2026-03-10-at-20.51.55-1-1.jpeg",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-10-at-20.51.55-1.jpeg",
+  "id": 15,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-10-at-20.51.55-1.jpeg",
+  "name": "Wall Art Print",
+  "product_count": 9,
+  "products_count": 9,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "maodo-sy-mbaye",
+  "store_name": "Wall Art Print",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-03-13-at-08.56.24.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-03-13-at-08.56.24.jpg",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-13-at-08.56.24-1.jpg",
+  "id": 16,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-13-at-08.56.24-1.jpg",
+  "name": "EAAP TIM VIP AFRICAINE",
+  "product_count": 3,
+  "products_count": 3,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "vip-africaine",
+  "store_name": "EAAP TIM VIP AFRICAINE",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-17-at-22.53.34-2-2.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-17-at-22.53.34-2-2.jpeg",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-17-at-22.53.34-2-1.jpeg",
+  "id": 17,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-17-at-22.53.34-2-1.jpeg",
+  "name": "complexe-yayou-naby-business",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "complexe-yayou-naby-business-2",
+  "store_name": "complexe-yayou-naby-business",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Cotonou",
+   "country": "BJ"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-06-at-02.43.09-scaled-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-06-at-02.43.09-scaled-1.jpeg",
+  "city": "Cotonou",
+  "country": "BJ",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-06-at-02.43.37-1.jpeg",
+  "id": 18,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-03-06-at-02.43.37-1.jpeg",
+  "name": "Galerie Fon Amonmi",
+  "product_count": 14,
+  "products_count": 14,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "galerie-fon-amonmi",
+  "store_name": "Galerie Fon Amonmi",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-02-19-at-15.20.34.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-02-19-at-15.20.34.jpeg",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-19-at-15.20.34-1.jpeg",
+  "id": 19,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-19-at-15.20.34-1.jpeg",
+  "name": "Fadhilou hijab",
+  "product_count": 17,
+  "products_count": 17,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "fadhilou-hijab",
+  "store_name": "Fadhilou hijab",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-cropped-WhatsApp-Image-2026-02-19-at-15.08.35-1-1-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-cropped-WhatsApp-Image-2026-02-19-at-15.08.35-1-1-1.jpeg",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-19-at-15.08.35-1-1-1.jpeg",
+  "id": 20,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-19-at-15.08.35-1-1-1.jpeg",
+  "name": "maktaba assahaba",
+  "product_count": 10,
+  "products_count": 10,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "maktaba-assahaba",
+  "store_name": "maktaba assahaba",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-23.37.43-3-2.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-23.37.43-3-2.jpeg",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-23.37.43-3-1.jpeg",
+  "id": 21,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-23.37.43-3-1.jpeg",
+  "name": "Lipton Café Touba",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "lipton-cafe-touba",
+  "store_name": "Lipton Café Touba",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-17.51.09-1-1-1-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-17.51.09-1-1-1-1.jpeg",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-17.51.09-1-1-1.jpeg",
+  "id": 22,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-14-at-17.51.09-1-1-1.jpeg",
+  "name": "Sahel Natura",
+  "product_count": 2,
+  "products_count": 2,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "sahel-natura",
+  "store_name": "Sahel Natura",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "",
+  "banner_url": "",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-02-17-at-09.50.02-1.jpeg",
+  "id": 23,
+  "logo_url": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-02-17-at-09.50.02-1.jpeg",
+  "name": "BarryAfricaincaaps",
+  "product_count": 12,
+  "products_count": 12,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "marquebarryafricaincaaps",
+  "store_name": "BarryAfricaincaaps",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Suleja,Niger state",
+   "country": "NG"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/77679.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/77679.jpg",
+  "city": "Suleja,Niger state",
+  "country": "NG",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/07/77684.jpg",
+  "id": 24,
+  "logo_url": "https://img.miadmarket.ca/2026/07/77684.jpg",
+  "name": "Blings_by_ze",
+  "product_count": 59,
+  "products_count": 59,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "abdullahimoradeyogmail-com",
+  "store_name": "Blings_by_ze",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/78098.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/78098.jpg",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/78096.jpg",
+  "id": 25,
+  "logo_url": "https://img.miadmarket.ca/2026/03/78096.jpg",
+  "name": "Adore ESSENTIALS",
+  "product_count": 6,
+  "products_count": 6,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "adore-essentials",
+  "store_name": "Adore ESSENTIALS",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "conakry",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-7-scaled-1.png",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-7-scaled-1.png",
+  "city": "conakry",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-20-at-17.55.29-1.jpeg",
+  "id": 26,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-20-at-17.55.29-1.jpeg",
+  "name": "I &M Chic création",
+  "product_count": 7,
+  "products_count": 7,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "i-m-chic-creation",
+  "store_name": "I &M Chic création",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "cotonou",
+   "country": "BJ"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/66924.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/66924.jpg",
+  "city": "cotonou",
+  "country": "BJ",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/72217.jpg",
+  "id": 27,
+  "logo_url": "https://img.miadmarket.ca/2026/03/72217.jpg",
+  "name": "Georgine wax",
+  "product_count": 25,
+  "products_count": 25,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "georginehounvougmail-com",
+  "store_name": "Georgine wax",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-17-at-23.53.28.jpeg4_.webp",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-17-at-23.53.28.jpeg4_.webp",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-17-at-23.53.28.jpeg4_.webp",
+  "id": 28,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-17-at-23.53.28.jpeg4_.webp",
+  "name": "Complexe yayou Naby business",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "complexe-yayou-naby-business",
+  "store_name": "Complexe yayou Naby business",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Yaoundé",
+   "country": "CM"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-24-at-19.29.51-3.webp",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-24-at-19.29.51-3.webp",
+  "city": "Yaoundé",
+  "country": "CM",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-24-at-19.29.51-1.webp",
+  "id": 29,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-24-at-19.29.51-1.webp",
+  "name": "MALAÏKA'S HOUSE",
+  "product_count": 116,
+  "products_count": 116,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "dagha-fabiole-arisca",
+  "store_name": "MALAÏKA'S HOUSE",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-02-23-at-14.32.41.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-02-23-at-14.32.41.jpeg",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-23-at-14.32.41-1.jpeg",
+  "id": 30,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-02-23-at-14.32.41-1.jpeg",
+  "name": "Lebou Agro",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "salimata",
+  "store_name": "Lebou Agro",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "CM"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-13-at-20.33.49.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-13-at-20.33.49.avif",
+  "city": "",
+  "country": "CM",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-13-at-20.33.49-1.avif",
+  "id": 31,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-13-at-20.33.49-1.avif",
+  "name": "chez bio distribution",
+  "product_count": 10,
+  "products_count": 10,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "ndefo-nzakou-jules-a",
+  "store_name": "chez bio distribution",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "CM"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-13-at-18.31.12-1.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-13-at-18.31.12-1.avif",
+  "city": "",
+  "country": "CM",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-13-at-18.31.12.avif",
+  "id": 32,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-13-at-18.31.12.avif",
+  "name": "Ets Bio distribution bu Elobio & LAQUINA",
+  "product_count": 7,
+  "products_count": 7,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "ets-bio-distribution-bu-elobio-laquina",
+  "store_name": "Ets Bio distribution bu Elobio & LAQUINA",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-08-at-20.28.09-1.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-08-at-20.28.09-1.avif",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-08-at-20.28.09.avif",
+  "id": 33,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-08-at-20.28.09.avif",
+  "name": "BK by Yacine",
+  "product_count": 11,
+  "products_count": 11,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "bk-by-yacine",
+  "store_name": "BK by Yacine",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-21.14.56-1.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-21.14.56-1.avif",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-21.14.56.avif",
+  "id": 34,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-21.14.56.avif",
+  "name": "Tawa mboudaye acajou",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "loum",
+  "store_name": "Tawa mboudaye acajou",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-20.01.24.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-20.01.24.avif",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-20.01.24-1.avif",
+  "id": 35,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-20.01.24-1.avif",
+  "name": "Mame Babacar Business",
+  "product_count": 3,
+  "products_count": 3,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mame-babacar-business",
+  "store_name": "Mame Babacar Business",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "",
+  "banner_url": "",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-19.49.51.avif",
+  "id": 36,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-19.49.51.avif",
+  "name": "Mes perles By Awa",
+  "product_count": 3,
+  "products_count": 3,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mes-perles-by-awa",
+  "store_name": "Mes perles By Awa",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-cropped-Creme-Gowe-et-ingredients-naturels-1.png",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-cropped-Creme-Gowe-et-ingredients-naturels-1.png",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-Creme-Gowe-et-ingredients-naturels.png",
+  "id": 37,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-Creme-Gowe-et-ingredients-naturels.png",
+  "name": "Mamis Ba",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mamis-ba",
+  "store_name": "Mamis Ba",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-11-at-14.23.02.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-11-at-14.23.02.avif",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-14.23.02.avif",
+  "id": 38,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-14.23.02.avif",
+  "name": "waxtu",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "waxtu",
+  "store_name": "waxtu",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-14.05.33-1.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-14.05.33-1.avif",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-14.05.33.avif",
+  "id": 39,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-14.05.33.avif",
+  "name": "MAGUY SN",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "maguy-sn",
+  "store_name": "MAGUY SN",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/im-21-2.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/im-21-2.jpeg",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-11.00.48.avif",
+  "id": 40,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-11-at-11.00.48.avif",
+  "name": "Awa",
+  "product_count": 14,
+  "products_count": 14,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "awa-thiam",
+  "store_name": "Awa",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": ""
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-01.15.50-16.webp",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-01.15.50-16.webp",
+  "city": "",
+  "country": "",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-01.15.50.webp",
+  "id": 41,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-01.15.50.webp",
+  "name": "Dabo filitex",
+  "product_count": 3,
+  "products_count": 3,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "dabo-filitex",
+  "store_name": "Dabo filitex",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-09-at-21.01.42.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-09-at-21.01.42.jpeg",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-cropped-cropped-WhatsApp-Image-2026-02-09-at-21.01.56-2.webp",
+  "id": 42,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-cropped-cropped-WhatsApp-Image-2026-02-09-at-21.01.56-2.webp",
+  "name": "Diouma",
+  "product_count": 20,
+  "products_count": 20,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "diouma",
+  "store_name": "Diouma",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-13.20.07-2-1.webp",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-13.20.07-2-1.webp",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-13.20.07-2.webp",
+  "id": 43,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-10-at-13.20.07-2.webp",
+  "name": "la Petite Attou",
+  "product_count": 8,
+  "products_count": 8,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "attou",
+  "store_name": "la Petite Attou",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-09-at-22.06.12.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-09-at-22.06.12.avif",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-09-at-22.06.11-3.webp",
+  "id": 44,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-09-at-22.06.11-3.webp",
+  "name": "Bio kya",
+  "product_count": 27,
+  "products_count": 27,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "bio-kya",
+  "store_name": "Bio kya",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "",
+  "banner_url": "",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-07-at-18.26.27.jpeg",
+  "id": 45,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-07-at-18.26.27.jpeg",
+  "name": "Teranga Infusion",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "infusion-locale",
+  "store_name": "Teranga Infusion",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": ""
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/logo.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/logo.jpeg",
+  "city": "Dakar",
+  "country": "",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-logo.jpeg",
+  "id": 46,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-logo.jpeg",
+  "name": "COSAAN GROUPE",
+  "product_count": 28,
+  "products_count": 28,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "cosaan-groupe",
+  "store_name": "COSAAN GROUPE",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-06-at-23.15.00-4.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-06-at-23.15.00-4.avif",
+  "city": "",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-06-at-23.12.16.avif",
+  "id": 47,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-02-06-at-23.12.16.avif",
+  "name": "ADJI BIO ET SERVICES",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "barry",
+  "store_name": "ADJI BIO ET SERVICES",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-16-at-16.14.32.webp",
+  "banner_url": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-02-16-at-16.14.32.webp",
+  "city": "",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-cropped-WhatsApp-Image-2026-02-06-at-23.04.21-3.avif",
+  "id": 48,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-cropped-WhatsApp-Image-2026-02-06-at-23.04.21-3.avif",
+  "name": "Thierno textile",
+  "product_count": 6,
+  "products_count": 6,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "thierno",
+  "store_name": "Thierno textile",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-Gemini_Generated_Image_11effh11effh11ef.avif",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-Gemini_Generated_Image_11effh11effh11ef.avif",
+  "city": "",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-Gemini_Generated_Image_5m9h4g5m9h4g5m9h.avif",
+  "id": 49,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-Gemini_Generated_Image_5m9h4g5m9h4g5m9h.avif",
+  "name": "COFAPP",
+  "product_count": 8,
+  "products_count": 8,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "cofapp",
+  "store_name": "COFAPP",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "conakry",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-22.19.23-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-22.19.23-1.jpeg",
+  "city": "conakry",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-22.19.23.jpeg",
+  "id": 50,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-22.19.23.jpeg",
+  "name": "Boiro création",
+  "product_count": 12,
+  "products_count": 12,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mamadoudialigue",
+  "store_name": "Boiro création",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-21.55.21-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-21.55.21-1.jpeg",
+  "city": "",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-21.55.21.jpeg",
+  "id": 51,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-21.55.21.jpeg",
+  "name": "Komara et frères",
+  "product_count": 4,
+  "products_count": 4,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "bangaly1",
+  "store_name": "Komara et frères",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-14.36.44-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-14.36.44-1.jpeg",
+  "city": "",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-14.36.44.jpeg",
+  "id": 52,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-14.36.44.jpeg",
+  "name": "Africa Art center",
+  "product_count": 13,
+  "products_count": 13,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "africaart1",
+  "store_name": "Africa Art center",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "guinee",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-01-27-at-14.12.53.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-01-27-at-14.12.53.jpeg",
+  "city": "guinee",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-14.12.53.jpeg",
+  "id": 53,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-14.12.53.jpeg",
+  "name": "AKatty-by Echour",
+  "product_count": 4,
+  "products_count": 4,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "akatty",
+  "store_name": "AKatty-by Echour",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-10.18.32.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-WhatsApp-Image-2026-01-27-at-10.18.32.jpeg",
+  "city": "",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-Amelioration-du-visu.png",
+  "id": 54,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-Amelioration-du-visu.png",
+  "name": "Les Épices de Maëlle",
+  "product_count": 11,
+  "products_count": 11,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "maelleepice",
+  "store_name": "Les Épices de Maëlle",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": ""
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-01-27-at-09.51.18.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/02/WhatsApp-Image-2026-01-27-at-09.51.18.jpeg",
+  "city": "",
+  "country": "",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-cropped-WhatsApp-Image-2026-01-27-at-09.51.18.jpeg",
+  "id": 55,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-cropped-WhatsApp-Image-2026-01-27-at-09.51.18.jpeg",
+  "name": "La Petite Damba",
+  "product_count": 2,
+  "products_count": 2,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "lapetitedamba",
+  "store_name": "La Petite Damba",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": ""
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/Refined-Logo-with-Bead-Necklace-Design.png",
+  "banner_url": "https://img.miadmarket.ca/2026/02/Refined-Logo-with-Bead-Necklace-Design.png",
+  "city": "",
+  "country": "",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-Refined-Logo-with-Bead-Necklace-Design.png",
+  "id": 56,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-Refined-Logo-with-Bead-Necklace-Design.png",
+  "name": "Fatoumata'store",
+  "product_count": 5,
+  "products_count": 5,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "fatoumataba1",
+  "store_name": "Fatoumata'store",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-03-07-at-14.11.35.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/WhatsApp-Image-2026-03-07-at-14.11.35.jpeg",
+  "city": "",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-cropped-Logo-premium-pour-No.png",
+  "id": 57,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-cropped-Logo-premium-pour-No.png",
+  "name": "noblesse sn",
+  "product_count": 8,
+  "products_count": 8,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "noblessesn",
+  "store_name": "noblesse sn",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "accra",
+   "country": "GH"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-01-28-at-13.26.00-300x300-1.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-01-28-at-13.26.00-300x300-1.jpeg",
+  "city": "accra",
+  "country": "GH",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-01-28-at-13.26.00-300x300-1-1.jpeg",
+  "id": 58,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-WhatsApp-Image-2026-01-28-at-13.26.00-300x300-1-1.jpeg",
+  "name": "Styleworld",
+  "product_count": 3,
+  "products_count": 3,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "nanaplyce",
+  "store_name": "Styleworld",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Accra",
+   "country": "GH"
+  },
+  "banner": "https://img.miadmarket.ca/2026/01/Gemini_Generated_Image_2gsm862gsm862gsm.png",
+  "banner_url": "https://img.miadmarket.ca/2026/01/Gemini_Generated_Image_2gsm862gsm862gsm.png",
+  "city": "Accra",
+  "country": "GH",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-Gemini_Generated_Image_2gsm862gsm862gsm.png",
+  "id": 59,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-Gemini_Generated_Image_2gsm862gsm862gsm.png",
+  "name": "Nadjoa beads",
+  "product_count": 6,
+  "products_count": 6,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "portia",
+  "store_name": "Nadjoa beads",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "conakry",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/01/Gemini_Generated_Image_2e0jcp2e0jcp2e0j.png",
+  "banner_url": "https://img.miadmarket.ca/2026/01/Gemini_Generated_Image_2e0jcp2e0jcp2e0j.png",
+  "city": "conakry",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-2.png",
+  "id": 60,
+  "logo_url": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-2.png",
+  "name": "Pure bio by Nastou",
+  "product_count": 7,
+  "products_count": 7,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "konate",
+  "store_name": "Pure bio by Nastou",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": ""
+  },
+  "banner": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-3.png",
+  "banner_url": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-3.png",
+  "city": "",
+  "country": "",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-4.png",
+  "id": 61,
+  "logo_url": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-4.png",
+  "name": "la maison des delices",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "djenabou",
+  "store_name": "la maison des delices",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Accra",
+   "country": "GH"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/75224.jpg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/75224.jpg",
+  "city": "Accra",
+  "country": "GH",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/75239.jpg",
+  "id": 62,
+  "logo_url": "https://img.miadmarket.ca/2026/03/75239.jpg",
+  "name": "MŪHEBA",
+  "product_count": 3,
+  "products_count": 3,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mouhibath",
+  "store_name": "MŪHEBA",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "conakry",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/01/Gemini_Generated_Image_kdfdgrkdfdgrkdfd.png",
+  "banner_url": "https://img.miadmarket.ca/2026/01/Gemini_Generated_Image_kdfdgrkdfdgrkdfd.png",
+  "city": "conakry",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-1-1.png",
+  "id": 63,
+  "logo_url": "https://img.miadmarket.ca/2026/01/cropped-Untitled-design-1-1.png",
+  "name": "AdaH",
+  "product_count": 10,
+  "products_count": 10,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "adama",
+  "store_name": "AdaH",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "NG"
+  },
+  "banner": "https://img.miadmarket.ca/2026/01/cropped-NANA-2.png",
+  "banner_url": "https://img.miadmarket.ca/2026/01/cropped-NANA-2.png",
+  "city": "",
+  "country": "NG",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/01/cropped-cropped-NANA-2-1.png",
+  "id": 64,
+  "logo_url": "https://img.miadmarket.ca/2026/01/cropped-cropped-NANA-2-1.png",
+  "name": "nana_coutureofficial",
+  "product_count": 43,
+  "products_count": 43,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "nana-coutureofficial",
+  "store_name": "nana_coutureofficial",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Isheri Oshun",
+   "country": "NG"
+  },
+  "banner": "https://img.miadmarket.ca/2026/01/cropped-perle1.png",
+  "banner_url": "https://img.miadmarket.ca/2026/01/cropped-perle1.png",
+  "city": "Isheri Oshun",
+  "country": "NG",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/01/cropped-PerlesDeLux.png",
+  "id": 65,
+  "logo_url": "https://img.miadmarket.ca/2026/01/cropped-PerlesDeLux.png",
+  "name": "Perles De Lux",
+  "product_count": 4,
+  "products_count": 4,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "perles-de-lux",
+  "store_name": "Perles De Lux",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": ""
+  },
+  "banner": "https://img.miadmarket.ca/2026/06/cropped-cropped-logo-2.png",
+  "banner_url": "https://img.miadmarket.ca/2026/06/cropped-cropped-logo-2.png",
+  "city": "",
+  "country": "",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/06/cropped-logo-2.png",
+  "id": 66,
+  "logo_url": "https://img.miadmarket.ca/2026/06/cropped-logo-2.png",
+  "name": "ALL store",
+  "product_count": 28,
+  "products_count": 28,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "brunel",
+  "store_name": "ALL store",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "",
+   "country": "GN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/03/cropped-tableau13-1024x768-2.jpeg",
+  "banner_url": "https://img.miadmarket.ca/2026/03/cropped-tableau13-1024x768-2.jpeg",
+  "city": "",
+  "country": "GN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/03/cropped-tableau13-1024x768-1.jpeg",
+  "id": 67,
+  "logo_url": "https://img.miadmarket.ca/2026/03/cropped-tableau13-1024x768-1.jpeg",
+  "name": "MOFOUNGOUROU Galerie d’Art",
+  "product_count": 6,
+  "products_count": 6,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mofoungourou-galerie-d-art",
+  "store_name": "MOFOUNGOUROU Galerie d’Art",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Tivaouane ",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2025/12/Mac-Collection-.png",
+  "banner_url": "https://img.miadmarket.ca/2025/12/Mac-Collection-.png",
+  "city": "Tivaouane ",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2025/12/MAC-Collection.png",
+  "id": 68,
+  "logo_url": "https://img.miadmarket.ca/2025/12/MAC-Collection.png",
+  "name": "MAC Collection",
+  "product_count": 18,
+  "products_count": 18,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mac-collection",
+  "store_name": "MAC Collection",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Tivaouane",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2025/12/Thilor-Desing-Cover.png",
+  "banner_url": "https://img.miadmarket.ca/2025/12/Thilor-Desing-Cover.png",
+  "city": "Tivaouane",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2025/12/Thilor-design-1.png",
+  "id": 69,
+  "logo_url": "https://img.miadmarket.ca/2025/12/Thilor-design-1.png",
+  "name": "Thilor design",
+  "product_count": 15,
+  "products_count": 15,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "thilor-design",
+  "store_name": "Thilor design",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2025/12/cropped-idool-logo-1.png",
+  "banner_url": "https://img.miadmarket.ca/2025/12/cropped-idool-logo-1.png",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2025/12/cropped-idool-logo.png",
+  "id": 70,
+  "logo_url": "https://img.miadmarket.ca/2025/12/cropped-idool-logo.png",
+  "name": "I’Dool",
+  "product_count": 30,
+  "products_count": 30,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "idool",
+  "store_name": "I’Dool",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Dakar",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2025/11/cropped-Cafe-Touba-MAME-FATOU-Logo-1-1.png",
+  "banner_url": "https://img.miadmarket.ca/2025/11/cropped-Cafe-Touba-MAME-FATOU-Logo-1-1.png",
+  "city": "Dakar",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2025/11/cropped-Cafe-Touba-MAME-FATOU-Logo-.png",
+  "id": 71,
+  "logo_url": "https://img.miadmarket.ca/2025/11/cropped-Cafe-Touba-MAME-FATOU-Logo-.png",
+  "name": "Café Touba Mame Fatou",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "cafe-touba-mame-fatou",
+  "store_name": "Café Touba Mame Fatou",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "Tivaouane",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2025/11/cropped-Naby-Gold-Logo-1.png",
+  "banner_url": "https://img.miadmarket.ca/2025/11/cropped-Naby-Gold-Logo-1.png",
+  "city": "Tivaouane",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2025/11/cropped-Naby-Gold-Logo.png",
+  "id": 72,
+  "logo_url": "https://img.miadmarket.ca/2025/11/cropped-Naby-Gold-Logo.png",
+  "name": "Naby Gold",
+  "product_count": 2,
+  "products_count": 2,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "naby-gold",
+  "store_name": "Naby Gold",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2026/02/cropped-ajouter-le-texte-ma-1.png",
+  "banner_url": "https://img.miadmarket.ca/2026/02/cropped-ajouter-le-texte-ma-1.png",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2026/02/cropped-ajouter-le-texte-ma.png",
+  "id": 73,
+  "logo_url": "https://img.miadmarket.ca/2026/02/cropped-ajouter-le-texte-ma.png",
+  "name": "Mamaniboutique",
+  "product_count": 1,
+  "products_count": 1,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "mamaniboutique",
+  "store_name": "Mamaniboutique",
+  "verified": true
+ },
+ {
+  "address": {
+   "city": "DAKAR",
+   "country": "SN"
+  },
+  "banner": "https://img.miadmarket.ca/2025/11/cropped-AYZHA-Cosmetics-1.png",
+  "banner_url": "https://img.miadmarket.ca/2025/11/cropped-AYZHA-Cosmetics-1.png",
+  "city": "DAKAR",
+  "country": "SN",
+  "enabled": true,
+  "gravatar": "https://img.miadmarket.ca/2025/11/cropped-AYZHA-Cosmetics.png",
+  "id": 74,
+  "logo_url": "https://img.miadmarket.ca/2025/11/cropped-AYZHA-Cosmetics.png",
+  "name": "Ayzha Cosmetics",
+  "product_count": 25,
+  "products_count": 25,
+  "rating": {
+   "count": 0,
+   "rating": 0
+  },
+  "rating_avg": 0,
+  "slug": "ayzha-cosmetics",
+  "store_name": "Ayzha Cosmetics",
+  "verified": true
+ }
+]

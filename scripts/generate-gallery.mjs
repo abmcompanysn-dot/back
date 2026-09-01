@@ -218,8 +218,11 @@ async function listSingleImageProducts() {
     for (const p of items) {
       const imgs = (p.images || []).map((x) => (typeof x === 'string' ? x : x.src)).filter(Boolean)
       if (ONLY_IDS && !ONLY_IDS.has(String(p.id))) continue
-      if (imgs.length !== 1) continue
-      // --ids force le traitement même sur une catégorie exclue (test ciblé).
+      // --ids force le traitement même sur un produit à 2+ images déjà
+      // (ex. chapeaux Awa, 2-4 vraies photos existantes) et même sur une
+      // catégorie exclue (test ciblé) — sinon on ne garde que les produits
+      // à 1 seule image (usage normal du script, non forcé).
+      if (!ONLY_IDS && imgs.length !== 1) continue
       if (!ONLY_IDS && isExcludedCategory(p.category_slug || p.category)) continue
       if (EXCLUDE_VENDORS && EXCLUDE_VENDORS.has(String(p.vendor_id))) continue
       const trid = p.trid || `id-${p.id}`
@@ -239,6 +242,27 @@ async function listSingleImageProducts() {
 }
 
 // ---- prompts par famille de catégorie --------------------------
+// IMPORTANT : on ne passe JAMAIS le nom commercial du produit au modèle.
+// wan2.6-image interprétait `"${name}"` comme du texte à BRODER sur l'objet
+// (« Bonnet Pouto — Vert & Rouge » écrit sur le tissu, constaté le
+// 2026-08-31). On décrit un TYPE d'objet neutre à la place, dérivé de la
+// catégorie. Le rendu reste guidé par l'image de référence (image-to-image).
+// Détecte le TYPE d'objet à partir du nom du produit d'abord (plus fiable
+// quand la catégorie est trop large, ex. « Pagnes - Tissus » qui contient
+// aussi des bonnets), puis de la catégorie en repli.
+function objectKind(name, categorySlug) {
+  const t = `${name || ''} ${categorySlug || ''}`.toLowerCase()
+  if (/chaussure|sandale|babouche|basket|mocassin|botte|espadrille|tong/.test(t)) return 'the footwear from the reference'
+  if (/bonnet|kufi|calotte|coiffe|fez|toque/.test(t)) return 'the brimless traditional skullcap (kufi) from the reference — a short close-fitting cap with a flat cylindrical crown and NO brim'
+  if (/chapeau|casquette|béret|beret/.test(t)) return 'the hat from the reference'
+  if (/collier|bracelet|bague|boucle d|pendentif|bijou/.test(t)) return 'the piece of jewellery from the reference'
+  if (/\bsac\b|maroquin|pochette|cabas|tote/.test(t)) return 'the bag from the reference'
+  if (/robe|boubou|chemise|ensemble|tenue|jupe|pantalon|kaftan|caftan|tunique|dashiki|agbada/.test(t)) return 'the garment from the reference'
+  if (/pagne|tissu|wax|kente|bogolan|coupon/.test(t)) return 'the folded fabric / textile from the reference'
+  if (/tableau|peinture|toile|sculpture|statue|vannerie|panier|déco|deco/.test(t)) return 'the decorative object from the reference'
+  return 'the product from the reference'
+}
+
 function promptsFor(name, categorySlug) {
   const c = (categorySlug || '').toLowerCase()
   const isFood = /aliment|epicerie|grocery|food|epice|the|cafe|infusion/.test(c)
@@ -247,24 +271,29 @@ function promptsFor(name, categorySlug) {
   const isBag = /sac|maroquin|pochette/.test(c)
   const isDeco = /maison|deco|artisanat|tableau|sculpture|vannerie/.test(c)
 
+  const kind = objectKind(name, categorySlug)
+
   const FAITHFUL =
-    'Keep the product identical to the reference photo: same shape, colour, ' +
-    'pattern, texture, proportions and any visible text or logo. Do not add, ' +
-    'remove or invent any part, side, angle, label or decoration that is not ' +
-    'visible in the reference. Photorealistic, high detail, no text overlay, ' +
-    'no watermark, no people unless already present.'
+    'Reproduce this exact object: same shape, silhouette, colours, woven ' +
+    'pattern, texture and proportions as the reference. It is ONE single ' +
+    'item, shown alone — not a stack of items, not a pile, not a piece of ' +
+    'furniture, not a pouffe or stool. Do NOT add, remove or invent any ' +
+    'part, side, angle, lining or decoration not visible in the reference. ' +
+    'Absolutely NO lettering, NO words, NO brand name, NO caption anywhere ' +
+    'on the object or the image. Photorealistic, sharp detail, no watermark, ' +
+    'no people unless already present.'
 
   let ambiance
-  if (isFood) ambiance = 'Lifestyle scene: the product styled on a rustic wooden kitchen table with warm natural light, a few neutral props (linen cloth, wooden spoon), shallow depth of field.'
-  else if (isBeauty) ambiance = 'Lifestyle scene: the product on a clean marble surface with soft daylight, a sprig of greenery, minimalist spa mood.'
-  else if (isJewel) ambiance = 'Lifestyle scene: the jewellery presented on a soft neutral fabric, warm boutique lighting, elegant minimalist styling.'
-  else if (isBag) ambiance = 'Lifestyle scene: the bag placed on a stylish chair, urban daylight, fashion editorial mood, neutral background.'
-  else if (isDeco) ambiance = 'Lifestyle scene: the item placed in a warm modern interior (shelf, sideboard) with natural light and neutral decor.'
-  else ambiance = 'Lifestyle scene: the product used in a natural everyday setting with warm daylight and a clean neutral background.'
+  if (isFood) ambiance = 'Lifestyle scene: styled on a rustic wooden kitchen table with warm natural light, a few neutral props (linen cloth, wooden spoon), shallow depth of field.'
+  else if (isBeauty) ambiance = 'Lifestyle scene: on a clean marble surface with soft daylight, a sprig of greenery, minimalist spa mood.'
+  else if (isJewel) ambiance = 'Lifestyle scene: presented on a soft neutral fabric, warm boutique lighting, elegant minimalist styling.'
+  else if (isBag) ambiance = 'Lifestyle scene: placed on a stylish chair, urban daylight, fashion editorial mood, neutral background.'
+  else if (isDeco) ambiance = 'Lifestyle scene: placed in a warm modern interior (shelf, sideboard) with natural light and neutral decor.'
+  else ambiance = 'Lifestyle scene: shown in a natural everyday setting with warm daylight and a clean neutral background.'
 
   return {
-    studio: `Studio product photo of "${name}". Place the exact same product on a seamless light grey studio background, soft even lighting, subtle contact shadow, centred, full product in frame. ${FAITHFUL}`,
-    ambiance: `${ambiance} Product shown is "${name}". ${FAITHFUL}`,
+    studio: `Studio product photograph. Place ${kind} on a seamless light grey studio background, soft even lighting, subtle contact shadow, centred, the whole object in frame. ${FAITHFUL}`,
+    ambiance: `${ambiance} Subject: ${kind}. ${FAITHFUL}`,
   }
 }
 
@@ -594,7 +623,10 @@ async function publishOne(id, reviewHint) {
     uploadToMinio(readFileSync(join(dir, '2-ambiance.jpg')), `${id}-ambiance.jpg`),
     uploadToMinio(readFileSync(join(dir, '3-zoom.jpg')), `${id}-zoom.jpg`),
   ])
-  const gallery = [p0.original_url, uStudio, uAmbiance, uZoom]
+  // Image principale = fond neutre studio (demande explicite du
+  // fondateur), pas l'originale — l'originale reste dans la galerie
+  // mais en dernière position.
+  const gallery = [uStudio, uAmbiance, uZoom, p0.original_url]
   await patchGallery(id, gallery)
   // Réplication vers la fiche jumelle (même produit, autre langue FR/EN) —
   // ce script regroupe déjà par trid pour ne générer les visuels QU'UNE
@@ -619,7 +651,7 @@ async function publishOne(id, reviewHint) {
       // (contrat WooCommerce conservé par catalog-svc) — .src, pas l'objet
       // entier, sinon patchGallery publierait "[object Object]".
       const linkedOriginal = linkedDetail?.images?.[0]?.src || p0.original_url
-      await patchGallery(linkedId, [linkedOriginal, uStudio, uAmbiance, uZoom])
+      await patchGallery(linkedId, [uStudio, uAmbiance, uZoom, linkedOriginal])
       log({ phase: 'publish-linked', id, linkedId })
     }
   } catch (err) {

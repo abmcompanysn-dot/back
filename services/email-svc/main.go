@@ -2007,6 +2007,22 @@ const orderCompletedHTML = `
               </table>
               {{end}}
 
+              <!-- Invitation à laisser un avis (achat vérifié) -->
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin:24px 0 4px;background-color:#fff8f0;border:1px solid #F5A623;border-radius:10px;">
+                <tr>
+                  <td style="padding:18px 20px;text-align:center;">
+                    <p style="font-size:14px;color:#333333;font-weight:700;margin:0 0 4px;">Votre avis compte</p>
+                    <p style="font-size:13px;color:#666666;margin:0 0 14px;">
+                      Notez vos achats et confirmez la bonne réception — vous pouvez ajouter des photos.
+                    </p>
+                    <a href="https://miadmarket.ca/?v=clientDashboard&tab=orders&review={{.order_id}}"
+                       style="display:inline-block;background-color:#005826;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;padding:10px 22px;border-radius:8px;">
+                      Donner mon avis
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
               <p style="font-size:13px;color:#888888;margin-top:24px;">
                 Une question sur votre commande ? Contactez-nous, on est là pour vous.
               </p>

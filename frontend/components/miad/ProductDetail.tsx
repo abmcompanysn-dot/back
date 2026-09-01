@@ -20,7 +20,7 @@ import { useWishlist } from '@/contexts/WishlistContext'
 import { ProductVariations } from './ProductVariations'
 import { ShippingInfo } from './ShippingInfo'
 import { ProductShippingEstimate } from './ProductShippingEstimate'; // Import the new component
-import { ProductReviewForm } from './ProductReviewForm'
+import { ProductReviews } from './ProductReviews'
 import { FrequentlyBoughtTogether } from './FrequentlyBoughtTogether'
 import { SimilarProducts } from './SimilarProducts'
 import { InfiniteProductFeed } from './server/InfiniteProductFeed'
@@ -34,7 +34,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { QuickSelectModal } from './QuickSelectModal'
 import { ProductCard } from './ProductCard'
-import { Progress } from "@/components/ui/progress"
 import { cn } from '@/lib/utils';
 import { getCountryZone } from '@/lib/shipping-utils';
 import { proxyIfLocalWp } from '@/lib/image-utils';
@@ -570,29 +569,9 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
     return fp(product.price);
   }, [product, activeVariation, variations, t, fp])
 
-  // Vrais avis WooCommerce via SWR
-  const { data: reviewsData, mutate: mutateReviews } = useSWR<{ reviews: any[] }>(
-    `/api/reviews?product_id=${product.id}`,
-    (url: string) => fetch(url).then(r => r.json()),
-    { revalidateOnFocus: false, dedupingInterval: 120000 }
-  )
-  const realReviews = useMemo(() => reviewsData?.reviews || [], [reviewsData])
-
-  // Statistiques d'avis calculées depuis les vrais avis
-  const reviewStats = useMemo(() => {
-    const base = product.rating || 0
-    const total = realReviews.length
-    const avg = total > 0
-      ? realReviews.reduce((s, r) => s + (r.rating || 0), 0) / total
-      : base
-
-    const dist = [5, 4, 3, 2, 1].map(star => {
-      const count = realReviews.filter(r => r.rating === star).length
-      return { stars: star, percent: total > 0 ? Math.round((count / total) * 100) : (star === 5 ? 85 : star === 4 ? 10 : star === 3 ? 3 : star === 2 ? 2 : 0) }
-    })
-
-    return { average: parseFloat(avg.toFixed(1)) || 4.8, total: total || 0, distribution: dist }
-  }, [realReviews, product.rating])
+  // La section avis complète (résumé, filtres, photos, formulaire acheteur
+  // vérifié, votes "utile") est encapsulée dans <ProductReviews /> —
+  // rendue plus bas. Plus de SWR ni de stats ici.
 
   const totalPrice = useMemo(() => {
     return currentPrice + (shippingCost || 0);
@@ -1122,87 +1101,11 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
             </div>
           </div>
 
-          <div className="pt-10 pb-10 border-t border-border">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-              <div className="lg:col-span-9">
-              <h2 className="text-xl font-black uppercase tracking-tight mb-6">{t.reviews} {reviewStats.total > 0 ? `(${reviewStats.total})` : ''}</h2>
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-12">
-                {/* Résumé des notes */}
-                <div className="md:col-span-4 space-y-6">
-                  <div className="bg-slate-50 p-8 rounded-4xl text-center">
-                    <p className="text-5xl font-black text-slate-900">{reviewStats.average}</p>
-                    <div className="flex justify-center gap-1 my-3">
-                      {[...Array(5)].map((_, i) => (
-                        <Star key={i} size={18} className={cn("fill-orange-400 text-orange-400", i >= Math.floor(reviewStats.average) && "text-slate-200 fill-slate-200")} />
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground font-bold uppercase tracking-widest">
-                      {reviewStats.total > 0 ? `${reviewStats.total} avis clients` : 'Soyez le premier à donner votre avis'}
-                    </p>
-                  </div>
-
-                  {reviewStats.total > 0 && (
-                    <div className="space-y-3">
-                      {reviewStats.distribution.map((d) => (
-                        <div key={d.stars} className="flex items-center gap-4 text-xs font-bold">
-                          <span className="w-12 text-slate-400">{d.stars} {t.stars || 'étoiles'}</span>
-                          <Progress value={d.percent} className="h-1.5 flex-1 bg-slate-100" />
-                          <span className="w-8 text-right text-slate-400">{d.percent}%</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <ProductReviewForm
-                    productId={Number(product.id)}
-                    productName={product.name}
-                    user={user}
-                    onReviewSubmitted={() => mutateReviews()}
-                  />
-                </div>
-
-                {/* Liste des vrais avis WooCommerce */}
-                <div className="md:col-span-8 space-y-8">
-                  {realReviews.length === 0 ? (
-                    <div className="text-center py-16 text-slate-400">
-                      <Star size={40} className="mx-auto mb-4 opacity-20" />
-                      <p className="font-bold text-sm">{t.noReviews}</p>
-                      <p className="text-xs mt-1">{t.shareYourExperience}</p>
-                    </div>
-                  ) : (
-                    realReviews.map((rev) => (
-                      <div key={rev.id} className="border-b border-slate-100 pb-8 last:border-0">
-                        <div className="flex justify-between items-start mb-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-black text-slate-400 text-sm">
-                              {(rev.reviewer || 'C')[0].toUpperCase()}
-                            </div>
-                            <div>
-                              <p className="text-sm font-black flex items-center gap-2">
-                                {rev.reviewer}
-                                {rev.verified && (
-                                  <span className="bg-blue-50 text-blue-600 text-[8px] px-1.5 py-0.5 rounded-full uppercase tracking-tighter">Achat vérifié</span>
-                                )}
-                              </p>
-                              <div className="flex gap-0.5 mt-0.5">
-                                {[...Array(5)].map((_, i) => (
-                                  <Star key={i} size={10} className={cn("fill-orange-400 text-orange-400", i >= rev.rating && "text-slate-200 fill-slate-200")} />
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-bold uppercase" suppressHydrationWarning>
-                            {rev.date ? new Date(rev.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
-                          </span>
-                        </div>
-                        <p className="text-sm text-slate-600 leading-relaxed">{rev.review}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-              </div>
-            </div>
+          <div id="avis" className="pt-10 pb-10 border-t border-border scroll-mt-24">
+            <ProductReviews
+              product={{ id: product.id, name: product.name, rating: product.rating }}
+              user={user as any}
+            />
           </div>
 
           <div className="pt-10 pb-10 space-y-16 border-t border-border">
