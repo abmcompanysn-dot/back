@@ -462,12 +462,59 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
     attributes
   }), [product, variations, attributes]);
 
-  // Sanitize description HTML
+  // Sanitize description HTML.
+  // Les descriptions enrichies (phase 2) sont du TEXTE BRUT avec des sauts
+  // de ligne `\n\n` entre paragraphes, des puces `• ` et des intitulés
+  // "Label : valeur" en début de ligne. Sans mise en forme HTML, tout
+  // s'affiche collé en un seul bloc illisible. On convertit donc le texte
+  // brut en vrais paragraphes / listes / intertitres avant de l'injecter.
   const sanitizedDescription = useMemo(() => {
-    if (typeof window !== 'undefined' && product?.description) {
-      return DOMPurify.sanitize(product.description);
+    const raw = product?.description || '';
+    if (!raw) return '';
+
+    const looksLikeHtml = /<\/?(p|div|ul|ol|li|br|h[1-6]|strong|em|table)\b/i.test(raw);
+    let html: string;
+
+    if (looksLikeHtml) {
+      html = raw;
+    } else {
+      const esc = (s: string) =>
+        s
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      // met en gras l'intitulé avant le premier " : " en tête de bloc
+      const withLead = (s: string) => {
+        const m = s.match(/^([A-ZÀ-ÖØ-Ý][^:\n]{1,40}?)\s:\s([\s\S]+)$/);
+        return m ? `<strong>${esc(m[1])} :</strong> ${esc(m[2])}` : esc(s);
+      };
+      html = raw
+        .split(/\n{2,}/)
+        .map((block) => {
+          const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+          if (!lines.length) return '';
+          // bloc de puces
+          if (lines.every((l) => /^[•\-*]\s+/.test(l))) {
+            const items = lines
+              .map((l) => `<li>${esc(l.replace(/^[•\-*]\s+/, ''))}</li>`)
+              .join('');
+            return `<ul>${items}</ul>`;
+          }
+          // bloc mixte : puces éventuelles + texte
+          const parts = lines
+            .map((l) =>
+              /^[•\-*]\s+/.test(l)
+                ? `<li>${esc(l.replace(/^[•\-*]\s+/, ''))}</li>`
+                : `<p>${withLead(l)}</p>`
+            )
+            .join('');
+          return parts.replace(/(<li>[\s\S]*?<\/li>)+/g, (m) => `<ul>${m}</ul>`);
+        })
+        .filter(Boolean)
+        .join('');
     }
-    return product?.description || '';
+
+    return typeof window !== 'undefined' ? DOMPurify.sanitize(html) : html;
   }, [product?.description]);
 
   const displayPrice = useMemo(() => {
@@ -920,13 +967,17 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
           <div className="pt-10 pb-10 border-t border-border">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
               <div className="lg:col-span-9">
-              <h2 className="text-xl font-black uppercase tracking-tight mb-6">{t.description}</h2>
-              {/* ── Texte / HTML de description ── */}
+              <div className="flex items-center gap-2 mb-5">
+                <div className="w-1 h-5 bg-accent rounded-full" />
+                <h2 className="text-xl font-black uppercase tracking-tight">{t.description}</h2>
+              </div>
+              {/* ── Texte / HTML de description ──
+                  `product-desc` : styles dédiés (voir globals.css) pour que
+                  le texte enrichi (paragraphes, puces, intitulés en gras)
+                  soit lisible même sans le plugin @tailwindcss/typography. */}
               {sanitizedDescription ? (
                 <div
-                  className="prose prose-sm max-w-none text-foreground leading-relaxed
-                    prose-img:rounded-2xl prose-img:w-full prose-img:object-cover
-                    prose-p:mb-4 prose-h2:font-black prose-h3:font-bold"
+                  className="product-desc max-w-none text-[15px] leading-7 text-foreground/90"
                   dangerouslySetInnerHTML={{ __html: sanitizedDescription }}
                 />
               ) : (
@@ -971,67 +1022,73 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
                 )
               })()}
 
-              {/* ── Fiche technique (fusionnée depuis l'ancien onglet séparé) ── */}
-              <div className="mt-10 pt-8 border-t border-border">
-                <div className="flex items-center gap-2 mb-5">
-                  <div className="w-1 h-5 bg-accent rounded-full" />
-                  <h3 className="font-black text-sm uppercase tracking-widest">Caractéristiques</h3>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Le message de repli ne s'affiche que si TOUT est vide —
-                      avant, il s'affichait dès que product.attributes était
-                      vide même si Origine/Boutique/Poids/Dimensions avaient
-                      quelque chose à montrer juste en dessous (incohérent). */}
-                  {!(product.attributes && product.attributes.length > 0) &&
-                    !(product.specifications && product.specifications.length > 0) &&
-                    !product.country && !product.originCountry && !product.vendor?.name &&
-                    product.weightKg == null && product.lengthCm == null &&
-                    product.widthCm == null && product.heightCm == null && !product.sku && (
-                      <p className="text-muted-foreground col-span-full">Aucune spécification technique disponible.</p>
-                    )}
-                  {/* Caractéristiques structurées (matière, contenance, entretien…) —
-                      pré-remplies par l'IA puis validées par le vendeur (champ
-                      JSON `specifications` du produit, back-office admin). */}
-                  {product.specifications && product.specifications.length > 0 &&
-                    product.specifications.map((spec, i) => (
-                      <div key={`${spec.k}-${i}`} className="flex justify-between py-3 border-b">
-                        <span className="text-muted-foreground">{spec.k}</span>
-                        <span className="font-medium text-right">{spec.v}</span>
-                      </div>
-                    ))}
-                  {product.attributes && product.attributes.length > 0 &&
-                    product.attributes.map((attr) => (
-                      <div key={attr.name} className="flex justify-between py-3 border-b">
-                        <span className="text-muted-foreground">{attr.name}</span>
-                        <span className="font-medium">{attr.options.join(', ')}</span>
-                      </div>
-                    ))}
-                  {(product.originCountry || product.country) && (
-                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Origine</span><span className="font-medium">{product.originCountry || product.country}</span></div>
-                  )}
-                  {product.vendor?.name && (
-                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">{t.soldBy || 'Boutique'}</span><span className="font-medium">{product.vendor.name}</span></div>
-                  )}
-                  {/* Poids/dimensions — renseignés par le vendeur (onglet
-                      Livraison de la fiche produit admin), jamais affichés
-                      côté client avant le 2026-08-27 (le champ n'était même
-                      pas relayé par /api/products). */}
-                  {product.weightKg != null && (
-                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Poids</span><span className="font-medium">{product.weightKg} kg</span></div>
-                  )}
-                  {(product.lengthCm != null || product.widthCm != null || product.heightCm != null) && (
-                    <div className="flex justify-between py-3 border-b">
-                      <span className="text-muted-foreground">Dimensions</span>
-                      <span className="font-medium">
-                        {[product.lengthCm, product.widthCm, product.heightCm].filter((v) => v != null).join(' × ')} cm
-                      </span>
+              {/* ── Caractéristiques — tableau type Alibaba/AliExpress ── */}
+              {(() => {
+                // Une seule liste de lignes {label, value}, dans l'ordre :
+                // specifications (matière, entretien…) puis attributs de
+                // variation, puis origine / boutique / poids / dimensions / réf.
+                const rows: { label: string; value: string }[] = [];
+                (product.specifications || [])
+                  .filter((s) => s && s.k && s.v)
+                  .forEach((s) => rows.push({ label: String(s.k), value: String(s.v) }));
+                (product.attributes || []).forEach((attr) =>
+                  rows.push({ label: attr.name, value: attr.options.join(', ') })
+                );
+                const origin = product.originCountry || product.country;
+                if (origin && !rows.some((r) => /origine/i.test(r.label)))
+                  rows.push({ label: 'Origine', value: origin });
+                if (product.vendor?.name && !rows.some((r) => /boutique|vendu/i.test(r.label)))
+                  rows.push({ label: t.soldBy || 'Vendu par', value: product.vendor.name });
+                if (product.weightKg != null && !rows.some((r) => /poids/i.test(r.label)))
+                  rows.push({ label: 'Poids', value: `${product.weightKg} kg` });
+                if (
+                  (product.lengthCm != null || product.widthCm != null || product.heightCm != null) &&
+                  !rows.some((r) => /dimension/i.test(r.label))
+                )
+                  rows.push({
+                    label: 'Dimensions',
+                    value: `${[product.lengthCm, product.widthCm, product.heightCm]
+                      .filter((v) => v != null)
+                      .join(' × ')} cm`,
+                  });
+                if (product.sku && !rows.some((r) => /r[eé]f[eé]rence/i.test(r.label)))
+                  rows.push({ label: 'Référence', value: product.sku });
+
+                return (
+                  <div className="mt-10 pt-8 border-t border-border">
+                    <div className="flex items-center gap-2 mb-5">
+                      <div className="w-1 h-5 bg-accent rounded-full" />
+                      <h3 className="font-black text-sm uppercase tracking-widest">Caractéristiques</h3>
                     </div>
-                  )}
-                  {product.sku && (
-                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Référence</span><span className="font-medium">{product.sku}</span></div>
-                  )}
-                </div>
-              </div>
+                    {rows.length === 0 ? (
+                      <p className="text-muted-foreground text-sm">Aucune spécification technique disponible.</p>
+                    ) : (
+                      <div className="overflow-hidden rounded-2xl border border-border">
+                        <table className="w-full text-sm">
+                          <tbody>
+                            {rows.map((r, i) => (
+                              <tr
+                                key={`${r.label}-${i}`}
+                                className={i % 2 === 0 ? 'bg-muted/40' : 'bg-background'}
+                              >
+                                <th
+                                  scope="row"
+                                  className="w-2/5 align-top px-4 py-3 text-left font-semibold text-muted-foreground border-b border-border/60"
+                                >
+                                  {r.label}
+                                </th>
+                                <td className="px-4 py-3 align-top font-medium border-b border-border/60">
+                                  {r.value}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               </div>
             </div>
           </div>

@@ -179,3 +179,49 @@
   animation-play-state: paused;
 }
 
+
+/* ─────────────────────────────────────────────────────────────
+   Fiche produit — bloc description enrichi (phase 2).
+   Le texte vendeur/IA arrive en HTML simple (<p>, <ul>, <strong>).
+   Style dédié pour un rendu lisible type Alibaba/AliExpress, sans
+   dépendre du plugin @tailwindcss/typography.
+   ───────────────────────────────────────────────────────────── */
+.product-desc > * + * { margin-top: 0.9rem; }
+.product-desc p { margin: 0; }
+.product-desc strong { font-weight: 700; color: hsl(var(--foreground)); }
+.product-desc ul {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+.product-desc li {
+  position: relative;
+  padding-left: 1.35rem;
+  line-height: 1.6;
+}
+.product-desc li::before {
+  content: "";
+  position: absolute;
+  left: 0.15rem;
+  top: 0.62rem;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: hsl(var(--accent, 24 95% 53%));
+}
+.product-desc h3,
+.product-desc h4 {
+  font-weight: 800;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 1.4rem;
+}
+.product-desc img {
+  border-radius: 1rem;
+  width: 100%;
+  object-fit: cover;
+  margin-top: 0.9rem;
+}
