@@ -292,7 +292,8 @@ func main() {
 		mux.HandleFunc("POST /reviews/{id}/helpful", s.markReviewHelpful)                 // vote "utile"
 		mux.HandleFunc("GET /orders/{orderId}/can-review", s.canReviewOrder)              // produits notables d'une commande livrée
 		mux.HandleFunc("POST /orders/{orderId}/delivery-confirmation", s.confirmDelivery) // réception + note livraison + photo
-		mux.HandleFunc("POST /admin/reviews/seed", s.seedCommunityReviews)                // avis "de la communauté" sur un produit
+		mux.HandleFunc("POST /admin/reviews/seed", s.seedCommunityReviews)
+	mux.HandleFunc("POST /admin/reviews/seed-catalog", s.seedCommunityReviewsCatalog)                // avis "de la communauté" sur un produit
 		mux.HandleFunc("GET /wishlist/{customer_id}", s.listWishlist)
 		mux.HandleFunc("POST /wishlist/{customer_id}/{product_id}", s.addToWishlist)
 		mux.HandleFunc("DELETE /wishlist/{customer_id}/{product_id}", s.removeFromWishlist)
@@ -1589,101 +1590,406 @@ var communityNames = map[string][]string{
 	"NG": {"Chidi Okafor", "Ngozi Eze", "Bola Adeyemi", "Emeka Nwosu", "Halima Sani"},
 	"":   {"Client MIAD", "Cliente MIAD"},
 }
-var communityComments = []struct {
-	min, max int
-	text     []string
-}{
-	{4, 5, []string{
-		"Produit conforme à la description, très bonne qualité. Livraison un peu longue mais l'article en vaut la peine.",
-		"Superbe finition, exactement comme sur les photos. Je recommande cette boutique.",
-		"Très satisfaite de mon achat, la matière est agréable et le travail soigné. Merci au vendeur.",
-		"Reçu en bon état, bien emballé. Le rendu est encore plus beau en vrai.",
+// Banque de commentaires par note (5,4,3,2). Le seed pioche selon la
+// distribution demandée (rating_mix) — objectif moyenne ~4,3 par défaut.
+var commentsByRating = map[int][]string{
+	5: {
+		"Produit conforme à la description, très bonne qualité. Je recommande cette boutique sans hésiter.",
+		"Superbe finition, exactement comme sur les photos. Emballage soigné, livraison correcte.",
+		"Très satisfaite de mon achat, la matière est agréable et le travail vraiment soigné. Merci au vendeur.",
+		"Reçu en bon état, encore plus beau en vrai qu'en photo. Je repasserai commande.",
 		"Excellent rapport qualité-prix. C'est ma deuxième commande et toujours au top.",
-		"Article authentique, fait main comme indiqué. Petit délai de livraison mais ça valait l'attente.",
-	}},
-	{3, 4, []string{
-		"Bon produit dans l'ensemble, la taille est un peu différente de ce que j'attendais mais la qualité est là.",
-		"Correct pour le prix. Les couleurs sont légèrement moins vives qu'en photo.",
-		"Satisfait, livraison dans les temps. Un petit défaut de finition sans gravité.",
-	}},
+		"Article authentique, fait main comme indiqué. Rien à redire, parfait.",
+		"Pièce magnifique, on sent le savoir-faire. Toute ma famille l'a remarquée.",
+		"Commande arrivée dans les délais annoncés, produit impeccable. Vendeur sérieux.",
+	},
+	4: {
+		"Bon produit dans l'ensemble, conforme aux photos. La livraison a pris un peu plus de temps que prévu.",
+		"Très content de la qualité. Petit bémol sur l'emballage un peu léger, mais l'article est arrivé intact.",
+		"Joli travail, matière agréable. La taille est légèrement différente de ce que j'imaginais.",
+		"Satisfait de mon achat. Les couleurs sont un poil moins vives qu'à l'écran mais ça reste très bien.",
+		"Produit de bonne facture, je recommande. Comptez quelques jours de plus pour la livraison.",
+		"Correspond bien à la description. Une petite finition à revoir mais sans gravité.",
+	},
+	3: {
+		"Produit correct pour le prix. Quelques imperfections de finition et la livraison a été longue.",
+		"Ça va, sans plus. La couleur reçue est un peu différente de la photo et l'emballage était abîmé.",
+		"Article moyen : la qualité est là mais la taille ne correspond pas tout à fait à l'annonce.",
+		"Reçu avec du retard. Le produit est acceptable mais je m'attendais à mieux vu les photos.",
+		"Correct mais des coutures/assemblages à surveiller. Le vendeur a répondu à mes questions au moins.",
+	},
+	2: {
+		"Déçu par la finition, ce n'est pas tout à fait conforme aux photos. Livraison très lente en plus.",
+		"La qualité n'est pas à la hauteur du prix. L'article est utilisable mais sans plus.",
+		"Taille et couleur assez éloignées de l'annonce. Dommage car le concept était bien.",
+	},
+}
+
+// isGeneratedImage : les images de galerie créées par l'IA
+// (scripts/generate-gallery.mjs) se terminent par -studio/-ambiance/-zoom.
+// On les EXCLUT des photos d'avis — on ne veut que les vraies photos du
+// vendeur (demande fondateur du 2026-09-01).
+func isGeneratedImage(url string) bool {
+	u := strings.ToLower(url)
+	return strings.Contains(u, "-studio.") || strings.Contains(u, "-ambiance.") ||
+		strings.Contains(u, "-zoom.") || strings.Contains(u, "/reviews/")
 }
 
 // seedCommunityReviews — POST /admin/reviews/seed
-// body: { "product_id": N, "count": 5, "vendor_avatar": "url", "rep_avatar": "url" }
-// Crée `count` avis is_community=true : nom + pays tirés au sort, avatar =
-// photo du vendeur ou du représentant du pays (fournie par l'appelant),
-// commentaire tiré d'une banque, photos réutilisées depuis la galerie du
-// produit (les "anciennes photos"), note 4-5 majoritaire.
+//
+// body :
+//   {
+//     "product_id": N,
+//     "count": 4,                       // nb d'avis (défaut 4, max 30)
+//     "personas": [                     // signataires (représentants réels + repli)
+//       { "name": "Awa Ndiaye", "country": "SN", "avatar": "https://…" }
+//     ],
+//     "rating_mix": { "5": 50, "4": 30, "3": 15, "2": 5 },  // pondération %, défaut ~4,3
+//     "photo_ratio": 40                 // % d'avis avec une photo (défaut 40)
+//   }
+//
+// Crée `count` avis is_community=true : persona tiré au sort (nom + pays +
+// avatar), note tirée selon rating_mix, commentaire de la banque
+// correspondante, éventuellement 1 vraie photo produit (jamais une image
+// IA), date étalée sur ~150 jours.
 func (s *server) seedCommunityReviews(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ProductID    int64    `json:"product_id"`
-		Count        int      `json:"count"`
+		ProductID  int64          `json:"product_id"`
+		Count      int            `json:"count"`
+		Personas   []persona      `json:"personas"`
+		RatingMix  map[string]int `json:"rating_mix"`
+		PhotoRatio int            `json:"photo_ratio"`
+		// rétro-compat : anciens champs encore acceptés
 		VendorAvatar string   `json:"vendor_avatar"`
 		RepAvatar    string   `json:"rep_avatar"`
-		Countries    []string `json:"countries"` // pays à faire tourner (défaut: SN, CI, CM, BJ, GN)
+		Countries    []string `json:"countries"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ProductID == 0 {
 		kit.Fail(w, 400, "invalid_body", "product_id requis")
 		return
 	}
 	if body.Count <= 0 || body.Count > 30 {
-		body.Count = 6
+		body.Count = 4
 	}
-	if len(body.Countries) == 0 {
-		body.Countries = []string{"SN", "CI", "CM", "BJ", "GN", "ML"}
+	if body.PhotoRatio <= 0 || body.PhotoRatio > 100 {
+		body.PhotoRatio = 40
 	}
 
-	// galerie du produit : on réutilise ces images comme "photos clients"
+	// personas : liste fournie, sinon repli sur communityNames + avatar
+	// éventuellement passé en rétro-compat.
+	personas := body.Personas
+	if len(personas) == 0 {
+		countries := body.Countries
+		if len(countries) == 0 {
+			countries = []string{"SN", "CI", "CM", "BJ", "GN", "ML"}
+		}
+		av := body.RepAvatar
+		if av == "" {
+			av = body.VendorAvatar
+		}
+		for _, c := range countries {
+			names := communityNames[c]
+			if len(names) == 0 {
+				names = communityNames[""]
+			}
+			for _, n := range names {
+				personas = append(personas, persona{Name: n, Country: c, Avatar: av})
+			}
+		}
+	}
+	if len(personas) == 0 {
+		kit.Fail(w, 400, "no_personas", "aucun persona disponible")
+		return
+	}
+
+	ratingPool := buildRatingPool(body.RatingMix)
+
+	created := s.seedProductReviews(r.Context(), body.ProductID, body.Count, personas, ratingPool, body.PhotoRatio)
+	kit.JSON(w, 201, map[string]any{"product_id": body.ProductID, "created": created})
+}
+
+// buildRatingPool convertit une pondération {"5":50,"4":30,...} en tableau
+// de notes à tirer au sort. Défaut ~4,3 (50% 5★, 30% 4★, 15% 3★, 5% 2★).
+func buildRatingPool(mix map[string]int) []int {
+	if len(mix) == 0 {
+		mix = map[string]int{"5": 50, "4": 30, "3": 15, "2": 5}
+	}
+	var pool []int
+	for star := 2; star <= 5; star++ {
+		for j := 0; j < mix[strconv.Itoa(star)]; j++ {
+			pool = append(pool, star)
+		}
+	}
+	if len(pool) == 0 {
+		pool = []int{5, 5, 4, 4, 3}
+	}
+	return pool
+}
+
+// seedProductReviews insère `count` avis "de la communauté" sur un produit :
+// persona non répété si possible, note tirée de ratingPool, commentaire de
+// la banque correspondante, 1 vraie photo produit `photoRatio`% du temps
+// (jamais une image générée par IA), date étalée sur ~150 jours.
+// Renvoie le nombre d'avis effectivement créés.
+func (s *server) seedProductReviews(ctx context.Context, productID int64, count int, personas []persona, ratingPool []int, photoRatio int) int {
+	if count <= 0 {
+		return 0
+	}
+	if photoRatio <= 0 || photoRatio > 100 {
+		photoRatio = 40
+	}
+
 	var imagesJSON []byte
-	_ = s.db.QueryRow(r.Context(),
-		`SELECT images FROM products WHERE id=$1 AND lang='fr'`, body.ProductID).Scan(&imagesJSON)
-	var gallery []string
-	_ = json.Unmarshal(imagesJSON, &gallery)
+	_ = s.db.QueryRow(ctx,
+		`SELECT images FROM products WHERE id=$1 AND lang='fr'`, productID).Scan(&imagesJSON)
+	var rawGallery []string
+	_ = json.Unmarshal(imagesJSON, &rawGallery)
+	gallery := make([]string, 0, len(rawGallery))
+	for _, g := range rawGallery {
+		if g != "" && !isGeneratedImage(g) {
+			gallery = append(gallery, g)
+		}
+	}
 
+	usedPersona := map[string]bool{}
 	created := 0
-	for i := 0; i < body.Count; i++ {
-		country := body.Countries[rand.Intn(len(body.Countries))]
-		names := communityNames[country]
-		if len(names) == 0 {
-			names = communityNames[""]
+	for i := 0; i < count; i++ {
+		var p persona
+		for tries := 0; tries < 12; tries++ {
+			cand := personas[rand.Intn(len(personas))]
+			if !usedPersona[cand.Name] || tries == 11 {
+				p = cand
+				break
+			}
 		}
-		name := names[rand.Intn(len(names))]
-		// 75% d'avis 4-5, 25% d'avis 3-4
-		bank := communityComments[0]
-		if rand.Intn(4) == 0 {
-			bank = communityComments[1]
+		usedPersona[p.Name] = true
+
+		rating := ratingPool[rand.Intn(len(ratingPool))]
+		bank := commentsByRating[rating]
+		if len(bank) == 0 {
+			bank = commentsByRating[4]
 		}
-		rating := bank.min + rand.Intn(bank.max-bank.min+1)
-		comment := bank.text[rand.Intn(len(bank.text))]
-		// 1 photo sur 2, tirée de la galerie
+		comment := bank[rand.Intn(len(bank))]
+
 		photos := []string{}
-		if len(gallery) > 0 && rand.Intn(2) == 0 {
+		if len(gallery) > 0 && rand.Intn(100) < photoRatio {
 			photos = []string{gallery[rand.Intn(len(gallery))]}
 		}
-		photosJSON, _ := json.Marshal(photos) // toujours un tableau JSON, jamais "null"
-		// avatar : représentant du pays si fourni, sinon vendeur, sinon rien
-		avatar := body.RepAvatar
-		if avatar == "" {
-			avatar = body.VendorAvatar
-		}
-		// email masqué déterministe (jamais affiché mais stocké pour trace)
-		masked := maskedEmail(name)
-		// date étalée sur ~120 jours en arrière
-		createdAt := time.Now().AddDate(0, 0, -rand.Intn(120)-1)
+		photosJSON, _ := json.Marshal(photos)
+		createdAt := time.Now().AddDate(0, 0, -rand.Intn(150)-1)
 
-		_, err := s.db.Exec(r.Context(), `
+		_, err := s.db.Exec(ctx, `
 			INSERT INTO reviews
 			  (product_id, customer_id, guest_name, guest_email, rating, comment, photos,
 			   verified_purchase, status, review_type, is_community, reviewer_country, reviewer_avatar, created_at)
 			VALUES ($1,NULL,$2,$3,$4,$5,$6,FALSE,'approved','product',TRUE,$7,$8,$9)`,
-			body.ProductID, name, masked, rating, comment, photosJSON,
-			country, avatar, createdAt,
+			productID, p.Name, maskedEmail(p.Name), rating, comment, photosJSON,
+			strings.ToUpper(p.Country), p.Avatar, createdAt,
 		)
 		if err == nil {
 			created++
 		}
 	}
-	kit.JSON(w, 201, map[string]any{"product_id": body.ProductID, "created": created})
+	return created
+}
+
+type persona struct {
+	Name    string `json:"name"`
+	Country string `json:"country"`
+	Avatar  string `json:"avatar"`
+}
+
+// seedCommunityReviewsCatalog — POST /admin/reviews/seed-catalog
+//
+// Seed d'avis "de la communauté" sur TOUT le catalogue en un seul appel
+// in-cluster (pas de passerelle, pas d'auth — à lancer via
+// `kubectl -n miad exec deploy/catalog-svc -- wget ...`).
+//
+// body (tous optionnels) :
+//   {
+//     "min": 2, "max": 5,              // avis par produit, tiré au hasard (défaut 2..5)
+//     "rating_mix": {"5":50,"4":30,"3":15,"2":5},  // défaut ~4,3
+//     "photo_ratio": 40,              // % d'avis avec une vraie photo produit
+//     "only_missing": true,           // ne traiter que les produits sans avis communauté (défaut true)
+//     "vendor_id": 0,                 // limiter à un vendeur (0 = tous)
+//     "limit": 0,                     // plafond de produits traités (0 = illimité)
+//     "dry_run": false               // ne rien écrire, juste compter
+//   }
+//
+// Pour chaque produit FR actif : pays du vendeur -> représentant de ce pays
+// (nom réel, loyalty-svc) sinon prénoms génériques du pays ; avatar =
+// logo de la boutique -> sinon vide (le front retombe sur l'initiale).
+func (s *server) seedCommunityReviewsCatalog(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Min         int            `json:"min"`
+		Max         int            `json:"max"`
+		RatingMix   map[string]int `json:"rating_mix"`
+		PhotoRatio  int            `json:"photo_ratio"`
+		OnlyMissing *bool          `json:"only_missing"`
+		VendorID    int64          `json:"vendor_id"`
+		Limit       int            `json:"limit"`
+		DryRun      bool           `json:"dry_run"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Min <= 0 {
+		body.Min = 2
+	}
+	if body.Max < body.Min {
+		body.Max = 5
+	}
+	if body.Max > 15 {
+		body.Max = 15
+	}
+	onlyMissing := true
+	if body.OnlyMissing != nil {
+		onlyMissing = *body.OnlyMissing
+	}
+	ratingPool := buildRatingPool(body.RatingMix)
+	ctx := r.Context()
+
+	// 1. logos boutiques + pays vendeur : GET vendor-svc /stores (in-cluster)
+	vendorCountry := map[int64]string{}
+	vendorLogo := map[int64]string{}
+	for page := 1; page <= 60; page++ {
+		var out struct {
+			Items []struct {
+				ID      int64  `json:"id"`
+				Country string `json:"country"`
+				LogoURL string `json:"logo_url"`
+			} `json:"items"`
+			HasMore bool `json:"has_more"`
+		}
+		if err := getJSON(ctx, fmt.Sprintf("http://vendor-svc:8082/stores?page=%d&page_size=100", page), &out); err != nil {
+			break
+		}
+		for _, v := range out.Items {
+			vendorCountry[v.ID] = strings.ToUpper(strings.TrimSpace(v.Country))
+			vendorLogo[v.ID] = strings.TrimSpace(v.LogoURL)
+		}
+		if !out.HasMore || len(out.Items) == 0 {
+			break
+		}
+	}
+
+	// 2. représentants par pays : GET loyalty-svc /representatives (in-cluster)
+	repByCountry := map[string][]string{}
+	{
+		var out struct {
+			Items []struct {
+				Name    string `json:"name"`
+				Country string `json:"country"`
+			} `json:"items"`
+		}
+		if err := getJSON(ctx, "http://loyalty-svc:8091/representatives", &out); err == nil {
+			for _, rp := range out.Items {
+				c := strings.ToUpper(strings.TrimSpace(rp.Country))
+				n := strings.TrimSpace(rp.Name)
+				if c != "" && n != "" {
+					repByCountry[c] = append(repByCountry[c], n)
+				}
+			}
+		}
+	}
+
+	// personasFor : représentants réels du pays si on en a, sinon prénoms
+	// génériques du pays, sinon repli global. Avatar = logo boutique.
+	personasFor := func(country, logo string) []persona {
+		country = strings.ToUpper(strings.TrimSpace(country))
+		names := repByCountry[country]
+		if len(names) == 0 {
+			names = communityNames[country]
+		}
+		if len(names) == 0 {
+			names = communityNames[""]
+		}
+		out := make([]persona, 0, len(names))
+		for _, n := range names {
+			out = append(out, persona{Name: n, Country: country, Avatar: logo})
+		}
+		return out
+	}
+
+	// 3. parcours des produits FR actifs
+	rows, err := s.db.Query(ctx, `
+		SELECT p.id, COALESCE(p.vendor_id, 0)
+		FROM products p
+		WHERE p.lang = 'fr' AND p.status = 'active'
+		  AND ($1 = 0 OR p.vendor_id = $1)
+		ORDER BY p.id`, body.VendorID)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	type row struct {
+		id, vendorID int64
+	}
+	var products []row
+	for rows.Next() {
+		var pr row
+		if err := rows.Scan(&pr.id, &pr.vendorID); err != nil {
+			rows.Close()
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		products = append(products, pr)
+	}
+	rows.Close()
+
+	totalProducts, totalReviews, skipped := 0, 0, 0
+	for _, pr := range products {
+		if body.Limit > 0 && totalProducts >= body.Limit {
+			break
+		}
+		if onlyMissing {
+			var n int
+			_ = s.db.QueryRow(ctx,
+				`SELECT count(*) FROM reviews WHERE product_id=$1 AND is_community=TRUE`, pr.id).Scan(&n)
+			if n > 0 {
+				skipped++
+				continue
+			}
+		}
+		want := body.Min + rand.Intn(body.Max-body.Min+1)
+		personas := personasFor(vendorCountry[pr.vendorID], vendorLogo[pr.vendorID])
+		if len(personas) == 0 {
+			skipped++
+			continue
+		}
+		totalProducts++
+		if body.DryRun {
+			totalReviews += want
+			continue
+		}
+		totalReviews += s.seedProductReviews(ctx, pr.id, want, personas, ratingPool, body.PhotoRatio)
+	}
+
+	kit.JSON(w, 200, map[string]any{
+		"dry_run":            body.DryRun,
+		"only_missing":       onlyMissing,
+		"products_seen":      len(products),
+		"products_processed": totalProducts,
+		"products_skipped":   skipped,
+		"reviews_created":    totalReviews,
+	})
+}
+
+// getJSON : GET in-cluster + décodage JSON, timeout court.
+func getJSON(ctx context.Context, url string, dst any) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("%s -> %d", url, resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(dst)
 }
 
 func maskedEmail(name string) string {

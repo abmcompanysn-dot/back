@@ -103,6 +103,42 @@ export function Reviews() {
     }
   }
 
+  // ── Seed sur TOUT le catalogue (2-5 avis/produit, moyenne ~4,3) ──
+  const [catSeed, setCatSeed] = useState({ min: '2', max: '5', photo_ratio: '40', only_missing: true })
+  const [catBusy, setCatBusy] = useState(false)
+  const [catMsg, setCatMsg] = useState<string | null>(null)
+
+  async function runCatalogSeed(dryRun: boolean) {
+    setCatBusy(true)
+    setCatMsg(null)
+    try {
+      const body = await api.post<{
+        dry_run: boolean
+        products_seen: number
+        products_processed: number
+        products_skipped: number
+        reviews_created: number
+      }>('/admin/api/reviews/seed-catalog', {
+        min: Number(catSeed.min) || 2,
+        max: Number(catSeed.max) || 5,
+        photo_ratio: Number(catSeed.photo_ratio) || 40,
+        only_missing: catSeed.only_missing,
+        rating_mix: { '5': 50, '4': 30, '3': 15, '2': 5 },
+        dry_run: dryRun,
+      })
+      setCatMsg(
+        `${body.dry_run ? 'SIMULATION — ' : ''}${body.reviews_created} avis ${
+          body.dry_run ? 'seraient créés' : 'créés'
+        } sur ${body.products_processed} produits (${body.products_skipped} ignorés, ${body.products_seen} vus).`,
+      )
+      if (!dryRun && (status === '' || status === 'approved')) await load()
+    } catch (err) {
+      setCatMsg(err instanceof ApiError ? err.message : 'échec du seed catalogue')
+    } finally {
+      setCatBusy(false)
+    }
+  }
+
   async function sendReply(r: Review) {
     const reply = (replyDraft[r.id] || '').trim()
     if (!reply) return
@@ -165,6 +201,47 @@ export function Reviews() {
             {seedBusy ? 'Génération…' : 'Générer les avis'}
           </button>
           {seedMsg && <span style={{ marginLeft: 12, fontSize: 13 }}>{seedMsg}</span>}
+
+          <hr style={{ margin: '20px 0', border: 0, borderTop: '1px solid #e6e8eb' }} />
+
+          <p style={{ fontWeight: 700, marginTop: 0 }}>Tout le catalogue — en une fois</p>
+          <p className="subtitle" style={{ marginTop: 0 }}>
+            2 à 5 avis par produit (aléatoire), moyenne ≈ 4,3 (50 % 5★, 30 % 4★, 15 % 3★, 5 % 2★).
+            Signataires = représentant du pays du vendeur (son vrai nom) sinon prénoms génériques du
+            pays ; avatar = logo de la boutique sinon initiale. Photos = images d'origine du produit
+            uniquement (jamais les visuels générés). <strong>Lancer d'abord la simulation.</strong>
+          </p>
+          <div className="form-grid">
+            <div className="form-field">
+              <label>Min. avis / produit</label>
+              <input type="number" value={catSeed.min} onChange={(e) => setCatSeed({ ...catSeed, min: e.target.value })} />
+            </div>
+            <div className="form-field">
+              <label>Max. avis / produit</label>
+              <input type="number" value={catSeed.max} onChange={(e) => setCatSeed({ ...catSeed, max: e.target.value })} />
+            </div>
+            <div className="form-field">
+              <label>% d'avis avec photo</label>
+              <input type="number" value={catSeed.photo_ratio} onChange={(e) => setCatSeed({ ...catSeed, photo_ratio: e.target.value })} />
+            </div>
+            <div className="form-field full">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={catSeed.only_missing}
+                  onChange={(e) => setCatSeed({ ...catSeed, only_missing: e.target.checked })}
+                />
+                Ne traiter que les produits sans avis « communauté » (recommandé)
+              </label>
+            </div>
+          </div>
+          <button className="btn-ghost" disabled={catBusy} onClick={() => runCatalogSeed(true)}>
+            {catBusy ? 'Calcul…' : 'Simuler (dry-run)'}
+          </button>
+          <button className="btn-primary" style={{ marginLeft: 8 }} disabled={catBusy} onClick={() => runCatalogSeed(false)}>
+            {catBusy ? 'Génération…' : 'Lancer sur tout le catalogue'}
+          </button>
+          {catMsg && <div style={{ marginTop: 10, fontSize: 13 }}>{catMsg}</div>}
         </div>
       )}
 

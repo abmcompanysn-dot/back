@@ -295,6 +295,11 @@ func main() {
 		mux.HandleFunc("POST /admin/api/reviews/seed", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/admin/reviews/seed")
 		}))
+		// Seed d'avis "de la communauté" sur tout le catalogue en un appel
+		// (2-5 avis/produit, moyenne ~4,3). Accepte dry_run pour prévisualiser.
+		mux.HandleFunc("POST /admin/api/reviews/seed-catalog", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/admin/reviews/seed-catalog")
+		}))
 		mux.HandleFunc("GET /admin/api/brands", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/brands" })))
 		mux.HandleFunc("POST /admin/api/brands", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/brands")
