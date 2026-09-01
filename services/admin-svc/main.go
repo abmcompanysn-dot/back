@@ -281,9 +281,19 @@ func main() {
 		mux.HandleFunc("PATCH /admin/api/products/{id}/moderate", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPatch, s.catalogURL+"/products/"+r.PathValue("id")+"/moderate")
 		}))
-		mux.HandleFunc("GET /admin/api/reviews", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/reviews" })))
+		mux.HandleFunc("GET /admin/api/reviews", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			target := s.catalogURL + "/reviews"
+			if q := r.URL.RawQuery; q != "" {
+				target += "?" + q
+			}
+			forwardWithBody(w, r, http.MethodGet, target)
+		}))
 		mux.HandleFunc("PATCH /admin/api/reviews/{id}", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPatch, s.catalogURL+"/reviews/"+r.PathValue("id"))
+		}))
+		// Seed d'avis "de la communauté" sur un produit (recommandations).
+		mux.HandleFunc("POST /admin/api/reviews/seed", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/admin/reviews/seed")
 		}))
 		mux.HandleFunc("GET /admin/api/brands", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/brands" })))
 		mux.HandleFunc("POST /admin/api/brands", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {

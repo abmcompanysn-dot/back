@@ -12,7 +12,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -154,6 +156,31 @@ ALTER TABLE reviews ADD COLUMN IF NOT EXISTS admin_reply TEXT DEFAULT '';
 ALTER TABLE reviews ALTER COLUMN customer_id DROP NOT NULL;
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS guest_name TEXT DEFAULT '';
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS guest_email TEXT DEFAULT '';
+-- Section avis complète (2026-09-01) : photos jointes, titre, votes
+-- "utile", type d'avis (produit vs confirmation de livraison), avis "de
+-- la communauté" (seed / recommandation, PAS un achat vérifié), pays +
+-- avatar affichés (drapeau + photo du client, ou du vendeur / du
+-- représentant du pays pour les avis de la communauté).
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS title TEXT DEFAULT '';
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS photos JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS helpful_count INT NOT NULL DEFAULT 0;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS review_type TEXT NOT NULL DEFAULT 'product'; -- product | delivery
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS is_community BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS reviewer_country TEXT DEFAULT '';   -- code ISO2 (SN, CI…)
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS reviewer_avatar TEXT DEFAULT '';    -- URL photo (client / vendeur / représentant)
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS moderation_reason TEXT DEFAULT '';  -- pourquoi mis en attente par le filtre auto
+ALTER TABLE reviews ADD COLUMN IF NOT EXISTS delivery_rating INT;                -- note livraison 1-5 (review_type='delivery')
+CREATE INDEX IF NOT EXISTS idx_reviews_product_status ON reviews (product_id, status);
+CREATE INDEX IF NOT EXISTS idx_reviews_order ON reviews (order_id);
+
+-- Un client ne peut voter "utile" qu'une fois par avis (customer_id ou,
+-- à défaut, empreinte anonyme fournie par le frontend).
+CREATE TABLE IF NOT EXISTS review_helpful_votes (
+  review_id   BIGINT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+  voter_key   TEXT NOT NULL,   -- "cust:<id>" ou "anon:<fingerprint>"
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (review_id, voter_key)
+);
 
 -- Wishlist / favoris — n'existait nulle part (ni frontend, ni backend)
 -- avant le 2026-08-26 : le bouton cœur sur les produits et la section
@@ -197,6 +224,10 @@ type server struct {
 	kafka     sarama.SyncProducer
 	orderURL  string
 	vendorURL string
+	// media : upload des photos jointes aux avis (préfixe "reviews/" du
+	// même bucket MinIO que les images produits). nil si MinIO non
+	// configuré — l'avis reste possible, juste sans photo.
+	media *kit.Media
 }
 
 func main() {
@@ -218,6 +249,18 @@ func main() {
 		kafka:     kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
 		orderURL:  kit.Env("ORDER_SVC_URL", "http://order-svc:8083"),
 		vendorURL: kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+	}
+	// MinIO pour les photos d'avis — mêmes variables que admin-svc.
+	if media, err := kit.NewMedia(
+		kit.Env("MINIO_ENDPOINT", "minio:9000"),
+		kit.Env("MINIO_ROOT_USER", ""),
+		kit.Env("MINIO_ROOT_PASSWORD", ""),
+		kit.Env("MINIO_BUCKET", "miad-media"),
+		kit.Env("MEDIA_BASE_URL", "https://img.miadmarket.ca"),
+	); err != nil {
+		log.Error("client minio indisponible — upload de photos d'avis désactivé", "err", err)
+	} else {
+		s.media = media
 	}
 
 	health := kit.NewHealth()
@@ -244,6 +287,12 @@ func main() {
 		mux.HandleFunc("POST /products/{id}/reviews", s.createReview)
 		mux.HandleFunc("GET /reviews", s.listReviewsAdmin)
 		mux.HandleFunc("PATCH /reviews/{id}", s.moderateReview)
+		// Section avis complète
+		mux.HandleFunc("POST /reviews/upload", s.uploadReviewPhoto)                       // multipart, 1 photo -> URL MinIO
+		mux.HandleFunc("POST /reviews/{id}/helpful", s.markReviewHelpful)                 // vote "utile"
+		mux.HandleFunc("GET /orders/{orderId}/can-review", s.canReviewOrder)              // produits notables d'une commande livrée
+		mux.HandleFunc("POST /orders/{orderId}/delivery-confirmation", s.confirmDelivery) // réception + note livraison + photo
+		mux.HandleFunc("POST /admin/reviews/seed", s.seedCommunityReviews)                // avis "de la communauté" sur un produit
 		mux.HandleFunc("GET /wishlist/{customer_id}", s.listWishlist)
 		mux.HandleFunc("POST /wishlist/{customer_id}/{product_id}", s.addToWishlist)
 		mux.HandleFunc("DELETE /wishlist/{customer_id}/{product_id}", s.removeFromWishlist)
@@ -751,8 +800,9 @@ func (s *server) listVariationsBatch(w http.ResponseWriter, r *http.Request) {
 // la fiche produit qui affiche déjà average_rating/rating_count).
 func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 	productID := atoi(r.PathValue("id"))
-	page, _ := strconv.Atoi(def(r.URL.Query().Get("page"), "1"))
-	pageSize, _ := strconv.Atoi(def(r.URL.Query().Get("page_size"), "20"))
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(def(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(def(q.Get("page_size"), "20"))
 	if page < 1 {
 		page = 1
 	}
@@ -760,23 +810,82 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	// Le storefront public (aucun avis modéré par défaut, status='pending')
-	// ne doit voir que les avis approuvés — l'admin les voit tous via
-	// listReviewsAdmin, jamais cette route.
+	// Filtres storefront : ?rating=5, ?with_photos=true, ?sort=recent|top|photos
+	where := "WHERE product_id = $1 AND status = 'approved' AND review_type = 'product'"
+	args := []any{productID}
+	if v := q.Get("rating"); v != "" {
+		args = append(args, atoi(v))
+		where += fmt.Sprintf(" AND rating = $%d", len(args))
+	}
+	if q.Get("with_photos") == "true" {
+		where += " AND jsonb_array_length(photos) > 0"
+	}
+	orderBy := "created_at DESC"
+	switch q.Get("sort") {
+	case "top":
+		orderBy = "rating DESC, helpful_count DESC, created_at DESC"
+	case "photos":
+		orderBy = "jsonb_array_length(photos) DESC, created_at DESC"
+	}
+
+	// En-tête : note moyenne + répartition par étoile (toutes les colonnes
+	// de la barre AliExpress), sur les avis produit approuvés.
 	var total int64
 	var avgRating float64
-	if err := s.db.QueryRow(r.Context(),
-		`SELECT count(*), COALESCE(AVG(rating), 0) FROM reviews WHERE product_id = $1 AND status = 'approved'`, productID,
-	).Scan(&total, &avgRating); err != nil {
+	star := [6]int64{} // star[1..5]
+	var withPhotos int64
+	brk, err := s.db.Query(r.Context(),
+		`SELECT rating, count(*), count(*) FILTER (WHERE jsonb_array_length(photos) > 0)
+		 FROM reviews WHERE product_id=$1 AND status='approved' AND review_type='product'
+		 GROUP BY rating`, productID)
+	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
+	for brk.Next() {
+		var rt int
+		var c, wp int64
+		if brk.Scan(&rt, &c, &wp) == nil && rt >= 1 && rt <= 5 {
+			star[rt] = c
+			total += c
+			withPhotos += wp
+			avgRating += float64(rt) * float64(c)
+		}
+	}
+	brk.Close()
+	if total > 0 {
+		avgRating = avgRating / float64(total)
+	}
 
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, customer_id, guest_name, order_id, rating, comment, verified_purchase, created_at
-		FROM reviews WHERE product_id = $1 AND status = 'approved'
-		ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-		productID, pageSize, (page-1)*pageSize)
+	// Aperçu photos (12 premières, tous avis confondus) pour le bandeau
+	// "photos clients" en haut de la section.
+	photoStrip := []string{}
+	prow, _ := s.db.Query(r.Context(),
+		`SELECT photos FROM reviews
+		 WHERE product_id=$1 AND status='approved' AND review_type='product' AND jsonb_array_length(photos) > 0
+		 ORDER BY created_at DESC LIMIT 12`, productID)
+	if prow != nil {
+		for prow.Next() {
+			var pj []byte
+			if prow.Scan(&pj) == nil {
+				var ps []string
+				_ = json.Unmarshal(pj, &ps)
+				photoStrip = append(photoStrip, ps...)
+			}
+		}
+		prow.Close()
+	}
+	if len(photoStrip) > 12 {
+		photoStrip = photoStrip[:12]
+	}
+
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT id, customer_id, guest_name, order_id, rating, title, comment, photos,
+		       verified_purchase, is_community, reviewer_country, reviewer_avatar,
+		       helpful_count, created_at
+		FROM reviews %s
+		ORDER BY %s LIMIT $%d OFFSET $%d`, where, orderBy, len(args)-1, len(args)), args...)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -786,28 +895,31 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var customerID *int64
-		var orderID *int64
-		var rating int
-		var guestName, comment string
-		var verified bool
+		var customerID, orderID *int64
+		var rating, helpful int
+		var guestName, title, comment, country, avatar string
+		var photosJSON []byte
+		var verified, community bool
 		var createdAt time.Time
-		if err := rows.Scan(&id, &customerID, &guestName, &orderID, &rating, &comment, &verified, &createdAt); err != nil {
+		if err := rows.Scan(&id, &customerID, &guestName, &orderID, &rating, &title, &comment, &photosJSON,
+			&verified, &community, &country, &avatar, &helpful, &createdAt); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
-		// reviewer : nom de l'invité si présent, sinon "Client #<id>" pour
-		// un compte connecté (aucun accès au vrai nom depuis catalog-svc,
-		// qui ne possède pas la table customers — resterait un appel
-		// cross-service pour si peu, jamais bloquant si absent).
+		var photos []string
+		_ = json.Unmarshal(photosJSON, &photos)
 		reviewerName := guestName
 		if reviewerName == "" && customerID != nil {
 			reviewerName = fmt.Sprintf("Client #%d", *customerID)
 		}
 		items = append(items, map[string]any{
-			"id": id, "reviewer": reviewerName, "order_id": orderID,
-			"rating": rating, "comment": comment, "verified_purchase": verified,
-			"created_at": createdAt.UTC().Format(time.RFC3339),
+			"id": id, "reviewer": reviewerName, "country": country, "avatar": avatar,
+			"rating": rating, "title": title, "comment": comment, "photos": photos,
+			// badge affiché côté front : "Achat vérifié" si verified,
+			// "Avis de la communauté" si is_community.
+			"verified_purchase": verified, "is_community": community,
+			"helpful_count": helpful,
+			"created_at":    createdAt.UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -815,6 +927,11 @@ func (s *server) listReviews(w http.ResponseWriter, r *http.Request) {
 		"items": items, "page": page, "page_size": pageSize,
 		"total": total, "has_more": int64(page*pageSize) < total,
 		"average_rating": avgRating, "rating_count": total,
+		"stars": map[string]int64{
+			"1": star[1], "2": star[2], "3": star[3], "4": star[4], "5": star[5],
+		},
+		"with_photos_count": withPhotos,
+		"photo_strip":       photoStrip,
 	})
 }
 
@@ -1108,43 +1225,93 @@ func (s *server) clearCart(w http.ResponseWriter, r *http.Request) {
 // réseau, le commentaire est accepté quand même mais SANS le badge vérifié
 // (jamais bloquant pour l'utilisateur — order-svc peut être temporairement
 // indisponible sans empêcher les avis).
+// bannedWordsRe — filtre de modération auto : gros mots, insultes, spam,
+// tentatives de contact hors plateforme. Un avis qui matche part en
+// status='pending' avec moderation_reason renseignée ; le reste est
+// publié directement (décision fondateur du 2026-09-01 : "auto —
+// publication directe sauf mots interdits / spam").
+var bannedWordsRe = regexp.MustCompile(`(?i)\b(fuck|shit|salaud|connard|enculé|pute|merde|nique|batard|bâtard|arnaque|scam|escroc|fake|contrefa[cç]on|whatsapp\s*:?\s*\+?\d|https?://|www\.|t\.me/|@gmail|@yahoo|@hotmail|\+\d{6,})\b`)
+
+// autoModerate renvoie (status, reason). status='approved' si rien à
+// signaler, sinon 'pending' + la raison.
+func autoModerate(title, comment string) (string, string) {
+	txt := title + " " + comment
+	if m := bannedWordsRe.FindString(txt); m != "" {
+		return "pending", "terme signalé par le filtre automatique : " + m
+	}
+	// avis très court + note extrême = suspect (spam de notes)
+	if len([]rune(strings.TrimSpace(comment))) < 3 {
+		return "pending", "commentaire vide ou trop court"
+	}
+	// répétition d'un même caractère (aaaaaa, !!!!!!)
+	if regexp.MustCompile(`(.)\1{6,}`).MatchString(comment) {
+		return "pending", "caractères répétés (spam probable)"
+	}
+	return "approved", ""
+}
+
 func (s *server) createReview(w http.ResponseWriter, r *http.Request) {
 	productID := atoi(r.PathValue("id"))
 	var body struct {
-		CustomerID int64  `json:"customer_id"`
-		GuestName  string `json:"guest_name"`
-		GuestEmail string `json:"guest_email"`
-		OrderID    *int64 `json:"order_id"`
-		Rating     int    `json:"rating"`
-		Comment    string `json:"comment"`
+		CustomerID int64    `json:"customer_id"`
+		GuestName  string   `json:"guest_name"`  // conservé pour l'affichage si pas de compte
+		GuestEmail string   `json:"guest_email"` // jamais affiché publiquement
+		OrderID    *int64   `json:"order_id"`
+		Rating     int      `json:"rating"`
+		Title      string   `json:"title"`
+		Comment    string   `json:"comment"`
+		Photos     []string `json:"photos"`  // URLs MinIO déjà uploadées (POST /reviews/upload)
+		Country    string   `json:"country"` // code ISO2 du client (drapeau à côté du nom)
+		Avatar     string   `json:"avatar"`  // photo de profil client (optionnel)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
 		return
 	}
-	// Un avis vient soit d'un compte client (customer_id), soit d'un visiteur
-	// non connecté (guest_name/guest_email — jamais affiché publiquement,
-	// juste conservé pour trace/contact éventuel côté modération).
-	if (body.CustomerID == 0 && (body.GuestName == "" || body.GuestEmail == "")) || body.Rating < 1 || body.Rating > 5 {
-		kit.Fail(w, 400, "missing_fields", "rating (1-5) et soit customer_id soit guest_name+guest_email sont obligatoires")
+	if body.Rating < 1 || body.Rating > 5 {
+		kit.Fail(w, 400, "missing_fields", "rating (1-5) obligatoire")
+		return
+	}
+	// Seuls les acheteurs vérifiés peuvent laisser un avis (décision
+	// fondateur du 2026-09-01). Il faut donc un compte + une commande
+	// livrée contenant ce produit. Les avis "invité" et non vérifiés ne
+	// sont plus acceptés côté public — seul le seed communauté (endpoint
+	// admin séparé) insère des avis is_community=true.
+	if body.CustomerID == 0 || body.OrderID == nil {
+		kit.Fail(w, 403, "purchase_required", "seuls les acheteurs vérifiés peuvent laisser un avis (compte + commande livrée requis)")
+		return
+	}
+	if !s.verifyPurchase(r.Context(), *body.OrderID, body.CustomerID, productID) {
+		kit.Fail(w, 403, "purchase_not_found", "aucun achat livré de ce produit trouvé pour cette commande")
+		return
+	}
+	// un seul avis par (client, produit)
+	var existing int64
+	_ = s.db.QueryRow(r.Context(),
+		`SELECT id FROM reviews WHERE product_id=$1 AND customer_id=$2 AND review_type='product' LIMIT 1`,
+		productID, body.CustomerID).Scan(&existing)
+	if existing != 0 {
+		kit.Fail(w, 409, "already_reviewed", "vous avez déjà laissé un avis sur ce produit")
 		return
 	}
 
-	verified := false
-	if body.OrderID != nil && body.CustomerID != 0 {
-		verified = s.verifyPurchase(r.Context(), *body.OrderID, body.CustomerID, productID)
+	if len(body.Photos) > 6 {
+		body.Photos = body.Photos[:6]
 	}
-
-	var customerID *int64
-	if body.CustomerID != 0 {
-		customerID = &body.CustomerID
-	}
+	photosJSON, _ := json.Marshal(body.Photos)
+	status, reason := autoModerate(body.Title, body.Comment)
+	customerID := body.CustomerID
 
 	var id int64
 	err := s.db.QueryRow(r.Context(), `
-		INSERT INTO reviews (product_id, customer_id, guest_name, guest_email, order_id, rating, comment, verified_purchase)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-		productID, customerID, body.GuestName, body.GuestEmail, body.OrderID, body.Rating, body.Comment, verified,
+		INSERT INTO reviews
+		  (product_id, customer_id, guest_name, guest_email, order_id, rating, title, comment,
+		   photos, verified_purchase, status, moderation_reason, review_type, is_community,
+		   reviewer_country, reviewer_avatar)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,$10,$11,'product',FALSE,$12,$13) RETURNING id`,
+		productID, &customerID, body.GuestName, body.GuestEmail, body.OrderID, body.Rating,
+		strings.TrimSpace(body.Title), strings.TrimSpace(body.Comment), photosJSON,
+		status, reason, strings.ToUpper(body.Country), body.Avatar,
 	).Scan(&id)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -1154,15 +1321,16 @@ func (s *server) createReview(w http.ResponseWriter, r *http.Request) {
 	var vendorID int64
 	var productName string
 	_ = s.db.QueryRow(r.Context(), "SELECT vendor_id, name FROM products WHERE id = $1", productID).Scan(&vendorID, &productName)
-	if vendorID != 0 {
-		kit.Publish(s.kafka, "review.created", fmt.Sprint(id), map[string]any{
-			"review_id": id, "product_id": productID, "product_name": productName, "vendor_id": vendorID,
-			"rating": body.Rating, "comment": body.Comment,
-			"at": time.Now().UTC().Format(time.RFC3339),
-		})
-	}
+	kit.Publish(s.kafka, "review.created", fmt.Sprint(id), map[string]any{
+		"review_id": id, "product_id": productID, "product_name": productName, "vendor_id": vendorID,
+		"rating": body.Rating, "comment": body.Comment, "status": status,
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
 
-	kit.JSON(w, 201, map[string]any{"id": id, "verified_purchase": verified})
+	kit.JSON(w, 201, map[string]any{
+		"id": id, "verified_purchase": true, "status": status,
+		"pending": status == "pending", "moderation_reason": reason,
+	})
 }
 
 func (s *server) verifyPurchase(ctx context.Context, orderID, customerID int64, productID int64) bool {
@@ -1197,6 +1365,333 @@ func (s *server) verifyPurchase(ctx context.Context, orderID, customerID int64, 
 		}
 	}
 	return false
+}
+
+// orderProductsForReview interroge order-svc pour la commande et renvoie
+// (customerIDok, produits) — les product_id livrés de la commande.
+func (s *server) orderProductsForReview(ctx context.Context, orderID, customerID int64) (bool, []int64) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/orders/%d", s.orderURL, orderID), nil)
+	if err != nil {
+		return false, nil
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return false, nil
+	}
+	defer resp.Body.Close()
+	var order struct {
+		CustomerID int64  `json:"customer_id"`
+		Status     string `json:"status"`
+		Lines      []struct {
+			ProductID int64 `json:"product_id"`
+		} `json:"lines"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&order) != nil || order.CustomerID != customerID {
+		return false, nil
+	}
+	ids := make([]int64, 0, len(order.Lines))
+	for _, l := range order.Lines {
+		ids = append(ids, l.ProductID)
+	}
+	return true, ids
+}
+
+// uploadReviewPhoto — 1 photo jointe à un avis, vers MinIO préfixe
+// "reviews/". Rendu par img.miadmarket.ca comme le reste des médias.
+func (s *server) uploadReviewPhoto(w http.ResponseWriter, r *http.Request) {
+	if s.media == nil {
+		kit.Fail(w, 503, "media_unavailable", "stockage d'images indisponible (MinIO non configuré)")
+		return
+	}
+	if err := r.ParseMultipartForm(15 << 20); err != nil {
+		kit.Fail(w, 400, "bad_request", "formulaire multipart invalide (max 15 Mo): "+err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		kit.Fail(w, 400, "bad_request", "champ 'file' manquant")
+		return
+	}
+	defer file.Close()
+	ct := header.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "image/") {
+		kit.Fail(w, 400, "bad_request", "seules les images sont acceptées")
+		return
+	}
+	name := fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(100000))
+	url, err := s.media.Upload(r.Context(), "reviews", name+extForType(ct), file, header.Size, ct)
+	if err != nil {
+		kit.Fail(w, 502, "upload_failed", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]string{"url": url})
+}
+
+func extForType(ct string) string {
+	switch ct {
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".jpg"
+	}
+}
+
+// markReviewHelpful — vote "utile", 1 par (avis, votant). voter_key vient
+// du frontend : "cust:<id>" si connecté, sinon "anon:<empreinte>".
+func (s *server) markReviewHelpful(w http.ResponseWriter, r *http.Request) {
+	reviewID := atoi(r.PathValue("id"))
+	var body struct {
+		VoterKey string `json:"voter_key"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if strings.TrimSpace(body.VoterKey) == "" {
+		kit.Fail(w, 400, "missing_voter", "voter_key requis")
+		return
+	}
+	tag, err := s.db.Exec(r.Context(),
+		`INSERT INTO review_helpful_votes (review_id, voter_key) VALUES ($1,$2)
+		 ON CONFLICT DO NOTHING`, reviewID, body.VoterKey)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 1 {
+		_, _ = s.db.Exec(r.Context(), `UPDATE reviews SET helpful_count = helpful_count + 1 WHERE id = $1`, reviewID)
+	}
+	var count int
+	_ = s.db.QueryRow(r.Context(), `SELECT helpful_count FROM reviews WHERE id = $1`, reviewID).Scan(&count)
+	kit.JSON(w, 200, map[string]any{"helpful_count": count, "counted": tag.RowsAffected() == 1})
+}
+
+// canReviewOrder — pour le dashboard client et l'email post-livraison :
+// quels produits d'une commande (livrée) sont encore à noter.
+func (s *server) canReviewOrder(w http.ResponseWriter, r *http.Request) {
+	orderID := atoi(r.PathValue("orderId"))
+	customerID := atoi(r.URL.Query().Get("customer_id"))
+	if customerID == 0 {
+		kit.Fail(w, 400, "missing_customer", "customer_id requis")
+		return
+	}
+	ok, ids := s.orderProductsForReview(r.Context(), orderID, customerID)
+	if !ok {
+		kit.Fail(w, 403, "order_not_found", "commande introuvable pour ce client")
+		return
+	}
+	// produits déjà notés par ce client
+	done := map[int64]bool{}
+	drow, _ := s.db.Query(r.Context(),
+		`SELECT product_id FROM reviews WHERE customer_id=$1 AND review_type='product'`, customerID)
+	if drow != nil {
+		for drow.Next() {
+			var pid int64
+			if drow.Scan(&pid) == nil {
+				done[pid] = true
+			}
+		}
+		drow.Close()
+	}
+	out := []map[string]any{}
+	seen := map[int64]bool{}
+	for _, pid := range ids {
+		if seen[pid] || done[pid] {
+			continue
+		}
+		seen[pid] = true
+		var name, slug, img string
+		_ = s.db.QueryRow(r.Context(),
+			`SELECT name, slug, COALESCE(images->>0,'') FROM products WHERE id=$1 AND lang='fr'`, pid).
+			Scan(&name, &slug, &img)
+		out = append(out, map[string]any{"product_id": pid, "name": name, "slug": slug, "image": img})
+	}
+	kit.JSON(w, 200, map[string]any{"order_id": orderID, "to_review": out})
+}
+
+// confirmDelivery — l'acheteur confirme la réception de sa commande, note
+// la livraison (1-5) et joint éventuellement une photo du colis reçu.
+// Enregistré comme un avis review_type='delivery' (1 par commande).
+func (s *server) confirmDelivery(w http.ResponseWriter, r *http.Request) {
+	orderID := atoi(r.PathValue("orderId"))
+	var body struct {
+		CustomerID     int64    `json:"customer_id"`
+		DeliveryRating int      `json:"delivery_rating"`
+		Comment        string   `json:"comment"`
+		Photos         []string `json:"photos"`
+		Country        string   `json:"country"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if body.CustomerID == 0 || body.DeliveryRating < 1 || body.DeliveryRating > 5 {
+		kit.Fail(w, 400, "missing_fields", "customer_id et delivery_rating (1-5) obligatoires")
+		return
+	}
+	ok, ids := s.orderProductsForReview(r.Context(), orderID, body.CustomerID)
+	if !ok || len(ids) == 0 {
+		kit.Fail(w, 403, "order_not_found", "commande introuvable pour ce client")
+		return
+	}
+	var existing int64
+	_ = s.db.QueryRow(r.Context(),
+		`SELECT id FROM reviews WHERE order_id=$1 AND review_type='delivery' LIMIT 1`, orderID).Scan(&existing)
+	if existing != 0 {
+		kit.Fail(w, 409, "already_confirmed", "livraison déjà confirmée pour cette commande")
+		return
+	}
+	if len(body.Photos) > 4 {
+		body.Photos = body.Photos[:4]
+	}
+	photosJSON, _ := json.Marshal(body.Photos)
+	status, reason := autoModerate("", body.Comment)
+	// on rattache l'avis livraison au 1er produit de la commande (pour
+	// qu'il soit visible sur une fiche produit) tout en le marquant
+	// review_type='delivery'.
+	cid := body.CustomerID
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO reviews
+		  (product_id, customer_id, order_id, rating, delivery_rating, comment, photos,
+		   verified_purchase, status, moderation_reason, review_type, reviewer_country)
+		VALUES ($1,$2,$3,$4,$4,$5,$6,TRUE,$7,$8,'delivery',$9) RETURNING id`,
+		ids[0], &cid, orderID, body.DeliveryRating, strings.TrimSpace(body.Comment), photosJSON,
+		status, reason, strings.ToUpper(body.Country),
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.Publish(s.kafka, "delivery.confirmed", fmt.Sprint(orderID), map[string]any{
+		"order_id": orderID, "customer_id": body.CustomerID, "delivery_rating": body.DeliveryRating,
+		"at": time.Now().UTC().Format(time.RFC3339),
+	})
+	kit.JSON(w, 201, map[string]any{"id": id, "status": status, "pending": status == "pending"})
+}
+
+// ---- Avis "de la communauté" (seed) --------------------------------------
+// Prénoms + noms courants d'Afrique de l'Ouest/Centrale, par pays, pour
+// des avis crédibles sans données personnelles réelles.
+var communityNames = map[string][]string{
+	"SN": {"Awa Ndiaye", "Cheikh Diop", "Fatou Sarr", "Moussa Fall", "Aïssatou Ba", "Ibrahima Sy", "Mariama Gueye", "Ousmane Sow"},
+	"CI": {"Aya Kouassi", "Konan N'Guessan", "Adjoua Brou", "Yao Koffi", "Affoué Tanoh", "Kouadio Kouamé"},
+	"CM": {"Njoya Ngassa", "Aïcha Bello", "Emmanuel Fotso", "Chantal Mballa", "Roland Kamga", "Bih Ncho"},
+	"BJ": {"Rachidatou Adjovi", "Coovi Dossou", "Grâce Hounkpatin", "Sègla Ahouandjinou"},
+	"GN": {"Mamadou Diallo", "Kadiatou Bah", "Alpha Condé", "Fatoumata Camara", "Sékou Touré"},
+	"ML": {"Oumar Traoré", "Assitan Keïta", "Modibo Coulibaly", "Rokia Sangaré"},
+	"GH": {"Kwame Mensah", "Ama Owusu", "Kojo Boateng", "Akosua Sarpong"},
+	"NG": {"Chidi Okafor", "Ngozi Eze", "Bola Adeyemi", "Emeka Nwosu", "Halima Sani"},
+	"":   {"Client MIAD", "Cliente MIAD"},
+}
+var communityComments = []struct {
+	min, max int
+	text     []string
+}{
+	{4, 5, []string{
+		"Produit conforme à la description, très bonne qualité. Livraison un peu longue mais l'article en vaut la peine.",
+		"Superbe finition, exactement comme sur les photos. Je recommande cette boutique.",
+		"Très satisfaite de mon achat, la matière est agréable et le travail soigné. Merci au vendeur.",
+		"Reçu en bon état, bien emballé. Le rendu est encore plus beau en vrai.",
+		"Excellent rapport qualité-prix. C'est ma deuxième commande et toujours au top.",
+		"Article authentique, fait main comme indiqué. Petit délai de livraison mais ça valait l'attente.",
+	}},
+	{3, 4, []string{
+		"Bon produit dans l'ensemble, la taille est un peu différente de ce que j'attendais mais la qualité est là.",
+		"Correct pour le prix. Les couleurs sont légèrement moins vives qu'en photo.",
+		"Satisfait, livraison dans les temps. Un petit défaut de finition sans gravité.",
+	}},
+}
+
+// seedCommunityReviews — POST /admin/reviews/seed
+// body: { "product_id": N, "count": 5, "vendor_avatar": "url", "rep_avatar": "url" }
+// Crée `count` avis is_community=true : nom + pays tirés au sort, avatar =
+// photo du vendeur ou du représentant du pays (fournie par l'appelant),
+// commentaire tiré d'une banque, photos réutilisées depuis la galerie du
+// produit (les "anciennes photos"), note 4-5 majoritaire.
+func (s *server) seedCommunityReviews(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ProductID    int64    `json:"product_id"`
+		Count        int      `json:"count"`
+		VendorAvatar string   `json:"vendor_avatar"`
+		RepAvatar    string   `json:"rep_avatar"`
+		Countries    []string `json:"countries"` // pays à faire tourner (défaut: SN, CI, CM, BJ, GN)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ProductID == 0 {
+		kit.Fail(w, 400, "invalid_body", "product_id requis")
+		return
+	}
+	if body.Count <= 0 || body.Count > 30 {
+		body.Count = 6
+	}
+	if len(body.Countries) == 0 {
+		body.Countries = []string{"SN", "CI", "CM", "BJ", "GN", "ML"}
+	}
+
+	// galerie du produit : on réutilise ces images comme "photos clients"
+	var imagesJSON []byte
+	_ = s.db.QueryRow(r.Context(),
+		`SELECT images FROM products WHERE id=$1 AND lang='fr'`, body.ProductID).Scan(&imagesJSON)
+	var gallery []string
+	_ = json.Unmarshal(imagesJSON, &gallery)
+
+	created := 0
+	for i := 0; i < body.Count; i++ {
+		country := body.Countries[rand.Intn(len(body.Countries))]
+		names := communityNames[country]
+		if len(names) == 0 {
+			names = communityNames[""]
+		}
+		name := names[rand.Intn(len(names))]
+		// 75% d'avis 4-5, 25% d'avis 3-4
+		bank := communityComments[0]
+		if rand.Intn(4) == 0 {
+			bank = communityComments[1]
+		}
+		rating := bank.min + rand.Intn(bank.max-bank.min+1)
+		comment := bank.text[rand.Intn(len(bank.text))]
+		// 1 photo sur 2, tirée de la galerie
+		var photos []string
+		if len(gallery) > 0 && rand.Intn(2) == 0 {
+			photos = []string{gallery[rand.Intn(len(gallery))]}
+		}
+		photosJSON, _ := json.Marshal(photos)
+		// avatar : représentant du pays si fourni, sinon vendeur, sinon rien
+		avatar := body.RepAvatar
+		if avatar == "" {
+			avatar = body.VendorAvatar
+		}
+		// email masqué déterministe (jamais affiché mais stocké pour trace)
+		masked := maskedEmail(name)
+		// date étalée sur ~120 jours en arrière
+		createdAt := time.Now().AddDate(0, 0, -rand.Intn(120)-1)
+
+		_, err := s.db.Exec(r.Context(), `
+			INSERT INTO reviews
+			  (product_id, customer_id, guest_name, guest_email, rating, comment, photos,
+			   verified_purchase, status, review_type, is_community, reviewer_country, reviewer_avatar, created_at)
+			VALUES ($1,NULL,$2,$3,$4,$5,$6,FALSE,'approved','product',TRUE,$7,$8,$9)`,
+			body.ProductID, name, masked, rating, comment, photosJSON,
+			country, avatar, createdAt,
+		)
+		if err == nil {
+			created++
+		}
+	}
+	kit.JSON(w, 201, map[string]any{"product_id": body.ProductID, "created": created})
+}
+
+func maskedEmail(name string) string {
+	base := strings.ToLower(strings.ReplaceAll(strings.Fields(name + " x")[0], "'", ""))
+	if len(base) > 2 {
+		base = base[:2] + "***"
+	}
+	return base + "@***.com"
 }
 
 func (s *server) listCategories(w http.ResponseWriter, r *http.Request) {

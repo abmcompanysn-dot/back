@@ -44,6 +44,17 @@
 	handle /cart* {
 		reverse_proxy catalog-svc:8081
 	}
+	# Avis produits (section avis complète : upload photo, vote "utile",
+	# confirmation de livraison) — catalog-svc. AVANT /orders* car deux
+	# endpoints avis sont sous /orders/{id}/... (can-review,
+	# delivery-confirmation) mais servis par catalog-svc, pas order-svc.
+	handle /reviews* {
+		reverse_proxy catalog-svc:8081
+	}
+	@order_review path_regexp orev ^/orders/[^/]+/(can-review|delivery-confirmation)$
+	handle @order_review {
+		reverse_proxy catalog-svc:8081
+	}
 
 	# Boutiques & vendeurs — vendor-svc
 	handle /stores* {
