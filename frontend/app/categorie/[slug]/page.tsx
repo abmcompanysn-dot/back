@@ -29,7 +29,9 @@ export async function generateMetadata({ params }: CategoryPageProps): Promise<M
   if (!data) return { title: 'Catégorie introuvable | MIAD Market' }
 
   const { category, total } = data
-  const title = `${category.name} — ${total} produits d'Afrique | MIAD Market`
+  // Pas de suffixe " | MIAD Market" ici : le template du layout
+  // (`%s | MIAD Market`) l'ajoute déjà.
+  const title = `${category.name} — ${total} produits d'Afrique`
   const description =
     category.description?.replace(/<[^>]*>/g, '').trim().slice(0, 155) ||
     `Achetez ${category.name.toLowerCase()} sur MIAD Market : ${total} produits d'artisans et vendeurs vérifiés d'Afrique. Paiement Wave, Orange Money, carte. Livraison MIAD Express.`
