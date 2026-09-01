@@ -325,6 +325,52 @@ export async function fetchCategoryRow(
   }
 }
 
+// fetchCategoryWithProducts — pour la route SEO /categorie/[slug] :
+// résout la catégorie (nom + id, match tolérant sur le suffixe -fr/-en),
+// puis ramène jusqu'à `limit` produits pour le JSON-LD ItemList + le
+// premier rendu. Renvoie null si la catégorie n'existe pas.
+export async function fetchCategoryWithProducts(
+  categorySlug: string,
+  limit = 48,
+  lang: 'fr' | 'en' = 'fr'
+): Promise<{
+  category: { id: number; name: string; slug: string; description?: string; productCount?: number }
+  products: any[]
+  total: number
+} | null> {
+  try {
+    const catRes = await fetch(`${CATALOG_SVC_URL}/categories?lang=${lang}`, { next: { revalidate: 3600 } })
+    if (!catRes.ok) return null
+    const catData = await catRes.json()
+    const cats = catData.items || catData.categories || []
+    const wanted = categorySlug.replace(/-(fr|en)$/, '')
+    const match =
+      cats.find((c: any) => c.slug === categorySlug) ||
+      cats.find((c: any) => c.slug === `${wanted}-${lang}`) ||
+      cats.find((c: any) => String(c.slug || '').replace(/-(fr|en)$/, '') === wanted)
+    if (!match?.id) return null
+
+    const res = await fetch(
+      `${CATALOG_SVC_URL}/products?category_id=${match.id}&page=1&page_size=${limit}&lang=${lang}`,
+      { next: { revalidate: 900, tags: ['products', `category-${categorySlug}`] } }
+    )
+    const data = res.ok ? await res.json() : { items: [], total: 0 }
+    return {
+      category: {
+        id: match.id,
+        name: decodeHtmlEntities(match.name || wanted),
+        slug: String(match.slug || categorySlug).replace(/-(fr|en)$/, ''),
+        description: match.description ? decodeHtmlEntities(match.description) : undefined,
+        productCount: match.product_count ?? match.count ?? undefined,
+      },
+      products: (data.items || []).map(mapProduct),
+      total: data.total ?? (data.items || []).length,
+    }
+  } catch {
+    return null
+  }
+}
+
 // Regroupement produits+boutiques par pays pour les sections "Marché [Pays]"
 // de l'accueil. Le pays vient du vendeur (vendor.country côté catalog-svc,
 // pas d'attribut pays direct sur le produit) — cohérent avec vendorToDokanShape.

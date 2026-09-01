@@ -76,7 +76,14 @@ export async function generateMetadata({ params }: ProductPageProps): Promise<Me
       description: ogDescription,
       images: [ogImage],
     },
-    alternates: { canonical: productUrl },
+    alternates: {
+      canonical: productUrl,
+      languages: {
+        fr: productUrl,
+        en: `${productUrl}?lang=en`,
+        'x-default': productUrl,
+      },
+    },
   }
 }
 
@@ -130,20 +137,24 @@ export default async function ProductSlugPage({ params }: ProductPageProps) {
     },
   }))
 
+  const categoryName = product.categories?.[0]?.name || product.category
+  const categorySlug = (product.categories?.[0]?.slug || product.categorySlug || '').replace(/-(fr|en)$/, '')
+  const reviewsCount = Number(product.reviewsCount || product.salesCount || 0)
+
   // Rich snippets Google (prix, disponibilité, note) — sans ça, le produit
   // s'affiche en résultat de recherche basique sans étoiles ni prix visible.
-  const jsonLd = {
-    '@context': 'https://schema.org',
+  const productLd: Record<string, unknown> = {
     '@type': 'Product',
+    '@id': `${productUrl}#product`,
     name: product.name,
     url: productUrl,
     image: mainImage?.startsWith('http') ? [mainImage] : undefined,
     description: product.description?.replace(/<[^>]*>/g, '').trim().substring(0, 300),
-    // Ni GTIN ni MPN disponibles (produits artisanaux/vendeurs multiples,
-    // pas de code-barres) — la marque satisfait l'exigence Google d'un
-    // "identifiant global" à défaut d'un GTIN (avertissement "Aucun
-    // identifiant global fourni"). Boutique du vendeur = la marque la plus
-    // fidèle ici, pas "MIAD Market" (qui est la marketplace, pas le fabricant).
+    ...(product.sku ? { sku: String(product.sku), mpn: String(product.sku) } : {}),
+    ...(categoryName ? { category: categoryName } : {}),
+    // Ni GTIN ni MPN disponibles pour la plupart (produits artisanaux) — la
+    // marque satisfait l'exigence Google d'un "identifiant global" à défaut
+    // d'un GTIN. Boutique du vendeur = la marque la plus fidèle ici.
     brand: {
       '@type': 'Brand',
       name: product.vendor?.name || 'MIAD Market',
@@ -153,21 +164,47 @@ export default async function ProductSlugPage({ params }: ProductPageProps) {
       url: productUrl,
       priceCurrency: product.currency || 'USD',
       price: product.price,
+      itemCondition: 'https://schema.org/NewCondition',
       availability: product.inStock
         ? 'https://schema.org/InStock'
         : 'https://schema.org/OutOfStock',
+      seller: { '@type': 'Organization', name: product.vendor?.name || 'MIAD Market' },
       hasMerchantReturnPolicy,
       shippingDetails,
     },
-    ...(product.rating && product.rating > 0 && {
-      aggregateRating: {
-        '@type': 'AggregateRating',
-        ratingValue: product.rating.toFixed(1),
-        bestRating: '5',
-        worstRating: '1',
-      },
-    }),
+    // Google rejette aggregateRating SANS ratingCount/reviewCount — on ne
+    // l'émet donc que si on a un nombre d'avis réel.
+    ...(product.rating && product.rating > 0 && reviewsCount > 0
+      ? {
+          aggregateRating: {
+            '@type': 'AggregateRating',
+            ratingValue: Number(product.rating).toFixed(1),
+            reviewCount: reviewsCount,
+            bestRating: '5',
+            worstRating: '1',
+          },
+        }
+      : {}),
   }
+
+  const breadcrumbLd = {
+    '@type': 'BreadcrumbList',
+    '@id': `${productUrl}#breadcrumb`,
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Accueil', item: SITE_URL },
+      ...(categoryName && categorySlug
+        ? [{ '@type': 'ListItem', position: 2, name: categoryName, item: `${SITE_URL}/categorie/${categorySlug}` }]
+        : []),
+      {
+        '@type': 'ListItem',
+        position: categoryName && categorySlug ? 3 : 2,
+        name: product.name,
+        item: productUrl,
+      },
+    ],
+  }
+
+  const jsonLd = { '@context': 'https://schema.org', '@graph': [productLd, breadcrumbLd] }
 
   return (
     <>

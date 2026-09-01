@@ -21,7 +21,7 @@ function getInitialCartCount(): number {
 
 interface StandaloneHeaderProps {
   /** Mode "product" : affiche le nom + prix du produit */
-  mode: 'product' | 'vendor'
+  mode: 'product' | 'vendor' | 'category'
   title: string
   subtitle?: string       // prix (product) ou nb produits (vendor)
   image?: string          // thumbnail produit ou logo vendeur

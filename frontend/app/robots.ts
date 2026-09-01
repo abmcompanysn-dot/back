@@ -14,6 +14,7 @@ export default function robots(): MetadataRoute.Robots {
           '/reset-password',
           '/?view=clientDashboard',
           '/?view=vendorDashboard',
+          '/?v=', // vues SPA à paramètres (doublons des vraies routes /product, /vendor, /categorie)
           '/espace-representant',
         ],
       },
@@ -26,6 +27,7 @@ export default function robots(): MetadataRoute.Robots {
           '/reset-password',
           '/?view=clientDashboard',
           '/?view=vendorDashboard',
+          '/?v=', // vues SPA à paramètres (doublons des vraies routes /product, /vendor, /categorie)
           '/espace-representant',
         ],
       },
@@ -38,6 +40,7 @@ export default function robots(): MetadataRoute.Robots {
           '/reset-password',
           '/?view=clientDashboard',
           '/?view=vendorDashboard',
+          '/?v=', // vues SPA à paramètres (doublons des vraies routes /product, /vendor, /categorie)
           '/espace-representant',
         ],
       },

@@ -67,6 +67,19 @@ export const metadata: Metadata = {
     follow: true,
     googleBot: { index: true, follow: true, 'max-image-preview': 'large' },
   },
+  // Site bilingue FR/EN : hreflang par défaut au niveau racine (les pages
+  // produit/boutique/catégorie surchargent avec leur propre URL). Le
+  // paramètre ?lang=en bascule l'interface côté client (voir
+  // MiadMarketClient) — Google sert alors la bonne version selon la langue
+  // du visiteur.
+  alternates: {
+    canonical: SITE_URL,
+    languages: {
+      fr: SITE_URL,
+      en: `${SITE_URL}/?lang=en`,
+      'x-default': SITE_URL,
+    },
+  },
   // Sans ce lien, aucun critère d'installabilité PWA n'est rempli — le
   // service worker était bien enregistré (MiadMarketClient.tsx) et
   // InstallPrompt.tsx bien monté, mais `beforeinstallprompt` ne se

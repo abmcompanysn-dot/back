@@ -37,6 +37,16 @@ const WEBSITE_JSON_LD = {
   '@type': 'WebSite',
   name: 'MIAD Market',
   url: SITE_URL,
+  inLanguage: ['fr', 'en'],
+  // Active la barre de recherche directe dans Google (sitelinks searchbox).
+  potentialAction: {
+    '@type': 'SearchAction',
+    target: {
+      '@type': 'EntryPoint',
+      urlTemplate: `${SITE_URL}/?q={search_term_string}`,
+    },
+    'query-input': 'required name=search_term_string',
+  },
 }
 
 const SHIPPING_FALLBACK = {

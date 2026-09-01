@@ -1,6 +1,17 @@
 import { MetadataRoute } from 'next'
 import { CATALOG_SVC_URL, VENDOR_SVC_URL } from '@/lib/miad-server-auth'
 
+// hreflang FR/EN pour chaque entrée du sitemap (le site est bilingue,
+// ?lang=en bascule l'interface).
+function altLangs(url: string) {
+  return {
+    languages: {
+      fr: url,
+      en: `${url}${url.includes('?') ? '&' : '?'}lang=en`,
+    },
+  }
+}
+
 // Généré à la demande au runtime edge, JAMAIS au build (2026-08-29) :
 // - au build, CATALOG_SVC_URL/VENDOR_SVC_URL ne sont pas injectées (elles
 //   n'existent qu'au runtime Cloudflare Pages) → les fetch de catalogue
@@ -45,11 +56,37 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date()
 
   const staticPages: MetadataRoute.Sitemap = [
-    { url: BASE,                 lastModified: now, changeFrequency: 'daily',   priority: 1.0 },
-    { url: `${BASE}/promotions`, lastModified: now, changeFrequency: 'daily',   priority: 0.9 },
+    { url: BASE,                 lastModified: now, changeFrequency: 'daily',   priority: 1.0, alternates: altLangs(BASE) },
+    { url: `${BASE}/promotions`, lastModified: now, changeFrequency: 'daily',   priority: 0.9, alternates: altLangs(`${BASE}/promotions`) },
     { url: `${BASE}/coins`,      lastModified: now, changeFrequency: 'weekly',  priority: 0.7 },
     { url: `${BASE}/helpcenter`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
   ]
+
+  // ── Catégories (routes SEO /categorie/[slug]) ─────────────────────────────
+  let categoryEntries: MetadataRoute.Sitemap = []
+  try {
+    const catRes = await fetch(`${CATALOG_SVC_URL}/categories?lang=fr`, { next: { revalidate: 3600 } })
+    if (catRes.ok) {
+      const catData: any = await catRes.json().catch(() => ({}))
+      const cats: any[] = catData.items || catData.categories || []
+      const seen = new Set<string>()
+      categoryEntries = cats.flatMap((c) => {
+        const slug = String(c.slug || '').replace(/-(fr|en)$/, '')
+        if (!slug || seen.has(slug)) return []
+        seen.add(slug)
+        const url = `${BASE}/categorie/${slug}`
+        return [{
+          url,
+          lastModified: now,
+          changeFrequency: 'daily' as const,
+          priority: 0.85,
+          alternates: altLangs(url),
+        }]
+      })
+    }
+  } catch (err) {
+    console.error('[sitemap] échec récupération catégories', err)
+  }
 
   // ── Produits ───────────────────────────────────────────────────────────────
   let productEntries: MetadataRoute.Sitemap = []
@@ -57,12 +94,17 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const products = await fetchAllCatalog<{ id: number; slug: string }>(
       `${CATALOG_SVC_URL}/products?lang=fr`
     )
-    productEntries = products.flatMap(p => p.slug ? [{
-      url:             `${BASE}/product/${p.slug}`,
-      lastModified:    now, // catalog-svc n'a pas de updated_at exploitable par produit pour l'instant
-      changeFrequency: 'weekly' as const,
-      priority:        0.8,
-    }] : [])
+    productEntries = products.flatMap(p => {
+      if (!p.slug) return []
+      const url = `${BASE}/product/${p.slug}`
+      return [{
+        url,
+        lastModified:    now, // catalog-svc n'a pas de updated_at exploitable par produit pour l'instant
+        changeFrequency: 'weekly' as const,
+        priority:        0.8,
+        alternates:      altLangs(url),
+      }]
+    })
   } catch (err) {
     console.error('[sitemap] échec récupération produits', err)
   }
@@ -75,21 +117,22 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     )
     vendorEntries = stores.flatMap(s => {
       if (!s.slug) return []
+      const url = `${BASE}/vendor/${s.slug}`
       return [{
-        url:             `${BASE}/vendor/${s.slug}`,
+        url,
         lastModified:    now,
         changeFrequency: 'weekly' as const,
         priority:        0.7,
+        alternates:      altLangs(url),
       }]
     })
   } catch (err) {
     console.error('[sitemap] échec récupération boutiques', err)
   }
 
-  // Catégories volontairement absentes du sitemap : ce sont des vues filtrées
-  // de la page d'accueil qui héritent toutes du même titre/description
-  // statique — les soumettre à l'indexation dilue le référencement de la
-  // page d'accueil elle-même plutôt que d'aider.
+  // Les catégories ont maintenant de vraies routes indexables
+  // (/categorie/[slug], voir app/categorie/[slug]/page.tsx) avec metadata,
+  // JSON-LD et fil d'Ariane propres — elles sont donc dans le sitemap.
 
-  return [...staticPages, ...productEntries, ...vendorEntries]
+  return [...staticPages, ...categoryEntries, ...productEntries, ...vendorEntries]
 }

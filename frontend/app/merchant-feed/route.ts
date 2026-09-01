@@ -22,6 +22,8 @@ interface CatalogProduct {
   stock: number
   vendor_id: number
   images: { src: string }[]
+  category_name?: string
+  categories?: { name: string }[]
 }
 
 // Migré vers catalog-svc : page_size/has_more natifs, plus besoin de la
@@ -78,6 +80,8 @@ function buildItem(p: CatalogProduct, vendorNamesById: Record<string, string>): 
     .map(img => `      <g:additional_image_link>${escapeXml(img.src)}</g:additional_image_link>`)
     .join('\n')
 
+  const productType = escapeXml(p.category_name || p.categories?.[0]?.name || '')
+
   return `
     <item>
       <g:id>${p.id}</g:id>
@@ -91,8 +95,13 @@ ${additionalImages}
       <g:price>${(onSale ? parseFloat(p.regular_price) : price).toFixed(2)} USD</g:price>
       ${onSale ? `<g:sale_price>${price.toFixed(2)} USD</g:sale_price>` : ''}
       <g:brand>${brand}</g:brand>
-      <g:identifier_exists>no</g:identifier_exists>
-      ${p.sku ? `<g:mpn>${escapeXml(p.sku)}</g:mpn>` : ''}
+      ${productType ? `<g:product_type>${productType}</g:product_type>` : ''}
+      ${p.sku ? `<g:mpn>${escapeXml(p.sku)}</g:mpn>\n      <g:identifier_exists>yes</g:identifier_exists>` : '<g:identifier_exists>no</g:identifier_exists>'}
+      <g:shipping>
+        <g:country>SN</g:country>
+        <g:service>MIAD Express</g:service>
+        <g:price>12.00 USD</g:price>
+      </g:shipping>
     </item>`
 }
 
