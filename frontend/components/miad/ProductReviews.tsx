@@ -69,8 +69,15 @@ export function ProductReviews({ product, user }: ProductReviewsProps) {
     revalidateOnFocus: false,
     dedupingInterval: 60_000,
   })
-  const reviews = data?.reviews ?? []
+  const rawReviews = data?.reviews ?? []
   const header = data?.header
+  // Tri "récents" : on remonte les avis AVEC photo en tête (stable sinon),
+  // les avis illustrés sont plus utiles à l'acheteur. Le tri explicite
+  // ("top" / "photos") est respecté tel quel.
+  const reviews = useMemo(() => {
+    if (sort !== 'recent') return rawReviews
+    return [...rawReviews].sort((a, b) => (b.photos.length ? 1 : 0) - (a.photos.length ? 1 : 0))
+  }, [rawReviews, sort])
 
   const avg = header?.average || product.rating || 0
   const count = header?.count || 0
@@ -187,19 +194,36 @@ export function ProductReviews({ product, user }: ProductReviewsProps) {
         {/* ── Colonne droite : bandeau photos + tri + liste ── */}
         <div className="md:col-span-8 space-y-6">
           {photoStrip.length > 0 && (
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-widest text-muted-foreground mb-3">
-                Photos des clients
-              </p>
-              <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
+            <div className="-mx-4 px-4 md:mx-0 md:px-0">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[11px] font-black uppercase tracking-widest text-muted-foreground">
+                  Photos des clients ({header?.withPhotos ?? photoStrip.length})
+                </p>
+                {(header?.withPhotos ?? 0) > photoStrip.length && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOnlyPhotos(true)
+                      setSort('photos')
+                    }}
+                    className="text-[11px] font-bold text-accent underline underline-offset-2"
+                  >
+                    Tout voir
+                  </button>
+                )}
+              </div>
+              <div
+                className="flex gap-2.5 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory"
+                style={{ WebkitOverflowScrolling: 'touch' }}
+              >
                 {photoStrip.map((src) => (
                   <button
                     key={src}
                     type="button"
                     onClick={() => setLightbox(src)}
-                    className="relative shrink-0 w-20 h-20 rounded-xl overflow-hidden border border-border/50 bg-muted"
+                    className="relative shrink-0 w-28 h-28 md:w-24 md:h-24 rounded-2xl overflow-hidden border border-border/50 bg-muted snap-start"
                   >
-                    <Image src={src} alt="Photo d'avis" fill sizes="80px" className="object-cover" />
+                    <Image src={src} alt="Photo d'avis client" fill sizes="112px" className="object-cover" />
                   </button>
                 ))}
               </div>
@@ -257,7 +281,13 @@ export function ProductReviews({ product, user }: ProductReviewsProps) {
               {reviews.map((rev) => {
                 const hc = rev.helpfulCount + (helpful[rev.id] || 0)
                 return (
-                  <li key={rev.id} className="border-b border-border/60 pb-7 last:border-0">
+                  <li
+                    key={rev.id}
+                    className={cn(
+                      'border-b border-border/60 pb-7 last:border-0',
+                      rev.photos.length > 0 && 'bg-accent/5 -mx-3 px-3 pt-4 rounded-2xl border-b-0 md:mx-0 md:px-0 md:bg-transparent md:pt-0 md:rounded-none md:border-b'
+                    )}
+                  >
                     <div className="flex justify-between items-start mb-3">
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-10 h-10 rounded-full overflow-hidden bg-muted flex items-center justify-center font-black text-muted-foreground text-sm shrink-0">
@@ -309,15 +339,18 @@ export function ProductReviews({ product, user }: ProductReviewsProps) {
                     {rev.review && <p className="text-sm text-foreground/80 leading-relaxed">{rev.review}</p>}
 
                     {rev.photos.length > 0 && (
-                      <div className="flex gap-2 mt-3 flex-wrap">
+                      <div
+                        className="flex gap-2.5 mt-3 overflow-x-auto scrollbar-hide pb-1 snap-x"
+                        style={{ WebkitOverflowScrolling: 'touch' }}
+                      >
                         {rev.photos.map((src) => (
                           <button
                             key={src}
                             type="button"
                             onClick={() => setLightbox(src)}
-                            className="relative w-16 h-16 rounded-lg overflow-hidden border border-border/50 bg-muted"
+                            className="relative shrink-0 w-24 h-24 md:w-20 md:h-20 rounded-xl overflow-hidden border border-border/50 bg-muted snap-start"
                           >
-                            <Image src={src} alt="" fill sizes="64px" className="object-cover" />
+                            <Image src={src} alt="Photo de l'avis" fill sizes="96px" className="object-cover" />
                           </button>
                         ))}
                       </div>
