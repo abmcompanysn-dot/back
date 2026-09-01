@@ -431,7 +431,12 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   useEffect(() => {
     if (forcedView !== 'product' || !forcedProductSlug || selectedProduct) return
     const controller = new AbortController()
-    fetch(`/api/products?slug=${encodeURIComponent(forcedProductSlug)}`, { signal: controller.signal })
+    // lang=${language} : sans ça, ce fetch renvoie toujours le produit en FR
+    // (défaut catalog-svc), même si l'utilisateur navigue en EN — l'effet
+    // "Bascule FR/EN" plus bas le corrige aussitôt, mais ce va-et-vient crée
+    // un clignotement visible d'une fraction de seconde sur la fiche produit
+    // (bug remonté 2026-09-01).
+    fetch(`/api/products?slug=${encodeURIComponent(forcedProductSlug)}&lang=${language}`, { signal: controller.signal })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         const p = data?.products?.[0]
@@ -443,7 +448,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         setProductFetchSettled(true)
       })
     return () => controller.abort()
-  }, [forcedView, forcedProductSlug, selectedProduct])
+  }, [forcedView, forcedProductSlug, selectedProduct, language])
 
   // Même protection pour un lien direct BOUTIQUE (/?v=vendor&slug=X, favori,
   // partage) : la boutique n'est pas forcément dans les 100 premiers
@@ -1193,8 +1198,10 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       }
       // Pas encore dans le lot chargé côté client — même fetch de secours
       // que l'effet de chargement direct (forcedProductSlug) plus haut.
+      // lang=${language} : même correctif que ce fetch jumeau (voir son
+      // commentaire) — sans ça, flash FR/EN visible sur la fiche produit.
       const controller = new AbortController()
-      fetch(`/api/products?slug=${encodeURIComponent(slug)}`, { signal: controller.signal })
+      fetch(`/api/products?slug=${encodeURIComponent(slug)}&lang=${language}`, { signal: controller.signal })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           const p = data?.products?.[0]
@@ -1229,7 +1236,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         .catch(() => {})
       return () => controller.abort()
     }
-  }, [searchParams, allProducts, stores, selectedProduct, selectedVendor, activeCountry, currentView])
+  }, [searchParams, allProducts, stores, selectedProduct, selectedVendor, activeCountry, currentView, language])
 
   // Récupération des résultats de recherche via l'API
   const { data: searchResultsData, isLoading: searchLoading } = useSWR(
