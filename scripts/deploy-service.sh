@@ -43,8 +43,19 @@ kubectl() { k3s kubectl "$@"; }
 say "Build de l'image $SVC…"
 docker build --build-arg SERVICE="$SVC" -t "miad/$SVC:latest" .
 
-say "Import dans containerd…"
+say "Import dans containerd (k3s)…"
 docker save "miad/$SVC:latest" | k3s ctr --namespace k8s.io images import -
+
+# L'image Docker + son cache de build ne servent plus une fois importés
+# dans k3s : sans ce ménage, /var/lib/containerd (celui du démon docker,
+# distinct de k3s) gonflait de plusieurs Go à CHAQUE déploiement et a
+# saturé le disque du VPS (453 Go / 581 le 2026-09-01, nettoyé le jour
+# même). On garde le cache récent (< 24 h) pour ne pas repartir de zéro
+# si on redéploie plusieurs fois de suite.
+say "Nettoyage du cache de build Docker…"
+docker image rm "miad/$SVC:latest" >/dev/null 2>&1 || true
+docker builder prune -f --filter until=24h >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
 
 say "Redémarrage du Deployment $SVC (les autres services ne sont pas touchés)…"
 kubectl -n miad rollout restart "deployment/$SVC"

@@ -78,7 +78,13 @@ command -v docker >/dev/null 2>&1 || curl -fsSL https://get.docker.com | sh
 for s in "${SERVICES[@]}"; do
   docker build --build-arg SERVICE="$s" -t "miad/$s:latest" .
   docker save "miad/$s:latest" | k3s ctr --namespace k8s.io images import -
+  # image Docker + cache inutiles une fois importés dans k3s — sans ce
+  # ménage, /var/lib/containerd (démon docker) saturait le disque du VPS
+  # (voir le même commentaire dans scripts/deploy-service.sh, 2026-09-01).
+  docker image rm "miad/$s:latest" >/dev/null 2>&1 || true
 done
+docker builder prune -f >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
 
 # ---------- 7. Attente + vérification EXPLICITE ----------
 say "Attente des rollouts…"
