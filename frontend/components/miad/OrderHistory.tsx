@@ -8,6 +8,7 @@ import { Package, ChevronRight, Clock, CheckCircle, XCircle, ArrowLeft, Shopping
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TrackingTimeline, TrackingData } from './TrackingTimeline'
+import { ClientOrderDetail } from './ClientOrderDetail'
 
 type OrderHistoryProps = {
   onBack: () => void
@@ -40,6 +41,9 @@ export function OrderHistory({ onBack, onContinueShopping }: OrderHistoryProps) 
   const [trackingOrder, setTrackingOrder] = useState<any | null>(null)
   const [trackingData, setTrackingData] = useState<TrackingData | null>(null)
   const [isLoadingTracking, setIsLoadingTracking] = useState(false)
+  // Détail d'une commande (regroupement par boutique + images + reprise
+  // de paiement Mobile Money) — modale interne, comme le suivi ci-dessus.
+  const [detailOrderId, setDetailOrderId] = useState<number | null>(null)
 
   const fetchTrackingForOrder = async (order: any) => {
     const meta = order.meta_data || []
@@ -71,6 +75,11 @@ export function OrderHistory({ onBack, onContinueShopping }: OrderHistoryProps) 
         </button>
         <h1 className="text-lg font-bold">Mon Historique</h1>
       </div>
+
+      {/* Détail de commande (par boutique + images + reprise paiement) */}
+      {detailOrderId != null && (
+        <ClientOrderDetail orderId={detailOrderId} onClose={() => setDetailOrderId(null)} />
+      )}
 
       {/* Tracking modal */}
       {trackingOrder && (
@@ -128,8 +137,20 @@ export function OrderHistory({ onBack, onContinueShopping }: OrderHistoryProps) 
               const trackingNumber = meta.find((m: any) => m.key === '_miad_tracking_number')?.value
               const carrier = meta.find((m: any) => m.key === '_miad_carrier')?.value
 
+              // La liste renvoie des SOUS-commandes vendeur (order-svc
+              // filtre customer_id sur vendor_id>0) : le détail attend le
+              // PARENT (commande groupée), d'où parent_order_id en priorité.
+              const parentId = order.parent_order_id || order.id
+
               return (
-                <div key={order.id} className="bg-card border border-border rounded-2xl p-4 hover:shadow-md transition-shadow group">
+                <div
+                  key={order.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setDetailOrderId(parentId)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetailOrderId(parentId) } }}
+                  className="bg-card border border-border rounded-2xl p-4 hover:shadow-md transition-shadow group cursor-pointer text-left w-full"
+                >
                   <div className="flex justify-between items-start mb-3">
                     <div>
                       <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest mb-1">Commande #{order.id}</p>
@@ -150,7 +171,7 @@ export function OrderHistory({ onBack, onContinueShopping }: OrderHistoryProps) 
                       </div>
                       <button
                         type="button"
-                        onClick={() => fetchTrackingForOrder(order)}
+                        onClick={e => { e.stopPropagation(); fetchTrackingForOrder(order) }}
                         className="text-[10px] font-black text-blue-600 hover:text-blue-800 whitespace-nowrap"
                       >
                         Suivre →

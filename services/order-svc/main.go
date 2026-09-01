@@ -639,9 +639,10 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 
 	var reference string
 	var createdAt time.Time
+	var customerID int64
 	if err := s.db.QueryRow(r.Context(),
-		`SELECT reference, created_at FROM orders WHERE id = $1 AND status = 'group'`, parentID,
-	).Scan(&reference, &createdAt); err != nil {
+		`SELECT reference, created_at, customer_id FROM orders WHERE id = $1 AND status = 'group'`, parentID,
+	).Scan(&reference, &createdAt, &customerID); err != nil {
 		kit.Fail(w, 404, "order_not_found", fmt.Sprintf("commande groupée %d introuvable", parentID))
 		return
 	}
@@ -657,7 +658,7 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 	).Scan(&shippingAddr)
 
 	rows, err := s.db.Query(r.Context(), `
-		SELECT vendor_id, status, lines, shipping_usd, total_usd
+		SELECT vendor_id, status, payment_status, payment_method, lines, shipping_usd, total_usd
 		FROM orders WHERE parent_order_id = $1 ORDER BY id`, parentID)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -668,15 +669,17 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 	var totalUSD, shippingUSD float64
 	lineItems := []map[string]any{}
 	statuses := map[string]bool{}
+	paymentStatuses := map[string]bool{}
+	paymentMethod := ""
 	vendorIDs := map[int64]bool{}
 	found := false
 
 	for rows.Next() {
 		var vendorID int64
-		var status string
+		var status, payStatus, payMethod string
 		var lines []byte
 		var shipping, total float64
-		if err := rows.Scan(&vendorID, &status, &lines, &shipping, &total); err != nil {
+		if err := rows.Scan(&vendorID, &status, &payStatus, &payMethod, &lines, &shipping, &total); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -684,6 +687,13 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 		totalUSD += total
 		shippingUSD += shipping
 		statuses[status] = true
+		paymentStatuses[payStatus] = true
+		// Un seul paiement par commande groupée (2026-08-26) — toutes les
+		// sous-commandes portent le même payment_method ; on garde le
+		// premier non vide rencontré.
+		if paymentMethod == "" {
+			paymentMethod = payMethod
+		}
 		vendorIDs[vendorID] = true
 
 		var vendorLines []line
@@ -725,8 +735,11 @@ func (s *server) getParentOrder(w http.ResponseWriter, r *http.Request) {
 
 	out := map[string]any{
 		"id": parentID, "number": reference, "reference": reference,
-		"status": aggregateStatus(statuses),
-		"total":  strconv.FormatFloat(totalUSD, 'f', 2, 64), "currency": "USD",
+		"customer_id":    customerID,
+		"status":         aggregateStatus(statuses),
+		"payment_status": aggregateStatus(paymentStatuses),
+		"payment_method": paymentMethod,
+		"total":          strconv.FormatFloat(totalUSD, 'f', 2, 64), "currency": "USD",
 		"shipping_total": strconv.FormatFloat(shippingUSD, 'f', 2, 64),
 		"line_items":     lineItems,
 		"date_created":   createdAt.UTC().Format(time.RFC3339),

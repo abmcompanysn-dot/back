@@ -60,8 +60,14 @@ export async function POST(request: Request) {
       dest_source: 'buyer_coords',
     })
   } catch {
+    // Même repli que la branche "coordonnées manquantes" ci-dessus :
+    // SENEGAL_DOMESTIC_FALLBACK_USD (≈ 8,33 $), PAS 3000 en dur — ce
+    // "3000" était un montant FCFA hérité de l'ancien WordPress et
+    // s'affichait tel quel comme 3000 $ au checkout quand shipping-svc
+    // était indisponible (bug du repli catch, jumeau de celui déjà
+    // corrigé plus haut le 2026-08-28 mais oublié ici).
     return NextResponse.json({
-      ok: true, distance_km: null, price: 3000, tier_label: 'estimation',
+      ok: true, distance_km: null, price: SENEGAL_DOMESTIC_FALLBACK_USD, tier_label: 'estimation',
       resolved_from: 'fallback_default', origin_source: 'error', dest_source: 'error',
     })
   }

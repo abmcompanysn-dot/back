@@ -28,13 +28,50 @@ export async function GET(request: Request) {
     // champ absent) et "Invalid Date" (new Date(order.date_created)) —
     // constaté le 2026-08-28 sur la page Mon compte. On mappe ici plutôt
     // que de patcher chaque accès du dashboard.
-    const orders = (data.items || []).map((o: any) => ({
+    const mapped = (data.items || []).map((o: any) => ({
       ...o,
       total: o.total_usd ?? o.total ?? 0,
       date_created: o.created_at ?? o.date_created ?? null,
       date_modified: o.updated_at ?? o.created_at ?? o.date_modified ?? null,
       line_items: o.line_items ?? [],
     }))
+
+    // Regroupement par commande PARENT : order-svc listOrders filtre
+    // customer_id sur vendor_id>0, donc renvoie une ligne par SOUS-commande
+    // vendeur. Le client voyait "Commande #123" ET "Commande #124" pour un
+    // même achat multi-boutiques (signalé le 2026-09-01). On agrège ici :
+    // une entrée par parent_order_id, total sommé, statut du groupe
+    // ("mixed" si les sous-commandes divergent), et l'id AFFICHÉ devient
+    // celui du parent (le détail — /api/orders/[id] — n'accepte que lui).
+    const byParent = new Map<number, any>()
+    for (const o of mapped) {
+      const pid = o.parent_order_id || o.id
+      const g = byParent.get(pid)
+      if (!g) {
+        byParent.set(pid, {
+          ...o,
+          id: pid,
+          parent_order_id: pid,
+          total: Number(o.total) || 0,
+          _statuses: new Set([o.status]),
+          _vendorCount: 1,
+        })
+      } else {
+        g.total += Number(o.total) || 0
+        g._statuses.add(o.status)
+        g._vendorCount += 1
+        // garder la date la plus ancienne (création du panier)
+        if (o.date_created && (!g.date_created || o.date_created < g.date_created)) g.date_created = o.date_created
+      }
+    }
+    const orders = Array.from(byParent.values())
+      .map(({ _statuses, _vendorCount, ...g }: any) => ({
+        ...g,
+        status: _statuses.size === 1 ? [..._statuses][0] : 'mixed',
+        vendor_count: _vendorCount,
+      }))
+      .sort((a: any, b: any) => (b.id ?? 0) - (a.id ?? 0))
+
     return NextResponse.json({ orders })
   } catch {
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })

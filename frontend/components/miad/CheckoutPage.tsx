@@ -5,7 +5,7 @@ import Script from 'next/script'
 import Image from 'next/image'
 import { cn } from '@/lib/utils'
 import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, CheckCircle, Truck, Loader2, X, CreditCard, ExternalLink, ShieldCheck, Wallet, Ticket, Check, AlertCircle, MapPin } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Truck, Loader2, X, CreditCard, ExternalLink, ShieldCheck, Wallet, Ticket, Check, MapPin } from 'lucide-react'
 import { validateCoupon } from '@/lib/coupons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -213,15 +213,28 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   // secours plutôt que d'échouer (voir miad-shipping-domestic.php). Le prix
   // renvoyé par l'API est déjà converti en USD (tiers admin exprimés en
   // FCFA côté WordPress) — même unité que subtotal, pas de conversion ici.
-  const isDomesticSN = formData.country === 'sn'
   const uniqueVendors = useMemo(() => {
-    const map = new Map<string, string>()
+    const map = new Map<string, { name: string; countryCode: string }>()
     for (const item of cart) {
       const id = item.product.vendor?.id
-      if (id) map.set(String(id), item.product.vendor?.name || 'Boutique')
+      if (id) map.set(String(id), {
+        name: item.product.vendor?.name || 'Boutique',
+        countryCode: (item.product.vendor?.countryCode || '').toLowerCase(),
+      })
     }
-    return Array.from(map, ([id, name]) => ({ id, name }))
+    return Array.from(map, ([id, v]) => ({ id, name: v.name, countryCode: v.countryCode }))
   }, [cart])
+  // Livraison nationale Sénégal : seulement si le client ET TOUS les
+  // vendeurs du panier sont au Sénégal. Tester uniquement formData.country
+  // (comme avant) déclenchait un devis "domestique SN" pour un vendeur
+  // étranger (ex. RicardoDesign, Cameroun) qui n'a pas d'adresse
+  // d'expédition sénégalaise → shipping-svc échoue → repli à 3000
+  // affiché en dollars. Panier mixte SN + étranger => on garde le
+  // système international par zone (MIAD Standard/Express).
+  const isDomesticSN =
+    formData.country === 'sn' &&
+    uniqueVendors.length > 0 &&
+    uniqueVendors.every((v) => v.countryCode === 'sn')
 
   const [domesticQuotes, setDomesticQuotes] = useState<Record<string, { price: number; distance_km: number | null; tier_label: string | null; eta_label: string | null }>>({})
   const [domesticLoading, setDomesticLoading] = useState(false)
@@ -433,7 +446,6 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
           savePaymentMethod: paymentMethod === 'stripe' && selectedPaymentMethodId === 'new' ? saveNewCard : false,
           paymentMethodId: paymentMethod === 'stripe' && selectedPaymentMethodId !== 'new' ? selectedPaymentMethodId : undefined,
           lines,
-          save_address: true, // Enregistre l'adresse sur le profil pour le pré-remplissage des prochaines commandes
           shipping: {
             first_name: formData.first_name,
             last_name: formData.last_name,
@@ -469,6 +481,33 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
         httpError.status = response.status
         throw httpError
       }
+
+      // Enregistrer l'adresse de livraison sur le profil dès la commande
+      // créée (le flag save_address envoyé à POST /api/orders n'était lu
+      // par personne — ni la route Next, ni order-svc — l'adresse n'était
+      // donc jamais mémorisée). Fire-and-forget : un échec ici ne doit pas
+      // interrompre le paiement. Relaie vers auth-svc PATCH
+      // /customer/{id}/address (upsert par type dans customers.addresses).
+      void fetch('/api/customer', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          type: 'shipping',
+          address: {
+            first_name: formData.first_name,
+            last_name: formData.last_name,
+            company: formData.company,
+            address_1: formData.address,
+            address_2: address2WithQuartier,
+            city: formData.city,
+            state: formData.state,
+            postcode: formData.postcode,
+            country: formData.country.toUpperCase(),
+            phone: fullPhone,
+            email: formData.email,
+          },
+        }),
+      }).catch(() => { /* mémorisation best-effort, sans impact sur la commande */ })
 
       // Si c'est Stripe, on affiche le formulaire de carte
       if (resolvedMethod === 'stripe' && data.clientSecret) {
@@ -998,41 +1037,10 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                         )}
                       </button>
 
-                      {/* Conseil Maxit / Orange Money : l'appli doit rester ouverte en
-                          arrière-plan pendant la validation du paiement, sinon
-                          l'autorisation n'aboutit pas — pas nécessaire pour Wave et les
-                          autres opérateurs (demandé le 2026-08-01). Le choix du sous-canal
-                          se fait sur la page du fournisseur après ce bouton, donc le
-                          conseil couvre les deux cas plutôt qu'un sélecteur conditionnel. */}
-                      {paymentMethod === 'mobile_money' && (
-                        <div className="flex items-start gap-2.5 px-4 py-3 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-800 font-bold leading-snug">
-                          <AlertCircle size={15} className="shrink-0 mt-0.5 text-amber-600" />
-                          <span>
-                            Si vous utilisez <strong>Maxit</strong> ou <strong>Orange Money</strong>,
-                            laissez l'application ouverte en arrière-plan pendant toute la
-                            validation du paiement — sinon l'autorisation risque de ne pas
-                            aboutir. (Pas nécessaire pour Wave et les autres.)
-                          </span>
-                        </div>
-                      )}
-
-                      {/* Mobile Money nécessite un numéro d'un opérateur africain
-                          (Wave, Orange Money, MTN...) — un client dont le pays de
-                          livraison est hors Afrique (COUNTRY_TO_ZONE) n'en a
-                          généralement pas. Pas de masquage de l'option (demandé
-                          le 2026-08-28 : garder le choix visible), juste un
-                          avertissement clair pour éviter l'échec silencieux au
-                          moment de saisir le numéro sur la page du fournisseur. */}
-                      {paymentMethod === 'mobile_money' && COUNTRY_TO_ZONE[formData.country.toUpperCase()] !== 'AF' && (
-                        <div className="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-2xl text-[11px] text-blue-800 font-bold leading-snug">
-                          <AlertCircle size={15} className="shrink-0 mt-0.5 text-blue-600" />
-                          <span>
-                            Mobile Money nécessite un numéro de téléphone d'un opérateur
-                            africain (Wave, Orange Money, MTN, Moov, M-Pesa, Airtel...).
-                            Si vous n'en avez pas, choisissez <strong>Carte bancaire</strong> ci-dessous.
-                          </span>
-                        </div>
-                      )}
+                      {/* Encarts d'avertissement Mobile Money retirés le
+                          2026-09-01 à la demande du fondateur (conseil Maxit /
+                          Orange Money "laissez l'appli ouverte" + note "numéro
+                          africain requis" pour les clients hors Afrique). */}
 
                       {/* Option Stripe */}
                       <button
