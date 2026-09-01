@@ -483,30 +483,47 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
           .replace(/&/g, '&amp;')
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;');
-      // met en gras l'intitulé avant le premier " : " en tête de bloc
+      // Intitulé "Label : valeur" en tête de ligne -> label en gras,
+      // seulement si le label est court (1 à 4 mots) : on veut mettre en
+      // avant "Entretien :", "Composition :", "Livraison :"... pas une
+      // phrase entière qui contiendrait un deux-points.
       const withLead = (s: string) => {
-        const m = s.match(/^([A-ZÀ-ÖØ-Ý][^:\n]{1,40}?)\s:\s([\s\S]+)$/);
-        return m ? `<strong>${esc(m[1])} :</strong> ${esc(m[2])}` : esc(s);
+        const m = s.match(/^([A-ZÀ-ÖØ-Ý][^:\n]{1,42}?)\s:\s([\s\S]+)$/);
+        if (!m) return esc(s);
+        const words = m[1].trim().split(/\s+/).length;
+        return words <= 4
+          ? `<strong>${esc(m[1])} :</strong> ${esc(m[2])}`
+          : esc(s);
+      };
+      // Ligne = intitulé de section en MAJUSCULES seul (COMPOSITION,
+      // MODE D'EMPLOI, POUR QUI, CE QUE ÇA FAIT POUR VOUS...) -> <h4>.
+      const isHeading = (s: string) => {
+        const t = s.replace(/\s*:\s*$/, '').trim();
+        if (t.length < 3 || t.length > 48) return false;
+        const letters = t.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, '');
+        if (letters.length < 3) return false;
+        // au moins 3 lettres, toutes en majuscule (accents inclus), pas de minuscule
+        return letters === letters.toUpperCase() && /[A-ZÀ-ÖØ-Þ]/.test(letters);
       };
       html = raw
         .split(/\n{2,}/)
-        .map((block) => {
+        .map((block, blockIndex) => {
           const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
           if (!lines.length) return '';
-          // bloc de puces
+          // 1er bloc = accroche : paragraphe simple, pas de mise en gras
+          // du "label" (souvent le nom du produit répété avant un " : ").
+          const isIntro = blockIndex === 0;
+          // bloc de puces uniquement
           if (lines.every((l) => /^[•\-*]\s+/.test(l))) {
-            const items = lines
-              .map((l) => `<li>${esc(l.replace(/^[•\-*]\s+/, ''))}</li>`)
-              .join('');
-            return `<ul>${items}</ul>`;
+            return `<ul>${lines.map((l) => `<li>${esc(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
           }
-          // bloc mixte : puces éventuelles + texte
+          // bloc mixte : intertitres + puces + paragraphes
           const parts = lines
-            .map((l) =>
-              /^[•\-*]\s+/.test(l)
-                ? `<li>${esc(l.replace(/^[•\-*]\s+/, ''))}</li>`
-                : `<p>${withLead(l)}</p>`
-            )
+            .map((l) => {
+              if (/^[•\-*]\s+/.test(l)) return `<li>${esc(l.replace(/^[•\-*]\s+/, ''))}</li>`;
+              if (isHeading(l)) return `<h4>${esc(l.replace(/\s*:\s*$/, ''))}</h4>`;
+              return `<p>${isIntro ? esc(l) : withLead(l)}</p>`;
+            })
             .join('');
           return parts.replace(/(<li>[\s\S]*?<\/li>)+/g, (m) => `<ul>${m}</ul>`);
         })
