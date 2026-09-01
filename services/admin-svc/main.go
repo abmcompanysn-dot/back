@@ -300,6 +300,11 @@ func main() {
 		mux.HandleFunc("POST /admin/api/reviews/seed-catalog", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/admin/reviews/seed-catalog")
 		}))
+		// Ajout d'un avis à la main depuis le back-office (nom, pays, note,
+		// texte, photo). Publié directement, marqué "Avis de la communauté".
+		mux.HandleFunc("POST /admin/api/reviews/manual", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/admin/reviews/manual")
+		}))
 		mux.HandleFunc("GET /admin/api/brands", s.requireAdmin(s.proxy(func() string { return s.catalogURL + "/brands" })))
 		mux.HandleFunc("POST /admin/api/brands", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.catalogURL+"/brands")
@@ -1023,8 +1028,8 @@ func (s *server) uploadMedia(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	prefix := kit.EnvOr(r.FormValue("prefix"), "products")
-	if prefix != "products" && prefix != "vendors" && prefix != "categories" {
-		kit.Fail(w, 400, "bad_request", "prefix doit être products, vendors ou categories")
+	if prefix != "products" && prefix != "vendors" && prefix != "categories" && prefix != "reviews" {
+		kit.Fail(w, 400, "bad_request", "prefix doit être products, vendors, categories ou reviews")
 		return
 	}
 	contentType := header.Header.Get("Content-Type")

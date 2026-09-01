@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ApiError, api } from '../../lib/api'
 import { EmptyState } from '../../components/EmptyState'
 import { IconStar } from '../../components/Icons'
+import { ImageUploadField } from '../../components/ImageUploadField'
 import { CatalogNav } from './CatalogNav'
 
 interface Review {
@@ -103,6 +104,53 @@ export function Reviews() {
     }
   }
 
+  // ── Ajout d'un avis à la main ──
+  const [manualOpen, setManualOpen] = useState(false)
+  const [manual, setManual] = useState({
+    product_id: '',
+    name: '',
+    country: '',
+    rating: '5',
+    title: '',
+    comment: '',
+    avatar: '',
+    photo: '',
+    created_at: '',
+  })
+  const [manualBusy, setManualBusy] = useState(false)
+  const [manualMsg, setManualMsg] = useState<string | null>(null)
+
+  async function runManual() {
+    if (!manual.product_id.trim() || !manual.comment.trim()) {
+      setManualMsg('ID produit et texte de l’avis obligatoires.')
+      return
+    }
+    setManualBusy(true)
+    setManualMsg(null)
+    try {
+      const body = await api.post<{ id: number }>('/admin/api/reviews/manual', {
+        product_id: Number(manual.product_id),
+        name: manual.name.trim(),
+        country: manual.country.trim().toUpperCase().slice(0, 2),
+        rating: Number(manual.rating) || 5,
+        title: manual.title.trim(),
+        comment: manual.comment.trim(),
+        avatar: manual.avatar.trim() || undefined,
+        photos: manual.photo.trim() ? [manual.photo.trim()] : [],
+        created_at: manual.created_at
+          ? new Date(manual.created_at).toISOString()
+          : undefined,
+      })
+      setManualMsg(`Avis #${body.id} publié.`)
+      setManual((m) => ({ ...m, name: '', title: '', comment: '', photo: '', avatar: '' }))
+      if (status === '' || status === 'approved') await load()
+    } catch (err) {
+      setManualMsg(err instanceof ApiError ? err.message : 'échec de la création')
+    } finally {
+      setManualBusy(false)
+    }
+  }
+
   // ── Seed sur TOUT le catalogue (2-5 avis/produit, moyenne ~4,3) ──
   const [catSeed, setCatSeed] = useState({ min: '2', max: '5', photo_ratio: '40', only_missing: true })
   const [catBusy, setCatBusy] = useState(false)
@@ -162,10 +210,81 @@ export function Reviews() {
           <h2>Avis &amp; Modération</h2>
           <p className="subtitle">Réputation des produits et retours clients</p>
         </div>
-        <button className="btn-ghost" onClick={() => setSeedOpen((v) => !v)}>
-          {seedOpen ? 'Fermer' : 'Avis de la communauté…'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn-ghost" onClick={() => setManualOpen((v) => !v)}>
+            {manualOpen ? 'Fermer' : '+ Ajouter un avis'}
+          </button>
+          <button className="btn-ghost" onClick={() => setSeedOpen((v) => !v)}>
+            {seedOpen ? 'Fermer' : 'Avis de la communauté…'}
+          </button>
+        </div>
       </div>
+
+      {manualOpen && (
+        <div className="form-card" style={{ marginBottom: 16, background: '#fafbfc' }}>
+          <p style={{ fontWeight: 700, marginTop: 0 }}>Ajouter un avis à la main</p>
+          <p className="subtitle" style={{ marginTop: 0 }}>
+            Publié immédiatement, sans badge « Achat vérifié » (mention « Avis de la communauté »).
+            Le nom s’affiche tel quel, avec le drapeau du pays et la photo si tu en ajoutes une.
+          </p>
+          <div className="form-grid">
+            <div className="form-field">
+              <label>ID produit (version FR)</label>
+              <input value={manual.product_id} onChange={(e) => setManual({ ...manual, product_id: e.target.value })} placeholder="ex. 199" />
+            </div>
+            <div className="form-field">
+              <label>Nom affiché</label>
+              <input value={manual.name} onChange={(e) => setManual({ ...manual, name: e.target.value })} placeholder="ex. Awa Ndiaye" />
+            </div>
+            <div className="form-field">
+              <label>Pays (ISO2)</label>
+              <input value={manual.country} onChange={(e) => setManual({ ...manual, country: e.target.value })} placeholder="SN" maxLength={2} />
+            </div>
+            <div className="form-field">
+              <label>Note</label>
+              <select value={manual.rating} onChange={(e) => setManual({ ...manual, rating: e.target.value })}>
+                <option value="5">5 ★</option>
+                <option value="4">4 ★</option>
+                <option value="3">3 ★</option>
+                <option value="2">2 ★</option>
+                <option value="1">1 ★</option>
+              </select>
+            </div>
+            <div className="form-field">
+              <label>Date (facultatif)</label>
+              <input type="date" value={manual.created_at} onChange={(e) => setManual({ ...manual, created_at: e.target.value })} />
+            </div>
+            <div className="form-field full">
+              <label>Titre (facultatif)</label>
+              <input value={manual.title} onChange={(e) => setManual({ ...manual, title: e.target.value })} />
+            </div>
+            <div className="form-field full">
+              <label>Avis</label>
+              <textarea rows={3} value={manual.comment} onChange={(e) => setManual({ ...manual, comment: e.target.value })} />
+            </div>
+            <div className="form-field full">
+              <ImageUploadField
+                label="Photo de l’avis (facultatif)"
+                value={manual.photo}
+                onChange={(url) => setManual((m) => ({ ...m, photo: url }))}
+                prefix="reviews"
+              />
+            </div>
+            <div className="form-field full">
+              <ImageUploadField
+                label="Avatar / photo de profil (facultatif)"
+                value={manual.avatar}
+                onChange={(url) => setManual((m) => ({ ...m, avatar: url }))}
+                prefix="reviews"
+              />
+            </div>
+          </div>
+          <button className="btn-primary" disabled={manualBusy || !manual.product_id.trim() || !manual.comment.trim()} onClick={runManual}>
+            {manualBusy ? 'Publication…' : 'Publier l’avis'}
+          </button>
+          {manualMsg && <span style={{ marginLeft: 12, fontSize: 13 }}>{manualMsg}</span>}
+        </div>
+      )}
 
       {seedOpen && (
         <div className="form-card" style={{ marginBottom: 16, background: '#fafbfc' }}>

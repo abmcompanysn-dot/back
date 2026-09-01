@@ -293,7 +293,8 @@ func main() {
 		mux.HandleFunc("GET /orders/{orderId}/can-review", s.canReviewOrder)              // produits notables d'une commande livrée
 		mux.HandleFunc("POST /orders/{orderId}/delivery-confirmation", s.confirmDelivery) // réception + note livraison + photo
 		mux.HandleFunc("POST /admin/reviews/seed", s.seedCommunityReviews)
-	mux.HandleFunc("POST /admin/reviews/seed-catalog", s.seedCommunityReviewsCatalog)                // avis "de la communauté" sur un produit
+	mux.HandleFunc("POST /admin/reviews/seed-catalog", s.seedCommunityReviewsCatalog)
+	mux.HandleFunc("POST /admin/reviews/manual", s.createManualReview)                // avis "de la communauté" sur un produit
 		mux.HandleFunc("GET /wishlist/{customer_id}", s.listWishlist)
 		mux.HandleFunc("POST /wishlist/{customer_id}/{product_id}", s.addToWishlist)
 		mux.HandleFunc("DELETE /wishlist/{customer_id}/{product_id}", s.removeFromWishlist)
@@ -1332,6 +1333,71 @@ func (s *server) createReview(w http.ResponseWriter, r *http.Request) {
 		"id": id, "verified_purchase": true, "status": status,
 		"pending": status == "pending", "moderation_reason": reason,
 	})
+}
+
+// createManualReview — POST /admin/reviews/manual
+// Ajout d'un avis À LA MAIN par un admin depuis le back-office. Pas de
+// vérification d'achat, pas d'auto-modération : l'admin est responsable du
+// contenu. Marqué is_community=true (pas de badge "Achat vérifié"),
+// publié directement (status=approved). Une photo optionnelle (URL déjà
+// uploadée via POST /reviews/upload).
+func (s *server) createManualReview(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ProductID int64    `json:"product_id"`
+		Name      string   `json:"name"`
+		Country   string   `json:"country"`
+		Avatar    string   `json:"avatar"`
+		Rating    int      `json:"rating"`
+		Title     string   `json:"title"`
+		Comment   string   `json:"comment"`
+		Photos    []string `json:"photos"`
+		CreatedAt string   `json:"created_at"` // ISO facultatif ; sinon maintenant
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ProductID == 0 {
+		kit.Fail(w, 400, "invalid_body", "product_id requis")
+		return
+	}
+	if body.Rating < 1 || body.Rating > 5 {
+		kit.Fail(w, 400, "missing_fields", "rating (1-5) obligatoire")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = "Client MIAD"
+	}
+	if len(body.Photos) > 6 {
+		body.Photos = body.Photos[:6]
+	}
+	clean := body.Photos[:0]
+	for _, p := range body.Photos {
+		if strings.HasPrefix(p, "http") {
+			clean = append(clean, p)
+		}
+	}
+	photosJSON, _ := json.Marshal(clean)
+
+	createdAt := time.Now()
+	if body.CreatedAt != "" {
+		if t, err := time.Parse(time.RFC3339, body.CreatedAt); err == nil {
+			createdAt = t
+		}
+	}
+
+	var id int64
+	err := s.db.QueryRow(r.Context(), `
+		INSERT INTO reviews
+		  (product_id, customer_id, guest_name, guest_email, rating, title, comment, photos,
+		   verified_purchase, status, review_type, is_community, reviewer_country, reviewer_avatar, created_at)
+		VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,FALSE,'approved','product',TRUE,$8,$9,$10) RETURNING id`,
+		body.ProductID, name, maskedEmail(name), body.Rating,
+		strings.TrimSpace(body.Title), strings.TrimSpace(body.Comment), photosJSON,
+		strings.ToUpper(strings.TrimSpace(body.Country)), strings.TrimSpace(body.Avatar), createdAt,
+	).Scan(&id)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 201, map[string]any{"id": id, "status": "approved"})
 }
 
 func (s *server) verifyPurchase(ctx context.Context, orderID, customerID int64, productID int64) bool {
