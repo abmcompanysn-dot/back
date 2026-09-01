@@ -416,7 +416,7 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, sale_price_usd, status, is_variable, images, sku, stock, low_stock_threshold, brand_id, tags
+	query := `SELECT id, trid, lang, vendor_id, category_id, name, slug, price_usd, sale_price_usd, status, is_variable, images, sku, stock, low_stock_threshold, brand_id, tags, subtitle
 	          FROM products ` + where + " ORDER BY id"
 	if includeIDs == nil {
 		query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
@@ -439,11 +439,11 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		var vendorIDPtr, categoryIDPtr, brandID *int64
 		var price float64
 		var salePrice *float64
-		var trid, l, name, slug, status, sku string
+		var trid, l, name, slug, status, sku, subtitle string
 		var isVar bool
 		var images, tagsJSON []byte
 		var stock, lowStockThreshold int
-		if err := rows.Scan(&id, &trid, &l, &vendorIDPtr, &categoryIDPtr, &name, &slug, &price, &salePrice, &status, &isVar, &images, &sku, &stock, &lowStockThreshold, &brandID, &tagsJSON); err != nil {
+		if err := rows.Scan(&id, &trid, &l, &vendorIDPtr, &categoryIDPtr, &name, &slug, &price, &salePrice, &status, &isVar, &images, &sku, &stock, &lowStockThreshold, &brandID, &tagsJSON, &subtitle); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -459,6 +459,12 @@ func (s *server) listProducts(w http.ResponseWriter, r *http.Request) {
 		item["stock"] = stock
 		item["low_stock_threshold"] = lowStockThreshold
 		item["brand_id"] = brandID
+		// subtitle inclus dans la liste (léger, contrairement à description
+		// volontairement omise ci-dessus) — sinon fetchProductBySlug (qui
+		// passe par GET /products?slug=, pas GET /products/{id}) affichait
+		// toujours un sous-titre vide sur la fiche produit (bug remonté
+		// 2026-09-01, alors même que la donnée existait en base).
+		item["subtitle"] = subtitle
 		var tags []string
 		_ = json.Unmarshal(tagsJSON, &tags)
 		item["tags"] = tags
