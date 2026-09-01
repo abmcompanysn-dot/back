@@ -40,3 +40,11 @@ services/admin-svc/webui/dist/
 # Enrichissement catalogue (phase 2) — données transitoires, régénérables
 scripts/catalog-enrich/*.pull.json
 scripts/catalog-enrich/*.content.json
+
+# Fichiers de session / dumps transitoires — jamais versionnés
+.wrangler/
+scripts/gallery-review/
+scripts/split-cofapp-bonnets.mjs
+scripts/catalog-enrich/_remaining.json
+outils-diagnostic*.pdf
+affiches-septembre/

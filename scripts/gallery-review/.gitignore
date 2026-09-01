@@ -1,6 +1,0 @@
-# Images générées en attente de validation — jamais committées.
-# Seuls le script et ce .gitignore sont versionnés.
-*/
-review.json
-decisions.json
-index.html
