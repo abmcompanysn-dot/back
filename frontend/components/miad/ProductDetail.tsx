@@ -469,7 +469,7 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
   // s'affiche collé en un seul bloc illisible. On convertit donc le texte
   // brut en vrais paragraphes / listes / intertitres avant de l'injecter.
   const sanitizedDescription = useMemo(() => {
-    const raw = product?.description || '';
+    let raw = product?.description || '';
     if (!raw) return '';
 
     const looksLikeHtml = /<\/?(p|div|ul|ol|li|br|h[1-6]|strong|em|table)\b/i.test(raw);
@@ -478,6 +478,18 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
     if (looksLikeHtml) {
       html = raw;
     } else {
+      // Certaines fiches ont perdu leurs retours ligne : les intitulés de
+      // section connus se retrouvent collés au milieu du texte. On isole
+      // chaque intitulé sur sa propre ligne pour qu'il redevienne un
+      // sous-titre (saut avant + saut après s'il n'est pas suivi de " : ").
+      const HEAD =
+        "(COMPOSITION|INGR[EÉ]DIENTS?|CARACT[EÉ]RISTIQUES(?: PRINCIPALES)?|MODE D['’]EMPLOI|COMMENT L['’](?:UTILISER|APPLIQUER)|UTILISATION|CONSEILS? D['’]ENTRETIEN|CE QUE [ÇC]A (?:FAIT|APPORTE)(?: POUR VOUS)?|POUR QUI|BIENFAITS|PROPRI[EÉ]T[EÉ]S|PR[EÉ]CAUTIONS|CONSERVATION|APPLICATION)";
+      raw = raw
+        // saut de paragraphe AVANT l'intitulé
+        .replace(new RegExp(`\\s+(?=${HEAD}\\b)`, 'g'), '\n\n')
+        // saut de ligne APRÈS l'intitulé s'il n'est pas immédiatement
+        // suivi de " :" (auquel cas withLead le mettra en gras "Label :")
+        .replace(new RegExp(`^(${HEAD})\\s+(?!:)`, 'gm'), '$1\n');
       const esc = (s: string) =>
         s
           .replace(/&/g, '&amp;')
