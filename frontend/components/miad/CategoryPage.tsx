@@ -30,20 +30,34 @@ const fetcher = (url: string) => {
     });
 }
 
+// Filtres pilotés par le parent (MiadMarketClient) : ils doivent survivre
+// à l'ouverture d'un produit puis au retour arrière — CategoryPage se
+// démonte à chaque fois, donc un useState local était perdu.
+export type CategoryFilters = {
+  sortBy: string
+  selectedCountries: string[]
+  priceRange: [number, number]
+  minRating: number
+}
+
 interface CategoryPageProps {
   category: WooCategory
   products: WooProduct[]
   language?: 'fr' | 'en'
+  filters: CategoryFilters
+  onFiltersChange: (next: CategoryFilters) => void
   onBack: () => void
   onProductClick: (product: WooProduct) => void
   onAddToCart: (product: WooProduct) => void
 }
 
-export function CategoryPage({ category, products: initialProducts, language = 'fr', onBack, onProductClick, onAddToCart }: CategoryPageProps) {
-  const [selectedCountries, setSelectedCountries] = useState<string[]>([])
-  const [priceRange, setPriceRange] = useState<[number, number]>([0, 1000000])
-  const [minRating, setMinRating] = useState(0)
-  const [sortBy, setSortBy] = useState<string>('newest')
+export function CategoryPage({ category, products: initialProducts, language = 'fr', filters, onFiltersChange, onBack, onProductClick, onAddToCart }: CategoryPageProps) {
+  const { sortBy, selectedCountries, priceRange, minRating } = filters
+  const patch = (p: Partial<CategoryFilters>) => onFiltersChange({ ...filters, ...p })
+  const setSortBy = (v: string) => patch({ sortBy: v })
+  const setSelectedCountries = (v: string[]) => patch({ selectedCountries: v })
+  const setPriceRange = (v: [number, number]) => patch({ priceRange: v })
+  const setMinRating = (v: number) => patch({ minRating: v })
   const [isFilterMobileOpen, setIsFilterMobileOpen] = useState(false)
 
   // Construction de la requête API

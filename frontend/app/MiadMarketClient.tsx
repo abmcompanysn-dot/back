@@ -194,7 +194,28 @@ type NavSnapshot = {
   // retour vers une recherche ré-affichait la grille mais avec le champ
   // vide, les gardes anti-skeleton le nettoyant volontairement).
   searchQuery: string
+  // Filtres de la page catégorie (tri, pays, prix, note). Comme homeTab et
+  // searchQuery, ils vivaient en useState LOCAL dans CategoryPage — perdus
+  // dès qu'on ouvrait un produit (CategoryPage se démonte), donc au retour
+  // arrière la liste revenait triée "newest" sans filtre, et la position
+  // de scroll ne retombait plus juste (liste différente). Remontés ici +
+  // capturés dans le snapshot pour un vrai retour à l'identique.
+  categoryFilters: CategoryFilterState
   scrollY: number
+}
+
+export type CategoryFilterState = {
+  sortBy: string
+  selectedCountries: string[]
+  priceRange: [number, number]
+  minRating: number
+}
+
+const DEFAULT_CATEGORY_FILTERS: CategoryFilterState = {
+  sortBy: 'newest',
+  selectedCountries: [],
+  priceRange: [0, 1000000],
+  minRating: 0,
 }
 
 type MiadMarketClientProps = {
@@ -301,6 +322,10 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   // pas confirmé/changé son pays (voir app/page.tsx pour la détection).
   const [countryWasAutoDetected] = useState(!!initialUserCountryCode);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+  // Filtres de la page catégorie, remontés ici (voir CategoryFilterState) :
+  // état partagé pour survivre à l'ouverture d'un produit et être restauré
+  // à l'identique au retour arrière (snapshot navStack).
+  const [categoryFilters, setCategoryFilters] = useState<CategoryFilterState>(DEFAULT_CATEGORY_FILTERS)
   // Onglet catégorie de l'accueil (style AliExpress) : 'explore' = accueil normal,
   // sinon slug de catégorie → bannière + grille dédiées (voir HomeCategoryTabSection).
   const [homeTab, setHomeTab] = useState<string>('explore')
@@ -710,6 +735,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       activeCountry,
       homeTab,
       searchQuery,
+      categoryFilters,
       scrollY: window.scrollY,
     })
 
@@ -739,7 +765,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     prevView.current = returnTarget
     setCurrentView(view)
     if (scrollToTop) window.scrollTo(0, 0)
-  }, [currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, router])
+  }, [currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, categoryFilters, router])
 
   // searchQuery n'est volontairement pas dans le snapshot (une recherche ne
   // définit pas d'entrée d'historique dédiée) — mais retomber sur l'accueil
@@ -763,6 +789,10 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     setSelectedCategory(snapshot.selectedCategory)
     setActiveCountry(snapshot.activeCountry)
     setHomeTab(snapshot.homeTab ?? 'explore')
+    // Restaure les filtres de la page catégorie exactement comme au départ
+    // (tri, pays, prix, note) — sinon la liste revenait "newest" sans
+    // filtre et la position de scroll ne retombait plus juste.
+    setCategoryFilters(snapshot.categoryFilters ?? DEFAULT_CATEGORY_FILTERS)
     // On ne restaure searchQuery QUE si on revient sur la vue 'search' :
     // sinon on ré-armerait `filterActive` sur l'accueil (grille filtrée au
     // lieu de homeSections) — c'est justement ce que les gardes
@@ -828,6 +858,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         activeCountry,
         homeTab,
         searchQuery,
+        categoryFilters,
         scrollY: window.scrollY,
       })
       // Note : on n'utilise jamais le vrai chemin /product/[slug] ici car c'est
@@ -841,7 +872,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       setSelectedProduct(p)
       navigateTo('product', true, p.slug ? `/?v=product&slug=${p.slug}` : undefined)
     }
-  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, router])
+  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, categoryFilters, router])
 
   const handleVendorClick = useCallback((v: WooVendor) => {
     // Meme raison que handleProductClick : pas de vrai chemin /vendor/[slug] ici
@@ -860,6 +891,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         activeCountry,
         homeTab,
         searchQuery,
+        categoryFilters,
         scrollY: window.scrollY,
       })
       router.push(vendorUrl || (window.location.pathname + window.location.search), { scroll: false })
@@ -871,7 +903,17 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       setVendorKey(k => k + 1)
       navigateTo('store', true, vendorUrl)
     }
-  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, router])
+  }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, categoryFilters, router])
+
+  // Ouvre une page catégorie DEPUIS un autre endroit (menu, bannière, "voir
+  // tout"…) : on repart de filtres vierges. Le retour arrière vers une
+  // catégorie déjà visitée passe lui par restoreFromStack, qui réinjecte
+  // les filtres du snapshot — donc on ne reset PAS ici dans ce cas.
+  const openCategory = useCallback((slug: string) => {
+    setSelectedCategory(slug)
+    setCategoryFilters(DEFAULT_CATEGORY_FILTERS)
+    navigateTo('category')
+  }, [navigateTo])
 
   // Onglets catégorie de la barre d'accueil (HomeCategoryTabs : "Explorer",
   // "Sacs", "Pagnes"…). On reste sur la vue 'home' — seul homeTab change —
@@ -892,12 +934,13 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       activeCountry,
       homeTab,
       searchQuery,
+      categoryFilters,
       scrollY: window.scrollY,
     })
     window.history.pushState({}, '', window.location.pathname + window.location.search)
     setHomeTab(slug)
     window.scrollTo(0, 0)
-  }, [homeTab, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, searchQuery])
+  }, [homeTab, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, searchQuery, categoryFilters])
 
   // Même logique que handleProductClick/handleVendorClick : navigateTo met à
   // jour currentView de façon synchrone (sans attendre le router.push), donc
@@ -1523,7 +1566,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     // le 27/08 : reproductible dès qu'une recherche précédait le clic sur
     // le logo/icône Accueil.
     onHomeClick: () => { setSelectedCategory(null); setSearchQuery(''); navigateTo('home', true, '/'); },
-    onCategoryClick: (slug: string) => { setSelectedCategory(slug); navigateTo('category'); },
+    onCategoryClick: (slug: string) => { openCategory(slug) },
     onCountryClick: undefined,
     onSearch: handleSearch,
     searchQuery,
@@ -1574,7 +1617,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
                   <CategoriesSection
                     categories={rootCategories}
                     selectedCategory={selectedCategory}
-                    onSelectCategory={(slug: string | null) => { setSelectedCategory(slug); if (slug) { navigateTo('category'); } }}
+                    onSelectCategory={(slug: string | null) => { if (slug) openCategory(slug); else setSelectedCategory(null) }}
                   />
                   {homeSections}
                   <VendorCTA onBecomeVendor={() => navigateTo('login')} t={t} />
@@ -1596,7 +1639,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
           <HomePage
             language={language} selectedCountry={selectedCountryCode} selectedCategory={selectedCategory} searchQuery={searchQuery}
             onCountryChange={(code: string) => setSelectedCountryCode(code)}
-            onCategoryChange={(slug: string | null) => { setSelectedCategory(slug); if(slug) { navigateTo('category'); } }}
+            onCategoryChange={(slug: string | null) => { if (slug) openCategory(slug); else setSelectedCategory(null) }}
             onNavigate={(v: View) => { navigateTo(v); }}
             onProductClick={(p: WooProduct) => { handleProductClick(p) }}
             onAddToCart={handleQuickAdd}
@@ -1661,6 +1704,8 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
             language={language}
             onBack={navigateBack}
             products={allProducts}
+            filters={categoryFilters}
+            onFiltersChange={setCategoryFilters}
             onProductClick={(p: WooProduct) => { handleProductClick(p) }}
             onAddToCart={handleQuickAdd}
           />
@@ -1721,7 +1766,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
             onStoreClick={(v: WooVendor) => { handleVendorClick(v) }}
             onProductClick={(p: WooProduct) => { handleProductClick(p) }}
             onAddToCart={handleQuickAdd}
-            onCategoryClick={(slug: string) => { setSelectedCategory(slug); navigateTo('category'); }}
+            onCategoryClick={(slug: string) => { openCategory(slug) }}
           />
         );
 
@@ -1755,7 +1800,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
             onBack={navigateBack}
             onProductClick={(p: WooProduct) => { handleProductClick(p) }}
             onAddToCart={handleQuickAdd}
-            onCategoryClick={(slug: string) => { setSelectedCategory(slug); navigateTo('category'); }}
+            onCategoryClick={(slug: string) => { openCategory(slug) }}
           />
         );
 
@@ -1887,7 +1932,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   };
 
   return (
-    <StreamedNavClickProvider value={{ onVendorClick: handleVendorClick, onProductClick: handleProductClick, onViewAllCountry: handleViewAllCountry, onViewAllCategory: (slug: string) => { setSelectedCategory(slug); navigateTo('category'); } }}>
+    <StreamedNavClickProvider value={{ onVendorClick: handleVendorClick, onProductClick: handleProductClick, onViewAllCountry: handleViewAllCountry, onViewAllCategory: (slug: string) => { openCategory(slug) } }}>
       <Header {...headerProps} />
 
       {countryWasAutoDetected && currentView !== 'login' && currentView !== 'checkout' && (
