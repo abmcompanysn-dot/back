@@ -36,3 +36,7 @@ services/admin-svc/webui/dist/
 .env.local
 *.env.*
 .gstack/
+
+# Enrichissement catalogue (phase 2) — données transitoires, régénérables
+scripts/catalog-enrich/*.pull.json
+scripts/catalog-enrich/*.content.json
