@@ -393,6 +393,21 @@ export async function GET(req: Request) {
         lengthCm: p.length_cm ?? undefined,
         widthCm: p.width_cm ?? undefined,
         heightCm: p.height_cm ?? undefined,
+        originCountry: p.origin_country || undefined,
+        // Sous-titre + tableau de caractéristiques (catalog-svc, ajouté le
+        // 2026-08-31) — affichés sur la fiche produit, éditables au back-office.
+        // specifications = [{k,v,source}]. On décode aussi les entités HTML
+        // sur les valeurs (même souci que name/description).
+        subtitle: decodeHtmlEntities(p.subtitle || ''),
+        specifications: Array.isArray(p.specifications)
+          ? p.specifications
+              .filter((s: any) => s && (s.k || s.key) && (s.v || s.value))
+              .map((s: any) => ({
+                k: decodeHtmlEntities(String(s.k ?? s.key ?? '')),
+                v: decodeHtmlEntities(String(s.v ?? s.value ?? '')),
+                source: s.source === 'ai' ? 'ai' : 'vendor',
+              }))
+          : [],
         rating: 0,
         salesCount: 0,
         lang: (lang || p.lang || 'fr') as 'fr' | 'en',

@@ -35,6 +35,23 @@ function mapProduct(p: any): any {
     categorySlug: p.categories?.[0]?.slug || '',
     stock: p.stock_quantity ?? 0,
     inStock: p.stock_status ? p.stock_status === 'instock' : p.status === 'active',
+    weightKg: p.weight_kg ?? undefined,
+    lengthCm: p.length_cm ?? undefined,
+    widthCm: p.width_cm ?? undefined,
+    heightCm: p.height_cm ?? undefined,
+    originCountry: p.origin_country || undefined,
+    // Sous-titre + tableau de caractéristiques (catalog-svc 2026-08-31),
+    // décodage entités HTML comme name/description. Cf. app/api/products/route.ts.
+    subtitle: decodeHtmlEntities(p.subtitle || ''),
+    specifications: Array.isArray(p.specifications)
+      ? p.specifications
+          .filter((s: any) => s && (s.k || s.key) && (s.v || s.value))
+          .map((s: any) => ({
+            k: decodeHtmlEntities(String(s.k ?? s.key ?? '')),
+            v: decodeHtmlEntities(String(s.v ?? s.value ?? '')),
+            source: s.source === 'ai' ? 'ai' : 'vendor',
+          }))
+      : [],
     rating: parseFloat(p.average_rating || '0'),
     salesCount: p.rating_count || 0,
     countryCode: getCountryCode(p.store),

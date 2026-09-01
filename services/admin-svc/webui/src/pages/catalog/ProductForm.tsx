@@ -28,25 +28,41 @@ interface VariationRow {
   image_url: string
 }
 
+// SpecRow — une ligne du tableau de caractéristiques (champ JSON
+// `specifications` du produit côté catalog-svc). `source: 'ai'` = valeur
+// pré-remplie par l'IA, à valider par le vendeur (badge « à vérifier ») ;
+// `source: 'vendor'` = validée / saisie à la main.
+interface SpecRow {
+  k: string
+  v: string
+  source: 'ai' | 'vendor'
+}
+
 // TranslatedFields — tout ce qui est traduisible côté produit (chaque
 // langue est une ligne distincte côté catalog-svc, voir products.lang).
 // Le reste du Draft (prix, stock, images, catégorie...) est partagé et
 // dupliqué automatiquement par createProduct sur les deux lignes — pas
 // besoin de le traduire, une seule copie suffit dans le formulaire.
+// subtitle/specifications sont traduisibles (affichés sur la fiche, texte
+// visible client) — une valeur par langue.
 interface TranslatedFields {
   name: string
+  subtitle: string
   description: string
   short_description: string
   meta_title: string
   meta_description: string
+  specifications: SpecRow[]
 }
 
 const EMPTY_TRANSLATION: TranslatedFields = {
   name: '',
+  subtitle: '',
   description: '',
   short_description: '',
   meta_title: '',
   meta_description: '',
+  specifications: [],
 }
 
 interface Draft {
@@ -101,6 +117,14 @@ function stripAccentsLower(s: string) {
   return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 }
 
+// cleanSpecs — retire les lignes vides (clé OU valeur manquante) et coupe
+// les espaces avant l'envoi à catalog-svc (champ JSON `specifications`).
+function cleanSpecs(rows: SpecRow[]) {
+  return rows
+    .map((s) => ({ k: s.k.trim(), v: s.v.trim(), source: s.source }))
+    .filter((s) => s.k && s.v)
+}
+
 // --- Grilles de tailles (alignées sur catalog-svc). Deux familles :
 //   - chaussures  → attribut "Pointure", grille EU 36→46
 //   - vêtements   → attribut "Taille",   grille S→XXXL (homme + femme, hors
@@ -147,12 +171,22 @@ function variationHasSizeAttr(v: VariationRow) {
 
 const TABS = [
   { key: 'general', label: 'Informations générales' },
+  { key: 'specs', label: 'Caractéristiques' },
   { key: 'category', label: 'Catégorisation' },
   { key: 'pricing', label: 'Prix & Inventaire' },
   { key: 'variations', label: 'Variations' },
   { key: 'media', label: 'Médias' },
   { key: 'shipping', label: 'Livraison' },
   { key: 'seo', label: 'SEO' },
+]
+
+// Suggestions de clés de caractéristiques selon la famille de catégorie —
+// juste des raccourcis de saisie pour le back-office (l'IA les pré-remplit
+// aussi, cf. champ `source`). Rien n'est imposé, le vendeur reste libre.
+const SPEC_KEY_SUGGESTIONS = [
+  'Matière', 'Composition', 'Couleur', 'Dimensions', 'Poids',
+  'Contenance', 'Entretien', 'Origine', 'Finition', 'Fait main',
+  'Convient pour', 'Garantie',
 ]
 
 export function ProductForm() {
@@ -194,10 +228,20 @@ export function ProductForm() {
       ...t,
       [lang]: {
         name: p.name ?? '',
+        subtitle: p.subtitle ?? '',
         description: p.description ?? '',
         short_description: p.short_description ?? '',
         meta_title: p.meta_title ?? '',
         meta_description: p.meta_description ?? '',
+        specifications: Array.isArray(p.specifications)
+          ? p.specifications
+              .filter((s: any) => s && (s.k || s.key))
+              .map((s: any) => ({
+                k: String(s.k ?? s.key ?? ''),
+                v: String(s.v ?? s.value ?? ''),
+                source: s.source === 'ai' ? 'ai' : 'vendor',
+              }))
+          : [],
       },
     }))
     setProductIDs((ids) => ({ ...ids, [lang]: String(p.id) }))
@@ -259,6 +303,47 @@ export function ProductForm() {
 
   function setTranslated<K extends keyof TranslatedFields>(key: K, value: TranslatedFields[K]) {
     setTranslations((t) => ({ ...t, [editLang]: { ...t[editLang], [key]: value } }))
+  }
+
+  // --- Édition du tableau de caractéristiques (langue courante editLang) ---
+  const specs = translations[editLang].specifications
+  function setSpecs(next: SpecRow[]) {
+    setTranslated('specifications', next)
+  }
+  function addSpecRow() {
+    // Ajoutée à la main => source 'vendor' (pas de badge « à vérifier »).
+    setSpecs([...specs, { k: '', v: '', source: 'vendor' }])
+  }
+  function updateSpecRow(idx: number, patch: Partial<SpecRow>) {
+    setSpecs(
+      specs.map((s, i) =>
+        i === idx
+          ? {
+              ...s,
+              ...patch,
+              // Toute modification manuelle d'une ligne IA la fait passer
+              // en « validée » (le vendeur en prend la responsabilité).
+              source: patch.source ?? 'vendor',
+            }
+          : s
+      )
+    )
+  }
+  function removeSpecRow(idx: number) {
+    setSpecs(specs.filter((_, i) => i !== idx))
+  }
+  function moveSpecRow(idx: number, dir: -1 | 1) {
+    const j = idx + dir
+    if (j < 0 || j >= specs.length) return
+    const next = [...specs]
+    ;[next[idx], next[j]] = [next[j], next[idx]]
+    setSpecs(next)
+  }
+  // Recopie les caractéristiques de l'autre langue (dépannage rapide quand
+  // une seule langue a été renseignée — les valeurs restent à traduire).
+  function copySpecsFromOtherLang() {
+    const other = editLang === 'fr' ? 'en' : 'fr'
+    setSpecs(translations[other].specifications.map((s) => ({ ...s })))
   }
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -429,19 +514,23 @@ export function ProductForm() {
         await api.patch(`/admin/api/products/${productIDs.fr}`, {
           ...shared,
           name: translations.fr.name,
+          subtitle: translations.fr.subtitle,
           description: translations.fr.description,
           short_description: translations.fr.short_description,
           meta_title: translations.fr.meta_title,
           meta_description: translations.fr.meta_description,
+          specifications: cleanSpecs(translations.fr.specifications),
         })
         if (productIDs.en) {
           await api.patch(`/admin/api/products/${productIDs.en}`, {
             ...shared,
             name: translations.en.name || translations.fr.name,
+            subtitle: translations.en.subtitle,
             description: translations.en.description,
             short_description: translations.en.short_description,
             meta_title: translations.en.meta_title,
             meta_description: translations.en.meta_description,
+            specifications: cleanSpecs(translations.en.specifications),
           })
         }
         if (draft.product_type === 'variable') {
@@ -454,6 +543,9 @@ export function ProductForm() {
           brand_id: draft.brand_id ? Number(draft.brand_id) : 0,
           name_fr: translations.fr.name,
           name_en: translations.en.name,
+          subtitle_fr: translations.fr.subtitle,
+          subtitle_en: translations.en.subtitle,
+          specifications: cleanSpecs(translations.fr.specifications),
           price_usd: Number(draft.price_usd || 0),
           sku: draft.sku,
           barcode: draft.barcode,
@@ -516,6 +608,15 @@ export function ProductForm() {
               />
             </div>
             <div className="form-field full">
+              <label>Sous-titre (FR)</label>
+              <input
+                value={translations.fr.subtitle}
+                onChange={(e) => setTranslations((t) => ({ ...t, fr: { ...t.fr, subtitle: e.target.value } }))}
+                placeholder="une ligne accrocheuse affichée sous le nom sur la fiche produit"
+                maxLength={140}
+              />
+            </div>
+            <div className="form-field full">
               <label>Description courte</label>
               <textarea
                 rows={2}
@@ -531,6 +632,10 @@ export function ProductForm() {
                 onChange={(e) => setTranslations((t) => ({ ...t, fr: { ...t.fr, description: e.target.value } }))}
               />
             </div>
+            <p className="hint form-field full">
+              Les caractéristiques (matière, dimensions, entretien…) se saisissent dans l'onglet
+              <strong> Caractéristiques</strong>.
+            </p>
           </div>
         )}
 
@@ -560,6 +665,15 @@ export function ProductForm() {
                 <input value={translations[editLang].name} onChange={(e) => setTranslated('name', e.target.value)} />
               </div>
               <div className="form-field full">
+                <label>Sous-titre ({editLang.toUpperCase()})</label>
+                <input
+                  value={translations[editLang].subtitle}
+                  onChange={(e) => setTranslated('subtitle', e.target.value)}
+                  placeholder="une ligne affichée sous le nom sur la fiche produit"
+                  maxLength={140}
+                />
+              </div>
+              <div className="form-field full">
                 <label>Description courte ({editLang.toUpperCase()})</label>
                 <textarea rows={2} value={translations[editLang].short_description} onChange={(e) => setTranslated('short_description', e.target.value)} />
               </div>
@@ -574,6 +688,140 @@ export function ProductForm() {
                 </p>
               )}
             </div>
+          </div>
+        )}
+
+        {tab === 'specs' && (
+          <div>
+            {/* Le tableau de caractéristiques est traduisible : une valeur
+                par langue. En édition, l'onglet suit la langue choisie dans
+                « Informations générales ». En création, seule la version FR
+                est saisie (dupliquée sur l'EN, à traduire ensuite). */}
+            {isEdit && (
+              <div className="form-tabs" style={{ marginBottom: 16 }}>
+                <button type="button" className={editLang === 'fr' ? 'active' : ''} onClick={() => setEditLang('fr')}>
+                  🇫🇷 Français
+                </button>
+                <button
+                  type="button"
+                  className={editLang === 'en' ? 'active' : ''}
+                  onClick={() => setEditLang('en')}
+                  disabled={!productIDs.en}
+                  title={productIDs.en ? undefined : 'Aucune traduction anglaise liée à ce produit'}
+                >
+                  🇬🇧 English {!productIDs.en && '(absente)'}
+                </button>
+              </div>
+            )}
+
+            <p className="hint" style={{ marginBottom: 12 }}>
+              Ce tableau s'affiche dans la section <strong>Caractéristiques</strong> de la fiche produit
+              (matière, dimensions, contenance, entretien, origine…). L'ordre des lignes ci-dessous est
+              l'ordre d'affichage. Une valeur marquée <span style={{
+                background: '#fff3cd', border: '1px solid #ffe69c', borderRadius: 4, padding: '1px 6px', fontWeight: 600,
+              }}>à vérifier</span> a été pré-remplie automatiquement : relisez-la puis corrigez-la si besoin
+              (toute modification la valide).
+            </p>
+
+            {specs.length > 0 && (
+              <div className="table-card">
+                <table style={{ width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 48 }}>Ordre</th>
+                      <th style={{ width: '32%' }}>Caractéristique</th>
+                      <th>Valeur</th>
+                      <th style={{ width: 90 }}>État</th>
+                      <th style={{ width: 80 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {specs.map((s, idx) => (
+                      <tr key={idx}>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn-ghost" type="button" style={{ padding: '2px 6px' }} disabled={idx === 0} onClick={() => moveSpecRow(idx, -1)} title="Monter">
+                            ↑
+                          </button>
+                          <button className="btn-ghost" type="button" style={{ padding: '2px 6px' }} disabled={idx === specs.length - 1} onClick={() => moveSpecRow(idx, 1)} title="Descendre">
+                            ↓
+                          </button>
+                        </td>
+                        <td>
+                          <input
+                            list="spec-key-suggestions"
+                            value={s.k}
+                            placeholder="ex. Matière"
+                            onChange={(e) => updateSpecRow(idx, { k: e.target.value })}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={s.v}
+                            placeholder="ex. Coton wax 100 %"
+                            onChange={(e) => updateSpecRow(idx, { v: e.target.value })}
+                          />
+                        </td>
+                        <td>
+                          {s.source === 'ai' ? (
+                            <span style={{
+                              background: '#fff3cd', border: '1px solid #ffe69c', borderRadius: 4,
+                              padding: '2px 6px', fontSize: 11, fontWeight: 600, color: '#8a6d1d',
+                            }}>
+                              à vérifier
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 11, color: '#3c8f4e', fontWeight: 600 }}>validée</span>
+                          )}
+                        </td>
+                        <td>
+                          <button className="btn-ghost" type="button" onClick={() => removeSpecRow(idx)}>
+                            Supprimer
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <datalist id="spec-key-suggestions">
+              {SPEC_KEY_SUGGESTIONS.map((k) => (
+                <option key={k} value={k} />
+              ))}
+            </datalist>
+
+            <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn-ghost" type="button" onClick={addSpecRow}>
+                + Ajouter une caractéristique
+              </button>
+              {isEdit && editLang === 'en' && productIDs.en && translations.fr.specifications.length > 0 && (
+                <button className="btn-ghost" type="button" onClick={copySpecsFromOtherLang}>
+                  Recopier depuis le français
+                </button>
+              )}
+              {isEdit && editLang === 'fr' && translations.en.specifications.length > 0 && (
+                <button className="btn-ghost" type="button" onClick={copySpecsFromOtherLang}>
+                  Recopier depuis l'anglais
+                </button>
+              )}
+              {specs.some((s) => s.source === 'ai') && (
+                <button
+                  className="btn-ghost"
+                  type="button"
+                  onClick={() => setSpecs(specs.map((s) => ({ ...s, source: 'vendor' as const })))}
+                  title="Marque toutes les lignes pré-remplies comme validées, sans les modifier"
+                >
+                  Tout marquer comme vérifié
+                </button>
+              )}
+            </div>
+
+            {specs.length === 0 && (
+              <p className="hint" style={{ marginTop: 12 }}>
+                Aucune caractéristique pour l'instant. Cliquez sur « Ajouter une caractéristique »
+                {isEdit ? '' : ' (ou laissez vide et complétez après création)'}.
+              </p>
+            )}
           </div>
         )}
 

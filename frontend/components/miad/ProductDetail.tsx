@@ -673,6 +673,9 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <h1 className="text-2xl lg:text-3xl font-bold leading-tight">{product?.name || 'Produit sans nom'}</h1>
+                {product.subtitle && (
+                  <p className="text-sm text-foreground/80 mt-2 leading-snug">{product.subtitle}</p>
+                )}
                 {(product.vendor?.name || product.country) && (
                   <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
                     {product.vendor?.name && (
@@ -980,11 +983,22 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
                       vide même si Origine/Boutique/Poids/Dimensions avaient
                       quelque chose à montrer juste en dessous (incohérent). */}
                   {!(product.attributes && product.attributes.length > 0) &&
-                    !product.country && !product.vendor?.name &&
+                    !(product.specifications && product.specifications.length > 0) &&
+                    !product.country && !product.originCountry && !product.vendor?.name &&
                     product.weightKg == null && product.lengthCm == null &&
                     product.widthCm == null && product.heightCm == null && !product.sku && (
                       <p className="text-muted-foreground col-span-full">Aucune spécification technique disponible.</p>
                     )}
+                  {/* Caractéristiques structurées (matière, contenance, entretien…) —
+                      pré-remplies par l'IA puis validées par le vendeur (champ
+                      JSON `specifications` du produit, back-office admin). */}
+                  {product.specifications && product.specifications.length > 0 &&
+                    product.specifications.map((spec, i) => (
+                      <div key={`${spec.k}-${i}`} className="flex justify-between py-3 border-b">
+                        <span className="text-muted-foreground">{spec.k}</span>
+                        <span className="font-medium text-right">{spec.v}</span>
+                      </div>
+                    ))}
                   {product.attributes && product.attributes.length > 0 &&
                     product.attributes.map((attr) => (
                       <div key={attr.name} className="flex justify-between py-3 border-b">
@@ -992,8 +1006,8 @@ export function ProductDetail({ product, onBack, onProductClick, allProducts, on
                         <span className="font-medium">{attr.options.join(', ')}</span>
                       </div>
                     ))}
-                  {product.country && (
-                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Origine</span><span className="font-medium">{product.country}</span></div>
+                  {(product.originCountry || product.country) && (
+                    <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">Origine</span><span className="font-medium">{product.originCountry || product.country}</span></div>
                   )}
                   {product.vendor?.name && (
                     <div className="flex justify-between py-3 border-b"><span className="text-muted-foreground">{t.soldBy || 'Boutique'}</span><span className="font-medium">{product.vendor.name}</span></div>

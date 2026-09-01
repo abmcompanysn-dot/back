@@ -302,6 +302,12 @@ export interface WooProduct {
   lengthCm?: number
   widthCm?: number
   heightCm?: number
+  // specifications/subtitle — table de caractéristiques structurée + sous-titre
+  // vendeur, relayés par /api/products depuis catalog-svc (2026-08-31).
+  // source: 'ai' = pré-rempli par IA, à valider par le vendeur ; 'vendor' = validé.
+  specifications?: { k: string; v: string; source?: 'ai' | 'vendor' }[]
+  subtitle?: string
+  originCountry?: string
   salesCount?: number
   rating?: number
   reviewsCount?: number

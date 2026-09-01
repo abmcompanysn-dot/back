@@ -79,6 +79,15 @@ CREATE INDEX IF NOT EXISTS idx_products_brand ON products (brand_id);
 -- le filtre ?tags=x,y et la recherche ?q= restent rapides sur 1700+ produits.
 ALTER TABLE products ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_products_tags ON products USING GIN (tags);
+-- Tableau de caracteristiques affiche sur la fiche produit (matiere,
+-- entretien, contenu, dimensions redigees, garantie...). Format : tableau
+-- ordonne d'objets {"k": "Matiere", "v": "Coton wax", "source": "ai" ou "vendor"}
+-- ; l'ordre du tableau = l'ordre d'affichage. Le champ source sert au
+-- back-office a distinguer une valeur pre-remplie par l'IA (badge a verifier)
+-- d'une valeur validee/saisie par le vendeur. Ajoute le 2026-08-31.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS specifications JSONB NOT NULL DEFAULT '[]';
+-- Sous-titre court (une ligne) affiché sous le nom du produit sur la fiche.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS subtitle TEXT DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS brands (
   id          BIGSERIAL PRIMARY KEY,
@@ -511,7 +520,8 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 		       p.description, p.short_description, p.price_usd, p.sale_price_usd, p.status, p.images, p.is_variable,
 		       p.sku, p.barcode, p.stock, p.low_stock_threshold, p.backorders_allowed,
 		       p.weight_kg, p.length_cm, p.width_cm, p.height_cm, p.shipping_class,
-		       p.meta_title, p.meta_description, p.hs_code, p.origin_country, p.tags
+		       p.meta_title, p.meta_description, p.hs_code, p.origin_country, p.tags,
+		       p.specifications, p.subtitle
 		FROM products p WHERE p.id = $1 AND p.lang = $2`, id, lang)
 
 	var pID int64
@@ -520,15 +530,16 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	var vendorIDPtr, catIDPtr, brandID *int64
 	var price float64
 	var salePrice, weightKg, lengthCm, widthCm, heightCm *float64
-	var trid, l, name, slug, desc, shortDesc, status, sku, barcode, shippingClass, metaTitle, metaDesc, hsCode, originCountry string
+	var trid, l, name, slug, desc, shortDesc, status, sku, barcode, shippingClass, metaTitle, metaDesc, hsCode, originCountry, subtitle string
 	var stock, lowStockThreshold int
 	var backordersAllowed bool
-	var images, tagsJSON []byte
+	var images, tagsJSON, specsJSON []byte
 	var isVar bool
 	if err := row.Scan(&pID, &trid, &l, &vendorIDPtr, &catIDPtr, &brandID, &name, &slug, &desc, &shortDesc, &price, &salePrice, &status, &images, &isVar,
 		&sku, &barcode, &stock, &lowStockThreshold, &backordersAllowed,
 		&weightKg, &lengthCm, &widthCm, &heightCm, &shippingClass,
-		&metaTitle, &metaDesc, &hsCode, &originCountry, &tagsJSON); err != nil {
+		&metaTitle, &metaDesc, &hsCode, &originCountry, &tagsJSON,
+		&specsJSON, &subtitle); err != nil {
 		if err == pgx.ErrNoRows {
 			kit.Fail(w, 404, "product_not_found", fmt.Sprintf("produit %d introuvable en lang=%s — erreur explicite, pas de page vide silencieuse", id, lang))
 			return
@@ -644,6 +655,15 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	var tags []string
 	_ = json.Unmarshal(tagsJSON, &tags)
 	out["tags"] = tags
+	// Caractéristiques (tableau ordonné {k,v,source}) + sous-titre — affichés
+	// sur la fiche produit, éditables au back-office. Ajouté le 2026-08-31.
+	var specs []map[string]any
+	_ = json.Unmarshal(specsJSON, &specs)
+	if specs == nil {
+		specs = []map[string]any{}
+	}
+	out["specifications"] = specs
+	out["subtitle"] = subtitle
 	if catID != 0 {
 		var catName, catSlug string
 		if s.db.QueryRow(r.Context(), "SELECT name, slug FROM categories WHERE id = $1", catID).Scan(&catName, &catSlug) == nil {
@@ -1553,6 +1573,12 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 		Tags       []string         `json:"tags"`
 		IsVariable bool             `json:"is_variable"`
 		Variations []map[string]any `json:"variations"`
+		// Caractéristiques + sous-titre — mêmes pour les deux langues à la
+		// création (traduisibles ensuite via PATCH par langue). Optionnels :
+		// le flux normal est création simple puis édition. Ajouté 2026-08-31.
+		SubtitleFR     string           `json:"subtitle_fr"`
+		SubtitleEN     string           `json:"subtitle_en"`
+		Specifications []map[string]any `json:"specifications"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
@@ -1566,6 +1592,10 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	trid := fmt.Sprintf("tr-%d", time.Now().UnixNano())
 	imagesJSON, _ := json.Marshal(body.Images)
 	tagsJSON, _ := json.Marshal(body.Tags)
+	if body.Specifications == nil {
+		body.Specifications = []map[string]any{}
+	}
+	specsJSON, _ := json.Marshal(body.Specifications)
 	ctx := r.Context()
 
 	// Modération : un produit créé par un vendeur avec require_moderation=true
@@ -1587,17 +1617,17 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	insertLang := func(lang, name string) (int64, error) {
+	insertLang := func(lang, name, subtitle string) (int64, error) {
 		var id int64
 		err := tx.QueryRow(ctx, `
-			INSERT INTO products (trid, lang, vendor_id, category_id, brand_id, name, slug, price_usd, images, tags, is_variable, sku, barcode, stock, status)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+			INSERT INTO products (trid, lang, vendor_id, category_id, brand_id, name, slug, price_usd, images, tags, is_variable, sku, barcode, stock, status, specifications, subtitle)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
 			trid, lang, body.VendorID, body.CategoryID, nullIfZero(body.BrandID), name, slugify(name), body.PriceUSD, imagesJSON, tagsJSON, body.IsVariable,
-			body.SKU, body.Barcode, body.Stock, initialStatus,
+			body.SKU, body.Barcode, body.Stock, initialStatus, specsJSON, subtitle,
 		).Scan(&id)
 		return id, err
 	}
-	idFR, err := insertLang("fr", body.NameFR)
+	idFR, err := insertLang("fr", body.NameFR, body.SubtitleFR)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -1606,7 +1636,11 @@ func (s *server) createProduct(w http.ResponseWriter, r *http.Request) {
 	if nameEN == "" {
 		nameEN = body.NameFR // fallback explicite : EN = FR tant que non traduit
 	}
-	idEN, err := insertLang("en", nameEN)
+	subtitleEN := body.SubtitleEN
+	if subtitleEN == "" {
+		subtitleEN = body.SubtitleFR
+	}
+	idEN, err := insertLang("en", nameEN, subtitleEN)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -1792,6 +1826,10 @@ func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
 		Status            *string   `json:"status"`
 		HSCode            *string   `json:"hs_code"`
 		OriginCountry     *string   `json:"origin_country"`
+		// Caractéristiques : tableau ordonné [{k,v,source}]. Sous-titre :
+		// une ligne sous le nom. Édités au back-office (2026-08-31).
+		Specifications *[]map[string]any `json:"specifications"`
+		Subtitle       *string           `json:"subtitle"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", "JSON attendu : "+err.Error())
@@ -1874,6 +1912,13 @@ func (s *server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	if body.Tags != nil {
 		tagsJSON, _ := json.Marshal(*body.Tags)
 		add("tags", tagsJSON)
+	}
+	if body.Specifications != nil {
+		specsJSON, _ := json.Marshal(*body.Specifications)
+		add("specifications", specsJSON)
+	}
+	if body.Subtitle != nil {
+		add("subtitle", *body.Subtitle)
 	}
 	if body.Status != nil {
 		add("status", *body.Status)
