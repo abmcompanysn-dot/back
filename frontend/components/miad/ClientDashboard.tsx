@@ -11,10 +11,11 @@ import {
   Package, Heart, MessageCircle, Tag, MapPin, User,
   ArrowLeft, ChevronRight, Clock, Truck, CheckCircle,
   Shield, LogOut, ShoppingBag, Settings, Bell, Zap, Languages,
-  QrCode, Share2, Send, ImagePlus, Smile, CreditCard
+  QrCode, Share2, Send, ImagePlus, Smile, CreditCard, Wallet
 } from 'lucide-react'
 import { QRCodeImage } from './QRCodeImage'
 import { PaymentMethodsSection } from './PaymentMethodsSection'
+import { ClientOrderDetail } from './ClientOrderDetail'
 import { Button } from '@/components/ui/button'
 import { ProductCard } from './ProductCard'
 import { type WooProduct } from '@/lib/woocommerce'
@@ -360,6 +361,13 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
       isSavingAddressRef.current = false;
     }
   };
+  // Détail d'une commande (produits par boutique, images, + reprise du
+  // paiement Mobile Money si celui-ci n'a jamais abouti). Même modale que
+  // "Mon Historique" — ClientOrderDetail gère toute la logique.
+  const [detailOrderId, setDetailOrderId] = useState<number | null>(null)
+  // Statuts pour lesquels un paiement Mobile Money peut être relancé.
+  const RESUMABLE_PAYMENT_STATUSES = ['pending_payment', 'payment_expired', 'pending']
+
   // ── Modification de l'adresse de livraison d'une commande déjà passée ──────
   const SHIPPING_EDITABLE_STATUSES = ['pending', 'processing', 'on-hold', 'miad-rep-charge']
   const [editingOrderShipping, setEditingOrderShipping] = useState<number | null>(null)
@@ -456,6 +464,11 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
 
   return (
     <div className="min-h-screen bg-muted/30">
+      {/* Détail d'une commande + reprise de paiement Mobile Money */}
+      {detailOrderId != null && (
+        <ClientOrderDetail orderId={detailOrderId} onClose={() => setDetailOrderId(null)} />
+      )}
+
       {/* Header */}
       <header className="bg-primary text-primary-foreground sticky top-0 z-40 shadow-md">
         <div className="container mx-auto px-4">
@@ -778,9 +791,19 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                       if (!order || (ordersFilter !== 'all' && order.status !== ordersFilter)) return acc
                       const repInfo = getRepInfo(order)
                       const canEditShipping = SHIPPING_EDITABLE_STATUSES.includes(order.status)
+                      // Reprise de paiement : commande dont le paiement n'a
+                      // jamais abouti. detailOrderId ouvre ClientOrderDetail
+                      // qui affiche le bouton "Reprendre le paiement Mobile
+                      // Money" (il revérifie payment_method côté détail).
+                      const canResumePayment = RESUMABLE_PAYMENT_STATUSES.includes(order.status)
+                      const parentId = order.parent_order_id || order.id
                       acc.push(
                         <div key={order.id} className="p-6 hover:bg-muted/10 transition-colors">
-                          <div className="flex items-center justify-between">
+                          <button
+                            type="button"
+                            onClick={() => setDetailOrderId(parentId)}
+                            className="w-full text-left flex items-center justify-between"
+                          >
                             <div className="flex items-center gap-4">
                               <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center shrink-0 overflow-hidden">
                                 {order.line_items?.[0]?.image?.src
@@ -806,7 +829,18 @@ export function ClientDashboard({ onBack, onLogout, onSessionExpired, language, 
                                 {getStatusLabel(order.status).text}
                               </span>
                             </div>
-                          </div>
+                          </button>
+
+                          {canResumePayment && (
+                            <button
+                              type="button"
+                              onClick={() => setDetailOrderId(parentId)}
+                              className="mt-3 w-full flex items-center justify-center gap-2 h-11 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent/90 transition-all"
+                            >
+                              <Wallet size={15} /> Reprendre le paiement
+                            </button>
+                          )}
+
                           <OrderDeliveryProgress order={order} />
 
                           {repInfo && (
