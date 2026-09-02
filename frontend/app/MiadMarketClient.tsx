@@ -424,6 +424,18 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     }
   }, [forcedView])
 
+  // Ouverture directe d'une section du tableau de bord via l'URL
+  // (?v=clientDashboard&section=orders) — utilisé par l'en-tête des pages
+  // autonomes (fiche produit) dont le menu "Compte" reproduit celui de
+  // l'accueil, et par les liens d'e-mails. Sans ça le dashboard s'ouvrait
+  // toujours sur "Aperçu".
+  useEffect(() => {
+    const section = searchParams.get('section')
+    if (forcedView === 'clientDashboard' && section) {
+      setPendingDashboardSection(section)
+    }
+  }, [forcedView, searchParams])
+
   // Chargement direct d'une fiche produit (lien partagé, favori, actualisation
   // de page) : le produit n'est pas forcément dans les 100 premiers initialProducts,
   // donc on va le chercher par slug si l'initialisation synchrone ne l'a pas trouvé.

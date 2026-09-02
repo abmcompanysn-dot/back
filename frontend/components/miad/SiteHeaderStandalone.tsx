@@ -4,8 +4,25 @@ import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
-import { Search, ShoppingCart, User, ArrowLeft } from 'lucide-react'
+import {
+  Search, ShoppingCart, User, ArrowLeft, LayoutDashboard, Package, Heart,
+  MessageCircle, MapPin, Tag, Settings, QrCode,
+} from 'lucide-react'
 import { CurrencySelector } from '@/components/miad/CurrencySelector'
+
+// Mêmes entrées que le menu "Compte" de la page d'accueil
+// (components/miad/Header.tsx CLIENT_SECTIONS). `section` alimente
+// ?v=clientDashboard&section=… lu par MiadMarketClient.
+const CLIENT_SECTIONS = [
+  { id: 'overview', label: 'Aperçu', icon: LayoutDashboard },
+  { id: 'orders', label: 'Mes commandes', icon: Package },
+  { id: 'wishlist', label: 'Liste de souhaits', icon: Heart },
+  { id: 'messages', label: 'Messages', icon: MessageCircle },
+  { id: 'addresses', label: 'Mes adresses', icon: MapPin },
+  { id: 'coupons', label: 'Coupons & Points', icon: Tag },
+  { id: 'settings', label: 'Paramètres', icon: Settings },
+  { id: 'qrcode', label: 'Mon QR Code', icon: QrCode },
+] as const
 
 /**
  * En-tête du site pour les pages autonomes rendues côté serveur (fiche
@@ -53,15 +70,44 @@ export function SiteHeaderStandalone() {
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [suggestLoading, setSuggestLoading] = useState(false)
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
 
   const searchDesktopRef = useRef<HTMLDivElement>(null)
   const searchMobileRef = useRef<HTMLDivElement>(null)
+  const accountRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     try {
       const p = new URLSearchParams(window.location.search)
       if (p.get('lang') === 'en') setLang('en')
     } catch { /* ignore */ }
+  }, [])
+
+  // État de connexion : même source que le SPA (localStorage 'miad_token').
+  useEffect(() => {
+    const read = () => {
+      try {
+        setIsLoggedIn(
+          Boolean(localStorage.getItem('miad_token') || sessionStorage.getItem('miad_token')),
+        )
+      } catch {
+        setIsLoggedIn(false)
+      }
+    }
+    read()
+    window.addEventListener('storage', read)
+    return () => window.removeEventListener('storage', read)
+  }, [])
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (accountRef.current && !accountRef.current.contains(e.target as Node)) {
+        setAccountMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
   }, [])
 
   useEffect(() => {
@@ -121,9 +167,16 @@ export function SiteHeaderStandalone() {
     search: lang === 'fr' ? 'Rechercher sur MIAD Market...' : 'Search on MIAD Market...',
     all: lang === 'fr' ? 'TOUT' : 'ALL',
     cart: lang === 'fr' ? 'PANIER' : 'CART',
-    account: lang === 'fr' ? 'COMPTE' : 'ACCOUNT',
+    account: isLoggedIn ? (lang === 'fr' ? 'COMPTE' : 'ACCOUNT') : (lang === 'fr' ? 'CONNEXION' : 'SIGN IN'),
+    space: lang === 'fr' ? 'Mon espace' : 'My account',
+    dashboard: lang === 'fr' ? 'Tableau de bord' : 'Dashboard',
     searching: lang === 'fr' ? 'Recherche…' : 'Searching…',
     back: lang === 'fr' ? 'Retour' : 'Back',
+  }
+
+  const goToSection = (id: string) => {
+    setAccountMenuOpen(false)
+    router.push(`/?v=clientDashboard&section=${id}`)
   }
 
   const runSearch = (e?: React.FormEvent) => {
@@ -259,15 +312,55 @@ export function SiteHeaderStandalone() {
 
               <CurrencySelector />
 
-              <button
-                type="button"
-                onClick={() => router.push('/?v=clientDashboard')}
-                className="flex flex-col items-center gap-0.5 p-1 hover:text-accent transition-colors text-foreground/70"
-                title={t.account}
+              {/* Compte — menu déroulant identique à la page d'accueil */}
+              <div
+                ref={accountRef}
+                className="relative"
+                onMouseEnter={() => isLoggedIn && setAccountMenuOpen(true)}
+                onMouseLeave={() => setAccountMenuOpen(false)}
               >
-                <User size={22} />
-                <span className="text-[10px] font-black uppercase hidden sm:block">{t.account}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isLoggedIn) setAccountMenuOpen((o) => !o)
+                    else router.push('/?v=login')
+                  }}
+                  className="flex flex-col items-center gap-0.5 p-1 hover:text-accent transition-colors text-foreground/70"
+                  title={t.account}
+                >
+                  <User size={22} />
+                  <span className="text-[10px] font-black uppercase hidden sm:block">{t.account}</span>
+                </button>
+
+                {isLoggedIn && accountMenuOpen && (
+                  <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-2xl shadow-2xl border border-border overflow-hidden z-[70] animate-in fade-in slide-in-from-top-2 duration-150">
+                    <div className="px-4 py-2.5 bg-slate-50 border-b border-border">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t.space}</p>
+                    </div>
+                    {CLIENT_SECTIONS.map((section) => (
+                      <button
+                        type="button"
+                        key={section.id}
+                        onClick={() => goToSection(section.id)}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-accent/10 hover:text-accent transition-colors text-left text-sm text-foreground"
+                      >
+                        <section.icon size={14} className="shrink-0 text-muted-foreground" />
+                        <span className="font-medium">{section.label}</span>
+                      </button>
+                    ))}
+                    <div className="border-t border-border">
+                      <button
+                        type="button"
+                        onClick={() => goToSection('overview')}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-accent/10 hover:text-accent transition-colors text-left text-sm text-foreground font-bold"
+                      >
+                        <LayoutDashboard size={14} className="shrink-0 text-accent" />
+                        <span>{t.dashboard}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <button
                 type="button"
