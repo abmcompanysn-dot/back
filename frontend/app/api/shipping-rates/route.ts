@@ -1,46 +1,54 @@
 import { NextResponse } from 'next/server'
+import { SHIPPING_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
+export const revalidate = 300 // ISR 5 min
 
-// GAP CONNU (2026-08-25) : appelle encore l'ancien WordPress mort
-// (NEXT_PUBLIC_WC_URL n'a jamais été positionné sur Cloudflare Pages) —
-// retombe donc TOUJOURS sur le fallback codé en dur ci-dessous, jamais sur
-// une vraie donnée. shipping-svc (Go) expose bien GET /shipping-rates,
-// mais avec un schéma différent (zones par pays, base_rate_usd/
-// per_item_usd) qui ne correspond pas à ce que ce fichier et useShippingRates.ts
-// attendent (local/zone_africa/zones{AF,EU,...}:{standard,express}) —
-// décision explicite du fondateur (2026-08-25) : laisser tel quel pour
-// l'instant, migration prévue plus tard. Ne pas migrer silencieusement
-// avec un mapping deviné entre-temps.
-const WC_BASE = process.env.NEXT_PUBLIC_WC_URL || 'https://api.miadmarket.com'
+// Tarifs de livraison — source UNIQUE : shipping-svc GET /shipping/config
+// (fin du calcul en dur : useShippingRates.ts, app/page.tsx et
+// CheckoutPage lisaient auparavant des constantes figées, et cette route
+// interrogeait l'ancien WordPress mort — gap documenté le 2026-08-25,
+// résolu le 2026-09-02 avec l'endpoint /shipping/config unifié).
+//
+// Format renvoyé (calé sur ShippingRatesConfig du hook) :
+//   { local, zone_africa, free_threshold, domestic_fallback_usd,
+//     zones: { AF: {standard,express}, EU: {...}, ... } }
 
-export const revalidate = 300 // revalide toutes les 5 min (ISR)
+const FALLBACK = {
+  local: 3,
+  zone_africa: 6,
+  free_threshold: 150,
+  domestic_fallback_usd: 8.33,
+  zones: {
+    AF: { standard: 12, express: 30 },
+    EU: { standard: 25, express: 45 },
+    NA: { standard: 25, express: 50 },
+    SA: { standard: 25, express: 55 },
+    AS: { standard: 25, express: 55 },
+    OC: { standard: 30, express: 60 },
+  },
+}
 
 export async function GET() {
   try {
-    const res = await fetch(`${WC_BASE}/wp-json/miad/v1/shipping-rates`, {
-      next: { revalidate: 300 },
+    const res = await fetch(`${SHIPPING_SVC_URL}/shipping/config`, {
+      next: { revalidate: 300, tags: ['shipping-config'] },
     })
-
-    if (!res.ok) throw new Error(`WordPress returned ${res.status}`)
+    if (!res.ok) throw new Error(`shipping-svc returned ${res.status}`)
     const data = await res.json()
-
-    return NextResponse.json(data, {
-      headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=60' },
-    })
-  } catch {
-    // Fallback sur les valeurs codées en dur si WordPress est injoignable
-    return NextResponse.json({
-      local:       3,
-      zone_africa: 6,
-      zones: {
-        AF: { standard: 12, express: 30 },
-        EU: { standard: 25, express: 45 },
-        NA: { standard: 25, express: 50 },
-        SA: { standard: 25, express: 55 },
-        AS: { standard: 25, express: 55 },
-        OC: { standard: 30, express: 60 },
+    // Garde-fou : si un champ manque (base fraîche, migration partielle),
+    // on complète depuis le fallback plutôt que de propager un trou.
+    return NextResponse.json(
+      {
+        local: data.local ?? FALLBACK.local,
+        zone_africa: data.zone_africa ?? FALLBACK.zone_africa,
+        free_threshold: data.free_threshold ?? FALLBACK.free_threshold,
+        domestic_fallback_usd: data.domestic_fallback_usd ?? FALLBACK.domestic_fallback_usd,
+        zones: { ...FALLBACK.zones, ...(data.zones || {}) },
       },
-    })
+      { headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=60' } }
+    )
+  } catch {
+    return NextResponse.json(FALLBACK)
   }
 }

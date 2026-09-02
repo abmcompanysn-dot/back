@@ -94,6 +94,19 @@
 	handle /shipping-rates* {
 		reverse_proxy shipping-svc:8085
 	}
+	handle /shipping/* {
+		# GET /shipping/config — config tarifaire unifiée lue par le
+		# frontend (/api/shipping-rates). Seul le GET est exposé : les
+		# écritures (POST /shipping/config) passent par admin-svc, qui
+		# appelle shipping-svc en direct sur le réseau interne k8s et
+		# exige un rôle admin. Ici on refuse tout ce qui n'est pas GET
+		# pour que le endpoint d'écriture ne soit jamais joignable
+		# publiquement (setShippingConfig n'a pas de contrôle d'accès
+		# propre, aligné sur les autres écritures de ce service).
+		@notget not method GET
+		respond @notget 405
+		reverse_proxy shipping-svc:8085
+	}
 	handle /shipping-domestic/* {
 		reverse_proxy shipping-svc:8085
 	}

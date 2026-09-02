@@ -17,6 +17,21 @@ export const runtime = 'edge'
 // WordPress qui portait des libellés). On mappe donc price_usd -> price et
 // on laisse tier_label/eta_label à null : le frontend (CheckoutPage.tsx)
 // les traite déjà comme optionnels (`data.tier_label ?? null`).
+// domesticFallbackUSD — le repli n'est plus une constante figée : il vient
+// de shipping-svc /shipping/config (éditable en back-office). La constante
+// SENEGAL_DOMESTIC_FALLBACK_USD reste le filet de dernier recours si même
+// la config est injoignable.
+async function domesticFallbackUSD(): Promise<number> {
+  try {
+    const r = await fetch(`${SHIPPING_SVC_URL}/shipping/config`, { next: { revalidate: 300, tags: ['shipping-config'] } })
+    if (r.ok) {
+      const c = await r.json()
+      if (typeof c?.domestic_fallback_usd === 'number' && c.domestic_fallback_usd > 0) return c.domestic_fallback_usd
+    }
+  } catch { /* filet ci-dessous */ }
+  return SENEGAL_DOMESTIC_FALLBACK_USD
+}
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null)
   if (!body?.vendorId) {
@@ -31,7 +46,7 @@ export async function POST(request: Request) {
     // 3050 $ pour un article à 50 $). SENEGAL_DOMESTIC_FALLBACK_USD ≈ 8,33 $
     // (= 5000 FCFA / 600), aligné sur la tranche médiane de la grille CDC.
     return NextResponse.json({
-      ok: true, distance_km: null, price: SENEGAL_DOMESTIC_FALLBACK_USD, tier_label: 'estimation',
+      ok: true, distance_km: null, price: await domesticFallbackUSD(), tier_label: 'estimation',
       resolved_from: 'fallback_default', origin_source: 'missing_coords', dest_source: 'missing_coords',
     })
   }
@@ -67,7 +82,7 @@ export async function POST(request: Request) {
     // était indisponible (bug du repli catch, jumeau de celui déjà
     // corrigé plus haut le 2026-08-28 mais oublié ici).
     return NextResponse.json({
-      ok: true, distance_km: null, price: SENEGAL_DOMESTIC_FALLBACK_USD, tier_label: 'estimation',
+      ok: true, distance_km: null, price: await domesticFallbackUSD(), tier_label: 'estimation',
       resolved_from: 'fallback_default', origin_source: 'error', dest_source: 'error',
     })
   }

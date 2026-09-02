@@ -437,6 +437,17 @@ func main() {
 		mux.HandleFunc("GET /admin/api/finance/transactions", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/finance/transactions" })))
 		mux.HandleFunc("GET /admin/api/finance/gateways", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payment-methods" })))
 		mux.HandleFunc("GET /admin/api/shipping-quote", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping-rates/quote" })))
+		// Config livraison unifiée (tarifs par zone standard/express, tarif
+		// local, seuil livraison gratuite, repli national) — page Livraison
+		// du back-office. Source unique consommée aussi par le frontend via
+		// /api/shipping-rates -> shipping-svc /shipping/config.
+		mux.HandleFunc("GET /admin/api/shipping-config", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/shipping/config" })))
+		mux.HandleFunc("POST /admin/api/shipping-config", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.shippingURL+"/shipping/config")
+		}))
+		mux.HandleFunc("DELETE /admin/api/domestic-tiers/{id}", s.requireAdmin(s.proxyPath(func(id string) string {
+			return s.shippingURL + "/shipping-domestic/tiers/" + id
+		})))
 		// Livraison nationale Sénégal — adresses d'expédition vendeur (carte
 		// admin des boutiques) + grille tarifaire par distance.
 		mux.HandleFunc("GET /admin/api/vendor-shipping-addresses", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/vendor-shipping-addresses" })))

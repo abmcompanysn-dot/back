@@ -3,6 +3,7 @@ import MiadMarketClient from './MiadMarketClient'
 import { CatalogCacheProvider } from '@/components/miad/CatalogCacheProvider'
 import { HomeSections } from '@/components/miad/server/HomeSections'
 import { fetchInitialCategories } from '@/lib/woo-server'
+import { SHIPPING_SVC_URL } from '@/lib/miad-server-auth'
 import { headers } from 'next/headers'
 
 export const runtime = 'edge';
@@ -50,7 +51,7 @@ const WEBSITE_JSON_LD = {
 }
 
 const SHIPPING_FALLBACK = {
-  local: 3, zone_africa: 6,
+  local: 3, zone_africa: 6, free_threshold: 150, domestic_fallback_usd: 8.33,
   zones: {
     AF: { standard: 12, express: 30 }, EU: { standard: 25, express: 45 },
     NA: { standard: 25, express: 50 }, SA: { standard: 25, express: 55 },
@@ -80,10 +81,15 @@ const SHIPPING_FALLBACK = {
 // (voir son commentaire) — shipping-svc (Go) a un schéma incompatible,
 // décision explicite du fondateur : laisser tel quel pour l'instant.
 async function getInitialData(needsCategories: boolean) {
-  const WC_BASE = process.env.NEXT_PUBLIC_WC_URL || 'https://api.miadmarket.com'
   const [categoriesResult, shippingResult] = await Promise.allSettled([
     needsCategories ? fetchInitialCategories() : Promise.resolve([]),
-    fetch(`${WC_BASE}/wp-json/miad/v1/shipping-rates`, { next: { revalidate: 300 } }).then(r => r.ok ? r.json() : SHIPPING_FALLBACK).catch(() => SHIPPING_FALLBACK),
+    // Config livraison unifiée (shipping-svc /shipping/config, exposée par
+    // /api/shipping-rates) — remplace l'appel à l'ancien WordPress mort
+    // (NEXT_PUBLIC_WC_URL jamais positionné → toujours le fallback).
+    // Le client re-fera ce fetch via useShippingRates ; ici c'est pour
+    // que le premier rendu serveur du checkout parte avec les vrais tarifs.
+    fetch(`${SHIPPING_SVC_URL}/shipping/config`, { next: { revalidate: 300, tags: ['shipping-config'] } })
+      .then(r => r.ok ? r.json() : SHIPPING_FALLBACK).catch(() => SHIPPING_FALLBACK),
   ])
 
   // Détection pays via header Vercel/Cloudflare (côté serveur, pas besoin d'appel API).

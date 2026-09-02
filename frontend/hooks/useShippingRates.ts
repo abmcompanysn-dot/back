@@ -3,12 +3,21 @@ import useSWR from 'swr'
 export interface ShippingRatesConfig {
   local:       number
   zone_africa: number
+  // Seuil de sous-total à partir duquel la livraison est offerte (0 = jamais).
+  // Vient de shipping-svc /shipping/config (avant : constante en dur
+  // FREE_SHIPPING_THRESHOLD dans CheckoutPage).
+  free_threshold?: number
+  // Repli livraison nationale SN quand le calcul par distance échoue
+  // (avant : SENEGAL_DOMESTIC_FALLBACK_USD en dur).
+  domestic_fallback_usd?: number
   zones: Record<string, { standard: number; express: number }>
 }
 
 const FALLBACK: ShippingRatesConfig = {
   local:       3,
   zone_africa: 6,
+  free_threshold: 150,
+  domestic_fallback_usd: 8.33,
   zones: {
     AF: { standard: 12, express: 30 },
     EU: { standard: 25, express: 45 },

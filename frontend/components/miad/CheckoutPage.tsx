@@ -299,8 +299,10 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
     }, 0)
   }, [cart, userCountryCode, shippingRatesConfig]);
 
-  const FREE_SHIPPING_THRESHOLD = 150
-  const isFreeShipping = subtotal >= FREE_SHIPPING_THRESHOLD
+  // Seuil de livraison offerte : piloté par shipping-svc /shipping/config
+  // (avant : 150 en dur). 0 ou absent => jamais de livraison gratuite.
+  const FREE_SHIPPING_THRESHOLD = shippingRatesConfig.free_threshold ?? 150
+  const isFreeShipping = FREE_SHIPPING_THRESHOLD > 0 && subtotal >= FREE_SHIPPING_THRESHOLD
 
   // Calcul des frais de livraison totaux — si le vendeur ET le client sont
   // au Sénégal et que le tarif par distance a pu être calculé pour chaque

@@ -42,6 +42,32 @@ CREATE TABLE IF NOT EXISTS zone_countries (
   zone    TEXT NOT NULL
 );
 
+-- Tarif EXPRESS par zone (le standard reste base_rate_usd de shipping_zones).
+ALTER TABLE shipping_zones ADD COLUMN IF NOT EXISTS express_rate_usd DOUBLE PRECISION;
+
+-- ---------- Config globale de livraison (éditable en back-office) ----------
+-- Une ligne par réglage scalaire. Alimente GET /shipping/config, l'unique
+-- source du frontend (fin du calcul en dur dans lib/shipping-utils.ts /
+-- useShippingRates.ts / app/page.tsx). Clés :
+--   local_rate_usd              tarif quand vendeur ET client au même pays
+--   zone_africa_rate_usd        tarif Afrique -> Afrique (zones AF<->AF)
+--   free_shipping_threshold_usd sous-total à partir duquel la livraison est offerte (0 = jamais)
+--   domestic_fallback_usd       repli livraison nationale SN quand le calcul par distance échoue
+CREATE TABLE IF NOT EXISTS shipping_config (
+  key   TEXT PRIMARY KEY,
+  value DOUBLE PRECISION NOT NULL
+);
+
+-- Tarif standard + express par zone CONTINENTALE frontend (AF/EU/NA/SA/AS/OC).
+-- shipping_zones garde les 3 zones agrégées internes (local/continent/
+-- international) utilisées par order-svc via /shipping-rates/quote ; cette
+-- table-ci est la vue "6 zones" que le checkout affiche et facture.
+CREATE TABLE IF NOT EXISTS shipping_zone_rates (
+  zone          TEXT PRIMARY KEY,          -- AF | EU | NA | SA | AS | OC
+  standard_usd  DOUBLE PRECISION NOT NULL,
+  express_usd   DOUBLE PRECISION NOT NULL
+);
+
 -- ---------- Taux de change : source UNIQUE USD -> devise ----------
 -- Remplace les 3 constantes dupliquées du PHP historique
 -- (MIAD_USD_TO_FCFA, miad_currency_rates['FCFA'], MIAD_DOMESTIC_FCFA_PER_USD).
@@ -97,6 +123,42 @@ var domesticStages = map[string]bool{
 var defaultExchangeRates = map[string]float64{
 	"XOF": 600.0, // FCFA (Sénégal, Guinée, Ghana zone UEMOA/CFA proche)
 	"CAD": 1.41,  // 1 / 0.71 (voir CAD_TO_USD_RATE côté frontend)
+}
+
+// frontendZoneMap — les 3 zones internes (local/continent/international) de
+// ce service exposées sous les 6 zones continentales que le frontend
+// attend (AF/EU/NA/SA/AS/OC). "continent" alimente AF ; "international"
+// alimente EU/NA/SA/AS/OC. Le tarif "local" (même pays) est un scalaire à
+// part (shipping_config.local_rate_usd), pas une zone.
+var frontendZoneOf = map[string]string{
+	"AF": "continent",
+	"EU": "international", "NA": "international", "SA": "international",
+	"AS": "international", "OC": "international",
+}
+
+// defaultShippingConfig — valeurs initiales, EXACTEMENT celles qui étaient
+// codées en dur côté frontend (useShippingRates.ts FALLBACK + app/page.tsx
+// SHIPPING_FALLBACK + CheckoutPage FREE_SHIPPING_THRESHOLD + le repli
+// SENEGAL_DOMESTIC_FALLBACK_USD). Modifiables ensuite en back-office.
+var defaultShippingConfig = map[string]float64{
+	"local_rate_usd":              3,
+	"zone_africa_rate_usd":        6,
+	"free_shipping_threshold_usd": 150,
+	"domestic_fallback_usd":       8.33, // 5000 XOF / 600
+}
+
+// defaultExpressRates — tarif express par zone frontend, repris de
+// useShippingRates.ts FALLBACK.zones[...].express. Le standard vient de
+// seedZones (base_rate_usd).
+var defaultExpressRates = map[string]float64{
+	"AF": 30, "EU": 45, "NA": 50, "SA": 55, "AS": 55, "OC": 60,
+}
+
+// defaultStandardRates — tarif standard par zone frontend
+// (useShippingRates.ts FALLBACK.zones[...].standard). Sert à afficher un
+// tarif par zone même quand seedZones n'a que 3 zones agrégées.
+var defaultStandardRates = map[string]float64{
+	"AF": 12, "EU": 25, "NA": 25, "SA": 25, "AS": 25, "OC": 30,
 }
 
 // defaultDomesticTiers — tranches de distance Dakar-centré, EN USD.
@@ -182,6 +244,10 @@ func main() {
 		log.Error("seed des tranches nationales impossible", "err", err)
 		return
 	}
+	if err := s.seedShippingConfig(ctx); err != nil {
+		log.Error("seed de la config livraison impossible", "err", err)
+		return
+	}
 
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
@@ -190,11 +256,16 @@ func main() {
 		mux.HandleFunc("GET /shipping-rates", s.listRates)
 		mux.HandleFunc("GET /shipping-rates/quote", s.quote)
 
+		// Config unifiée consommée par le frontend (fin du calcul en dur).
+		mux.HandleFunc("GET /shipping/config", s.getShippingConfig)
+		mux.HandleFunc("POST /shipping/config", s.setShippingConfig)
+
 		mux.HandleFunc("GET /exchange-rates", s.listExchangeRates)
 		mux.HandleFunc("POST /exchange-rates", s.setExchangeRate)
 
 		mux.HandleFunc("GET /shipping-domestic/tiers", s.listDomesticTiers)
 		mux.HandleFunc("POST /shipping-domestic/tiers", s.setDomesticTier)
+		mux.HandleFunc("DELETE /shipping-domestic/tiers/{id}", s.deleteDomesticTier)
 		mux.HandleFunc("GET /vendor-shipping-address", s.getVendorShippingAddress)
 		mux.HandleFunc("GET /vendor-shipping-addresses", s.listVendorShippingAddresses)
 		mux.HandleFunc("POST /vendor-shipping-address", s.setVendorShippingAddress)
@@ -252,6 +323,174 @@ func (s *server) seedDomesticTiers(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// seedShippingConfig — pose les scalaires (shipping_config) et la grille
+// standard/express par zone frontend (shipping_zone_rates) si absents.
+// Idempotent : ON CONFLICT DO NOTHING, l'admin peut ensuite tout ajuster.
+func (s *server) seedShippingConfig(ctx context.Context) error {
+	for k, v := range defaultShippingConfig {
+		if _, err := s.db.Exec(ctx, `
+			INSERT INTO shipping_config (key, value) VALUES ($1,$2)
+			ON CONFLICT (key) DO NOTHING`, k, v); err != nil {
+			return err
+		}
+	}
+	for zone, std := range defaultStandardRates {
+		if _, err := s.db.Exec(ctx, `
+			INSERT INTO shipping_zone_rates (zone, standard_usd, express_usd) VALUES ($1,$2,$3)
+			ON CONFLICT (zone) DO NOTHING`, zone, std, defaultExpressRates[zone]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// getShippingConfig — GET /shipping/config. L'UNIQUE source du frontend
+// pour les tarifs de livraison. Format calé sur ce que useShippingRates.ts
+// (ShippingRatesConfig) et app/page.tsx (SHIPPING_FALLBACK) attendaient
+// quand c'était codé en dur :
+//
+//	{
+//	  "local": 3, "zone_africa": 6,
+//	  "free_threshold": 150, "domestic_fallback_usd": 8.33,
+//	  "zones": { "AF": {"standard":12,"express":30}, "EU": {...}, ... }
+//	}
+func (s *server) getShippingConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := map[string]float64{}
+	rows, err := s.db.Query(r.Context(), `SELECT key, value FROM shipping_config`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	for rows.Next() {
+		var k string
+		var v float64
+		if rows.Scan(&k, &v) == nil {
+			cfg[k] = v
+		}
+	}
+	rows.Close()
+
+	zones := map[string]map[string]float64{}
+	zr, err := s.db.Query(r.Context(), `SELECT zone, standard_usd, express_usd FROM shipping_zone_rates`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	for zr.Next() {
+		var z string
+		var std, exp float64
+		if zr.Scan(&z, &std, &exp) == nil {
+			zones[z] = map[string]float64{"standard": std, "express": exp}
+		}
+	}
+	zr.Close()
+
+	// Repli sur les défauts si une clé/zone manque (base fraîche, migration
+	// partielle) — le frontend ne doit jamais recevoir un champ absent.
+	get := func(k string) float64 {
+		if v, ok := cfg[k]; ok {
+			return v
+		}
+		return defaultShippingConfig[k]
+	}
+	for z, std := range defaultStandardRates {
+		if _, ok := zones[z]; !ok {
+			zones[z] = map[string]float64{"standard": std, "express": defaultExpressRates[z]}
+		}
+	}
+
+	kit.JSON(w, 200, map[string]any{
+		"local":                 get("local_rate_usd"),
+		"zone_africa":           get("zone_africa_rate_usd"),
+		"free_threshold":        get("free_shipping_threshold_usd"),
+		"domestic_fallback_usd": get("domestic_fallback_usd"),
+		"zones":                 zones,
+		"currency":              "USD",
+	})
+}
+
+// setShippingConfig — POST /shipping/config. Écrit les scalaires et/ou la
+// grille par zone. Corps partiel accepté (seuls les champs fournis sont
+// modifiés). Pas de contrôle d'accès ici, aligné sur setDomesticTier /
+// setExchangeRate de ce même service : shipping-svc n'est pas exposé
+// publiquement (Caddy ne route que /shipping-domestic/calculate et
+// /shipping-rates* vers lui), les écritures passent par admin-svc qui,
+// lui, exige un rôle admin. Aussi utilisé pour garder shipping_zones (les
+// 3 zones agrégées internes, lues par order-svc/quote) en phase avec le
+// tarif standard AF/EU édité en back-office.
+func (s *server) setShippingConfig(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Local            *float64 `json:"local"`
+		ZoneAfrica       *float64 `json:"zone_africa"`
+		FreeThreshold    *float64 `json:"free_threshold"`
+		DomesticFallback *float64 `json:"domestic_fallback_usd"`
+		Zones            map[string]struct {
+			Standard *float64 `json:"standard"`
+			Express  *float64 `json:"express"`
+		} `json:"zones"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	ctx := r.Context()
+	setScalar := func(key string, v *float64) error {
+		if v == nil {
+			return nil
+		}
+		_, err := s.db.Exec(ctx, `
+			INSERT INTO shipping_config (key, value) VALUES ($1,$2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, *v)
+		return err
+	}
+	for _, pair := range []struct {
+		k string
+		v *float64
+	}{
+		{"local_rate_usd", body.Local},
+		{"zone_africa_rate_usd", body.ZoneAfrica},
+		{"free_shipping_threshold_usd", body.FreeThreshold},
+		{"domestic_fallback_usd", body.DomesticFallback},
+	} {
+		if err := setScalar(pair.k, pair.v); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+	}
+	for zone, rates := range body.Zones {
+		zone = strings.ToUpper(zone)
+		if _, ok := defaultStandardRates[zone]; !ok {
+			continue // zone inconnue ignorée
+		}
+		// upsert en lisant l'existant pour un update partiel (standard seul, etc.)
+		var curStd, curExp float64
+		_ = s.db.QueryRow(ctx, `SELECT standard_usd, express_usd FROM shipping_zone_rates WHERE zone=$1`, zone).Scan(&curStd, &curExp)
+		if curStd == 0 && curExp == 0 {
+			curStd, curExp = defaultStandardRates[zone], defaultExpressRates[zone]
+		}
+		if rates.Standard != nil {
+			curStd = *rates.Standard
+		}
+		if rates.Express != nil {
+			curExp = *rates.Express
+		}
+		if _, err := s.db.Exec(ctx, `
+			INSERT INTO shipping_zone_rates (zone, standard_usd, express_usd) VALUES ($1,$2,$3)
+			ON CONFLICT (zone) DO UPDATE SET standard_usd = EXCLUDED.standard_usd, express_usd = EXCLUDED.express_usd`,
+			zone, curStd, curExp); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		// Garder la zone agrégée interne correspondante en phase (base_rate_usd
+		// = le standard de la zone frontend qui l'alimente) pour que
+		// order-svc /quote facture le même montant.
+		if internal, ok := frontendZoneOf[zone]; ok {
+			_, _ = s.db.Exec(ctx, `UPDATE shipping_zones SET base_rate_usd=$2 WHERE zone=$1`, internal, curStd)
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"status": "ok"})
 }
 
 func (s *server) listRates(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +642,28 @@ func (s *server) setDomesticTier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kit.JSON(w, 201, map[string]any{"id": id, "max_distance_km": body.MaxDistanceKM, "price_usd": body.PriceUSD})
+}
+
+// deleteDomesticTier — DELETE /shipping-domestic/tiers/{id}. Retire une
+// tranche de la grille par distance (édition back-office). On refuse la
+// suppression de la DERNIÈRE tranche : sans grille, calculateDomestic
+// renverrait "no_tier_matched" pour toute commande nationale.
+func (s *server) deleteDomesticTier(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var n int
+	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM domestic_tiers`).Scan(&n); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if n <= 1 {
+		kit.Fail(w, 409, "last_tier", "impossible de supprimer la dernière tranche tarifaire — la grille doit garder au moins une entrée")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), `DELETE FROM domestic_tiers WHERE id = $1`, id); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"status": "ok", "deleted": id})
 }
 
 func (s *server) getVendorShippingAddress(w http.ResponseWriter, r *http.Request) {
