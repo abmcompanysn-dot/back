@@ -313,10 +313,9 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
         // échoue en 404 "invoice_not_found" (bug remonté 2026-09-02,
         // repéré via une vraie tentative de paiement Wave, order #421).
         if (effectiveAggregator === 'paydunya') {
-          const reinitRes = await fetch('/api/orders/reinit-payment', {
+          const reinitRes = await fetch(`/api/orders/${orderId}/reinit-payment`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ order_id: orderId }),
           })
           if (!reinitRes.ok) {
             const reinitData = await reinitRes.json().catch(() => ({}))
