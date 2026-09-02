@@ -100,8 +100,11 @@ interface StripePaymentFormProps {
 // Si Stripe Elements n'a pas fini de charger après ce délai (bloqueur de pub,
 // VPN, réseau qui bloque m.stripe.network...), on considère l'échec et on
 // propose un mode de paiement de secours au lieu de laisser l'utilisateur
-// face à un squelette de chargement infini.
-const ELEMENT_LOAD_TIMEOUT_MS = 8000
+// face à un squelette de chargement infini. 5s : au-delà, le champ carte
+// ne se chargera quasi jamais (c'est un blocage, pas de la lenteur) — 8s
+// laissait le client fixer une bande blanche trop longtemps (signalé le
+// 2026-09-02).
+const ELEMENT_LOAD_TIMEOUT_MS = 5000
 
 export function StripePaymentForm({ total, currency, orderId, redirectOrderId, onFallback }: StripePaymentFormProps) {
   const stripe = useStripe()

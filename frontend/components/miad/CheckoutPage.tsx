@@ -733,10 +733,21 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
                   orderId={createdOrderId || 0}
                   redirectOrderId={parentOrderIdForRedirect || createdOrderId || 0}
                   onFallback={() => {
+                    // Stripe Elements bloqué (pub-blocker / VPN / réseau) :
+                    // on revient au formulaire, on efface le clientSecret
+                    // (sinon cet écran carte se réaffiche au prochain rendu)
+                    // et on ouvre directement la section Paiement avec Mobile
+                    // Money présélectionné. La commande Stripe déjà créée
+                    // reste 'pending_payment' et expirera d'elle-même ; le
+                    // prochain "Confirmer et Payer" en Mobile Money crée la
+                    // commande PayDunya (comportement inchangé).
+                    setStripeClientSecret(null);
+                    setCreatedOrderId(null);
                     setPaymentMethod('mobile_money');
                     setStep('form');
+                    setActiveSection(2);
                     window.scrollTo(0, 0)
-                    toast("Choisissez un autre mode de paiement ci-dessous.");
+                    toast("Paiement par carte indisponible — choisissez Mobile Money ci-dessous.");
                   }}
                 />
               </Elements>
