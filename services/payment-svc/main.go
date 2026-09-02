@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 CREATE INDEX IF NOT EXISTS idx_payments_order ON payments (order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_ref ON payments (provider_ref);
+-- failure_code : code d'échec brut renvoyé par l'agrégateur (PawaPay
+-- failureReason.failureCode — ex. INSUFFICIENT_BALANCE, PAYER_LIMIT_REACHED
+-- — ou équivalent PayDunya) sur un paiement 'failed'. Jusqu'ici jeté après
+-- le log serveur, jamais transmis au client : "Le paiement a échoué" pour
+-- TOUTE cause, y compris solde insuffisant (le client ne sait pas quoi
+-- faire). GET /orders/{id}/payment-status l'expose désormais, le frontend
+-- choisit le bon message (voir FAILURE_MESSAGES ci-dessous et son
+-- équivalent frontend). Ajouté 2026-09-02, suite à la doc PawaPay fournie
+-- par le fondateur sur la gestion du solde insuffisant.
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS failure_code TEXT DEFAULT '';
 
 -- Routage manuel PawaPay ⇄ PayDunya par pays/opérateur (2026-08-28,
 -- écran admin dédié) — décision fondateur : PAS de logique automatique
@@ -1589,7 +1599,7 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	case "payment_intent.succeeded":
 		s.confirmPayment(w, r, orderID, "stripe", eventData.ID)
 	case "payment_intent.payment_failed", "payment_intent.canceled":
-		s.markFailed(w, r, orderID, "stripe")
+		s.markFailed(w, r, orderID, "stripe", "")
 	default:
 		kit.JSON(w, 200, map[string]string{"received": string(stripeEvent.Type)})
 	}
@@ -1652,7 +1662,12 @@ func (s *server) paydunyaCallback(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(status, "completed") {
 		s.confirmPayment(w, r, orderID, "paydunya", token)
 	} else {
-		s.markFailed(w, r, orderID, "paydunya")
+		// PayDunya ne fournit pas de code d'échec structuré comme PawaPay
+		// (failureReason.failureCode) sur ce callback — on stocke le status
+		// brut PayDunya (ex. "cancelled") tel quel, sans mapping vers un
+		// message client précis pour l'instant (voir FAILURE_MESSAGES,
+		// frontend, qui affiche son repli générique pour tout code inconnu).
+		s.markFailed(w, r, orderID, "paydunya", status)
 	}
 }
 
@@ -1774,8 +1789,8 @@ func (s *server) reverifyOrderPaymentHandler(w http.ResponseWriter, r *http.Requ
 		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": "confirmed", "reverified": true})
 	case pawapayIsFinalFailure(pawapayStatus):
 		rec := httptest.NewRecorder()
-		s.markFailed(rec, r, orderID, "pawapay")
-		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": "failed", "reverified": true})
+		s.markFailed(rec, r, orderID, "pawapay", failureCode)
+		kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": provider, "status": "failed", "failure_code": failureCode, "reverified": true})
 	default:
 		// Toujours en cours côté PawaPay (ACCEPTED/PROCESSING/IN_RECONCILIATION)
 		// — order-svc ne doit PAS expirer cette commande maintenant.
@@ -1804,7 +1819,7 @@ func (s *server) pawapayHandleDepositWebhook(ctx context.Context, w http.Respons
 	case pawapayIsFinalSuccess(status):
 		s.confirmPayment(w, r, orderID, "pawapay", depositID)
 	case pawapayIsFinalFailure(status):
-		s.markFailed(w, r, orderID, "pawapay")
+		s.markFailed(w, r, orderID, "pawapay", failureCode)
 	default:
 		// ACCEPTED / PROCESSING / IN_RECONCILIATION — pas encore final,
 		// on attend un webhook ultérieur. 200 pour ne pas faire retenter
@@ -2064,10 +2079,17 @@ func fetchVendorCommissionRate(ctx context.Context, vendorURL string, vendorID i
 	return out.CommissionRate, nil
 }
 
-func (s *server) markFailed(w http.ResponseWriter, r *http.Request, orderID int64, provider string) {
-	_, _ = s.db.Exec(r.Context(), "UPDATE payments SET status='failed' WHERE order_id=$1 AND status='initiated'", orderID)
+// markFailed — failureCode optionnel (code brut agrégateur, ex.
+// INSUFFICIENT_BALANCE) stocké tel quel pour que le client final voie un
+// message adapté plutôt qu'un "échec" générique — voir failure_code sur
+// payments et FAILURE_MESSAGES côté frontend. "" accepté (échec sans
+// cause connue, ou provider ne le transmettant pas).
+func (s *server) markFailed(w http.ResponseWriter, r *http.Request, orderID int64, provider, failureCode string) {
+	_, _ = s.db.Exec(r.Context(),
+		"UPDATE payments SET status='failed', failure_code=$2 WHERE order_id=$1 AND status='initiated'",
+		orderID, failureCode)
 	kit.Publish(s.producer, "payment.failed", fmt.Sprint(orderID), map[string]any{
-		"order_id": orderID, "provider": provider, "at": time.Now().UTC().Format(time.RFC3339),
+		"order_id": orderID, "provider": provider, "failure_code": failureCode, "at": time.Now().UTC().Format(time.RFC3339),
 	})
 	kit.JSON(w, 200, map[string]string{"received": "true"})
 }
@@ -2437,13 +2459,13 @@ func (s *server) getPayment(w http.ResponseWriter, r *http.Request) {
 	var orderID int64
 	fmt.Sscanf(r.PathValue("order_id"), "%d", &orderID)
 	row := s.db.QueryRow(r.Context(), `
-		SELECT id, order_id, provider, provider_ref, amount_usd, currency, status, method, created_at
+		SELECT id, order_id, provider, provider_ref, amount_usd, currency, status, method, created_at, failure_code
 		FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1`, orderID)
 	var id int64
 	var amount float64
-	var provider, ref, currency, status, method string
+	var provider, ref, currency, status, method, failureCode string
 	var at time.Time
-	if err := row.Scan(&id, &orderID, &provider, &ref, &amount, &currency, &status, &method, &at); err != nil {
+	if err := row.Scan(&id, &orderID, &provider, &ref, &amount, &currency, &status, &method, &at, &failureCode); err != nil {
 		kit.Fail(w, 404, "payment_not_found", fmt.Sprintf("aucun paiement pour la commande %d", orderID))
 		return
 	}
@@ -2451,6 +2473,10 @@ func (s *server) getPayment(w http.ResponseWriter, r *http.Request) {
 		"id": id, "order_id": orderID, "provider": provider, "provider_ref": ref,
 		"amount_usd": amount, "currency": currency, "status": status, "method": method,
 		"created_at": at.UTC().Format(time.RFC3339),
+		// failure_code : code brut agrégateur (ex. INSUFFICIENT_BALANCE)
+		// quand status='failed' — voir doc-comment sur payments.failure_code.
+		// "" si le paiement n'a pas échoué ou si le provider n'a rien fourni.
+		"failure_code": failureCode,
 	})
 }
 

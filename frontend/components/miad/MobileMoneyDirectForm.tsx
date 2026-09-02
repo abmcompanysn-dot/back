@@ -73,6 +73,29 @@ interface RouteRow {
   country_enabled: boolean
 }
 
+// FAILURE_MESSAGES — messages clairs par code d'échec transactionnel
+// (payments.failure_code, remonté par confirm-pawapay/confirm-paydunya),
+// à la place du message générique unique d'avant (2026-09-02, doc PawaPay
+// fournie par le fondateur sur la gestion du solde insuffisant + liste
+// complète des codes). Ne couvre QUE les codes "transactionnels" (ceux
+// qu'un vrai client peut rencontrer) — les codes "techniques" PawaPay
+// (AUTHENTICATION_ERROR, INVALID_PARAMETER, etc.) sont des erreurs
+// d'intégration, jamais censées atteindre ce formulaire en production ;
+// tout code absent d'ici retombe sur DEFAULT_FAILURE_MESSAGE.
+const FAILURE_MESSAGES: Record<string, string> = {
+  INSUFFICIENT_BALANCE: 'Solde insuffisant. Rechargez votre compte mobile money puis réessayez.',
+  PAYMENT_NOT_APPROVED: "Le paiement n'a pas été autorisé à temps sur votre téléphone. Réessayez et validez rapidement la demande.",
+  PAYMENT_IN_PROGRESS: 'Une autre transaction est déjà en cours sur ce numéro. Patientez un instant puis réessayez.',
+  PAYER_NOT_FOUND: "Ce numéro n'est pas reconnu par cet opérateur. Vérifiez le numéro ou choisissez un autre opérateur.",
+  WALLET_LIMIT_REACHED: 'Vous avez atteint une limite sur votre compte mobile money. Contactez votre opérateur ou réessayez plus tard.',
+  UNSPECIFIED_FAILURE: "Le paiement a été refusé par votre opérateur, sans précision de motif. Réessayez ou contactez votre opérateur.",
+}
+const DEFAULT_FAILURE_MESSAGE = 'Le paiement a échoué ou a été annulé sur votre téléphone.'
+function failureMessageFor(code?: string): string {
+  if (!code) return DEFAULT_FAILURE_MESSAGE
+  return FAILURE_MESSAGES[code.toUpperCase()] || DEFAULT_FAILURE_MESSAGE
+}
+
 // Libellés + logos pour les codes provider PawaPay (ex. ORANGE_SEN) —
 // juste le préfixe avant le premier "_", suffisant pour l'affichage
 // (le sélecteur de PAYS détermine déjà le pays, pas besoin de le répéter).
@@ -263,7 +286,7 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
           if (pollTimer.current) clearInterval(pollTimer.current)
           if (waitingMessageTimer.current) clearTimeout(waitingMessageTimer.current)
           setWaiting(false)
-          onFailure("Le paiement a échoué ou a été annulé sur votre téléphone.")
+          onFailure(failureMessageFor(data.failureCode))
         }
         // 'pending' : on continue à interroger, rien à faire ici.
       } catch {

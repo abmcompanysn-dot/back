@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { ORDER_SVC_URL, CATALOG_SVC_URL } from '@/lib/miad-server-auth'
+import { ORDER_SVC_URL, CATALOG_SVC_URL, PAYMENT_SVC_URL } from '@/lib/miad-server-auth'
 
 export const runtime = 'edge';
 
@@ -72,7 +72,25 @@ export async function POST(
       return NextResponse.json({ success: false, status: 'pending', orderId })
     }
 
-    return NextResponse.json({ success: false, status: 'failed', orderId })
+    // Paiement échoué — relit payments.failure_code (payment-svc) pour que
+    // MobileMoneyDirectForm.tsx affiche un message précis plutôt qu'un
+    // "échec" générique, même logique que confirm-pawapay. PayDunya ne
+    // fournit pas de code structuré comme PawaPay (voir paydunyaCallback,
+    // failure_code y stocke le status brut PayDunya, ex. "cancelled") —
+    // FAILURE_MESSAGES côté frontend retombe sur son message générique
+    // pour tout code qu'il ne reconnaît pas explicitement.
+    let failureCode: string | undefined
+    try {
+      const payRes = await fetch(`${PAYMENT_SVC_URL}/payments/order/${orderId}`, { cache: 'no-store' })
+      if (payRes.ok) {
+        const pay = await payRes.json()
+        failureCode = pay?.failure_code || undefined
+      }
+    } catch {
+      // Non-bloquant — le client voit quand même l'échec, juste sans détail.
+    }
+
+    return NextResponse.json({ success: false, status: 'failed', orderId, failureCode })
   } catch (e: any) {
     console.error('[confirm-paydunya]', e.message)
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
