@@ -56,14 +56,16 @@ export function CartPage({
   const { formatPrice: fp } = useCurrency()
   const shippingRatesConfig = useShippingRates()
 
-  const FREE_SHIPPING_THRESHOLD = 150
+  // Seuil livraison offerte : piloté par shipping-svc /shipping/config
+  // (back-office → Livraison), comme au checkout. 0 => jamais offert.
+  const FREE_SHIPPING_THRESHOLD = shippingRatesConfig.free_threshold ?? 150
 
   const subtotal = cart.reduce((sum, item) => {
     const price = Number(item.variation?.price || item.product.price || 0);
     return sum + (price * Number(item.quantity));
   }, 0)
 
-  const isFreeShipping = subtotal >= FREE_SHIPPING_THRESHOLD
+  const isFreeShipping = FREE_SHIPPING_THRESHOLD > 0 && subtotal >= FREE_SHIPPING_THRESHOLD
 
   // Livraison par produit via tarifs dynamiques (admin WordPress). Vendeur ET
   // acheteur au Sénégal -> estimation alignée sur le module de livraison
@@ -71,7 +73,7 @@ export function CartPage({
   // de sens ici (voir lib/domestic-shipping-estimate.ts).
   const perItemShipping = (item: CartItem, method: 'standard' | 'express') =>
     isSenegalDomestic(item.product.countryCode || '', userCountry)
-      ? SENEGAL_DOMESTIC_FALLBACK_USD
+      ? (shippingRatesConfig.domestic_fallback_usd ?? SENEGAL_DOMESTIC_FALLBACK_USD)
       : calcShipping(item.product.countryCode || '', userCountry, method, shippingRatesConfig, COUNTRY_TO_ZONE)
 
   const expressShipping = useMemo(() => cart.reduce((sum, item) => {
@@ -126,7 +128,7 @@ export function CartPage({
           const data = await res.json()
           return [v.id, { price: data.price ?? 0, distance_km: data.distance_km ?? null, eta_label: data.eta_label ?? null }] as const
         } catch {
-          return [v.id, { price: SENEGAL_DOMESTIC_FALLBACK_USD, distance_km: null, eta_label: null }] as const
+          return [v.id, { price: shippingRatesConfig.domestic_fallback_usd ?? SENEGAL_DOMESTIC_FALLBACK_USD, distance_km: null, eta_label: null }] as const
         }
       })).then((results) => {
         if (cancelled) return

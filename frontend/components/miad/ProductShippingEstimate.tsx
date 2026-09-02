@@ -84,9 +84,14 @@ export function ProductShippingEstimate({
         // pas de sens ici, le module de livraison nationale (checkout)
         // calculera un vrai prix par distance une fois l'adresse connue.
         // Ici, avant adresse : même estimation de repli que le checkout
-        // utilise lui-même tant que la ville du client n'est pas connue.
-        standardCostPerUnit = SENEGAL_DOMESTIC_FALLBACK_USD;
-        expressCostPerUnit  = SENEGAL_DOMESTIC_FALLBACK_USD;
+        // utilise lui-même tant que la ville du client n'est pas connue —
+        // valeur pilotée par shipping-svc /shipping/config (constante en
+        // dernier recours si le backend est injoignable).
+        {
+          const dom = shippingConfig.domestic_fallback_usd ?? SENEGAL_DOMESTIC_FALLBACK_USD;
+          standardCostPerUnit = dom;
+          expressCostPerUnit  = dom;
+        }
       } else if (isLocal) {
         // Livraison locale (autre pays) — tarif dynamique WordPress
         standardCostPerUnit = shippingConfig.local;
