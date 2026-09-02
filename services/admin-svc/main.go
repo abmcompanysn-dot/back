@@ -484,6 +484,14 @@ func main() {
 		}))
 		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
+		// Coupons — page Marketing du back-office (CRUD via loyalty-svc).
+		mux.HandleFunc("GET /admin/api/coupons", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coupons" })))
+		mux.HandleFunc("POST /admin/api/coupons", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.loyaltyURL+"/coupons")
+		}))
+		mux.HandleFunc("DELETE /admin/api/coupons/{code}", s.requireAdmin(s.proxyPath(func(code string) string {
+			return s.loyaltyURL + "/coupons/" + code
+		})))
 		mux.HandleFunc("GET /admin/api/representative/messages", s.requireAdminOrRep(s.proxy(func() string { return s.loyaltyURL + "/representative/messages" })))
 		mux.HandleFunc("POST /admin/api/representative/messages/{id}/reply", s.requireAdminOrRep(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.loyaltyURL+"/representative/messages/"+r.PathValue("id")+"/reply")

@@ -317,12 +317,12 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   const [couponError,   setCouponError]   = useState('')
   const [couponLoading, setCouponLoading] = useState(false)
 
-  const applyCoupon = () => {
+  const applyCoupon = async () => {
     if (!couponInput.trim()) return
     setCouponLoading(true)
     setCouponError('')
-    setTimeout(() => {
-      const result = validateCoupon(couponInput, subtotal)
+    try {
+      const result = await validateCoupon(couponInput, subtotal)
       if (result.valid) {
         setAppliedCoupon({ code: couponInput.toUpperCase().trim(), discount: result.discount, message: result.message })
         setCouponError('')
@@ -330,8 +330,9 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
         setCouponError(result.message)
         setAppliedCoupon(null)
       }
+    } finally {
       setCouponLoading(false)
-    }, 500)
+    }
   }
 
   const couponDiscount = appliedCoupon?.discount ?? 0

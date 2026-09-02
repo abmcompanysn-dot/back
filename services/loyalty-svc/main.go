@@ -237,6 +237,10 @@ func main() {
 		mux.HandleFunc("GET /coins/leaderboard", s.leaderboard)
 		mux.HandleFunc("GET /coupons", s.listCoupons)
 		mux.HandleFunc("POST /coupons/validate", s.validateCoupon)
+		// CRUD back-office (via admin-svc → rôle admin). Pas de contrôle
+		// d'accès ici, aligné sur les autres écritures internes du service.
+		mux.HandleFunc("POST /coupons", s.upsertCoupon)
+		mux.HandleFunc("DELETE /coupons/{code}", s.deleteCoupon)
 
 		// WhatsApp (Twilio)
 		mux.HandleFunc("GET /whatsapp/logs", s.listWhatsappLogs)
@@ -413,6 +417,63 @@ func (s *server) listCoupons(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 	kit.JSON(w, 200, map[string]any{"coupons": items})
+}
+
+// upsertCoupon — POST /coupons. Crée ou remplace un code promo (back-office).
+// `amount` : pour type "percent" c'est le pourcentage (1-100) ;
+// pour "fixed" c'est un montant en CENTIMES USD (ex. 500 = 5,00 $).
+func (s *server) upsertCoupon(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Code      string  `json:"code"`
+		Type      string  `json:"type"`
+		Amount    int64   `json:"amount"`
+		CoinCost  int64   `json:"coin_cost"`
+		MaxUses   int     `json:"max_uses"`
+		ExpiresAt *string `json:"expires_at"` // RFC3339 ou null
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	b.Code = strings.ToUpper(strings.TrimSpace(b.Code))
+	if b.Code == "" || (b.Type != "percent" && b.Type != "fixed") || b.Amount <= 0 {
+		kit.Fail(w, 400, "invalid_coupon", "code, type (percent|fixed) et amount (> 0) obligatoires")
+		return
+	}
+	if b.Type == "percent" && b.Amount > 100 {
+		kit.Fail(w, 400, "invalid_percent", "un pourcentage ne peut pas dépasser 100")
+		return
+	}
+	var expires *time.Time
+	if b.ExpiresAt != nil && *b.ExpiresAt != "" {
+		t, err := time.Parse(time.RFC3339, *b.ExpiresAt)
+		if err != nil {
+			kit.Fail(w, 400, "invalid_date", "expires_at doit être au format RFC3339")
+			return
+		}
+		expires = &t
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO coupons (code, type, amount, coin_cost, expires_at, max_uses)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (code) DO UPDATE SET
+		  type = EXCLUDED.type, amount = EXCLUDED.amount, coin_cost = EXCLUDED.coin_cost,
+		  expires_at = EXCLUDED.expires_at, max_uses = EXCLUDED.max_uses`,
+		b.Code, b.Type, b.Amount, b.CoinCost, expires, b.MaxUses); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"status": "ok", "code": b.Code})
+}
+
+// deleteCoupon — DELETE /coupons/{code}.
+func (s *server) deleteCoupon(w http.ResponseWriter, r *http.Request) {
+	code := strings.ToUpper(strings.TrimSpace(r.PathValue("code")))
+	if _, err := s.db.Exec(r.Context(), `DELETE FROM coupons WHERE code = $1`, code); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"status": "ok", "deleted": code})
 }
 
 func (s *server) validateCoupon(w http.ResponseWriter, r *http.Request) {

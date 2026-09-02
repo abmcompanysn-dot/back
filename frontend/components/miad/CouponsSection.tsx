@@ -1,10 +1,46 @@
 "use client"
 
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion'
 import { Ticket, Check, Copy, ChevronRight, Clock, Zap } from 'lucide-react'
 import Link from 'next/link'
-import { DEMO_COUPONS } from '@/lib/coupons'
+
+// Coupons affichés = ceux réellement en base (loyalty-svc via /api/coupons),
+// plus de DEMO_COUPONS en dur. Le back-office (console admin → Marketing →
+// Coupons) les crée/modifie. On fabrique ici le libellé + le dégradé
+// d'affichage à partir de { code, type, amount, expires_at }.
+interface ApiCoupon {
+  code: string
+  type: 'percent' | 'fixed'
+  amount: number // percent: 1-100 ; fixed: centimes USD
+  expires_at?: string
+}
+interface DisplayCoupon {
+  code: string
+  label: string
+  sublabel: string
+  expiry: string
+  gradient: string
+}
+
+const GRADIENTS = [
+  'from-orange-500 to-amber-400',
+  'from-emerald-500 to-teal-400',
+  'from-red-500 to-rose-400',
+  'from-purple-500 to-violet-400',
+  'from-blue-500 to-cyan-400',
+]
+
+function toDisplay(c: ApiCoupon, i: number): DisplayCoupon {
+  const label = c.type === 'percent' ? `${c.amount}% OFF` : `-${(c.amount / 100).toFixed(2)} $`
+  return {
+    code: c.code,
+    label,
+    sublabel: 'Code promo',
+    expiry: c.expires_at || '2099-12-31',
+    gradient: GRADIENTS[i % GRADIENTS.length],
+  }
+}
 
 const CLAIMED_KEY = 'miad_claimed_coupons:v1'
 
@@ -56,6 +92,18 @@ interface CouponsSectionProps {
 export function CouponsSection({ onNavigate }: CouponsSectionProps) {
   const claimed = useSyncExternalStore(subscribeClaimed, getClaimedCodes, getServerClaimedCodes)
   const [copied, setCopied] = useState<string | null>(null)
+  const [coupons, setCoupons] = useState<DisplayCoupon[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/coupons')
+      .then((r) => (r.ok ? r.json() : { coupons: [] }))
+      .then((d) => {
+        if (!cancelled) setCoupons((d.coupons || []).map(toDisplay))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const handleClaim = (code: string) => {
     claimCode(code)
@@ -64,6 +112,10 @@ export function CouponsSection({ onNavigate }: CouponsSectionProps) {
     setCopied(code)
     setTimeout(() => setCopied(null), 2000)
   }
+
+  // Aucun coupon actif en base → on ne rend rien (avant : 5 codes de démo
+  // toujours visibles).
+  if (coupons.length === 0) return null
 
   return (
     <LazyMotion features={domAnimation}>
@@ -87,7 +139,7 @@ export function CouponsSection({ onNavigate }: CouponsSectionProps) {
 
           {/* Coupon cards — horizontal scroll */}
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x snap-mandatory">
-            {DEMO_COUPONS.map(coupon => {
+            {coupons.map(coupon => {
               const isClaimed = claimed.includes(coupon.code)
               const isCopied  = copied === coupon.code
               const daysLeft = Math.ceil((new Date(coupon.expiry).getTime() - Date.now()) / 86400000)

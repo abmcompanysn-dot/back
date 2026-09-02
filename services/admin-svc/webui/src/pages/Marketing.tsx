@@ -16,6 +16,16 @@ interface AdminSettings {
   meta_capi_token_configured?: boolean
 }
 
+interface Coupon {
+  code: string
+  type: 'percent' | 'fixed'
+  amount: number // percent: 1-100 ; fixed: centimes USD
+  coin_cost: number
+  max_uses: number
+  used_count: number
+  expires_at?: string
+}
+
 const AUDIENCES = [
   { value: 'admins', label: 'Administrateurs' },
   { value: 'vendors', label: 'Tous les vendeurs' },
@@ -38,6 +48,19 @@ export function Marketing() {
   const [savingTracking, setSavingTracking] = useState(false)
   const [trackingMsg, setTrackingMsg] = useState<string | null>(null)
 
+  // ── Coupons ──────────────────────────────────────────────────────────
+  const [coupons, setCoupons] = useState<Coupon[]>([])
+  const [couponMsg, setCouponMsg] = useState<string | null>(null)
+  const [savingCoupon, setSavingCoupon] = useState(false)
+  const [form, setForm] = useState({ code: '', type: 'percent' as 'percent' | 'fixed', amount: '', max_uses: '', expires_at: '' })
+
+  function loadCoupons() {
+    api
+      .get<{ coupons: Coupon[] }>('/admin/api/coupons')
+      .then((d) => setCoupons(d.coupons || []))
+      .catch(() => {})
+  }
+
   useEffect(() => {
     api
       .get<AdminSettings>('/admin/api/settings')
@@ -47,7 +70,49 @@ export function Marketing() {
         setCapiConfigured(!!s.meta_capi_token_configured)
       })
       .catch(() => {})
+    loadCoupons()
   }, [])
+
+  async function saveCoupon() {
+    const amt = parseInt(form.amount, 10)
+    if (!form.code.trim() || !(amt > 0)) {
+      setCouponMsg('Code et montant (> 0) requis.')
+      return
+    }
+    if (form.type === 'percent' && amt > 100) {
+      setCouponMsg('Un pourcentage ne peut pas dépasser 100.')
+      return
+    }
+    setSavingCoupon(true)
+    setCouponMsg(null)
+    try {
+      await api.post('/admin/api/coupons', {
+        code: form.code.trim().toUpperCase(),
+        type: form.type,
+        // fixed : l'admin saisit des dollars → on stocke des centimes.
+        amount: form.type === 'fixed' ? Math.round(amt * 100) : amt,
+        max_uses: parseInt(form.max_uses, 10) || 0,
+        expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : null,
+      })
+      setForm({ code: '', type: 'percent', amount: '', max_uses: '', expires_at: '' })
+      loadCoupons()
+      setCouponMsg('Coupon enregistré.')
+    } catch (e) {
+      setCouponMsg(e instanceof ApiError ? e.message : 'Enregistrement impossible')
+    } finally {
+      setSavingCoupon(false)
+    }
+  }
+
+  async function removeCoupon(code: string) {
+    if (!window.confirm(`Supprimer le coupon ${code} ?`)) return
+    try {
+      await api.delete(`/admin/api/coupons/${encodeURIComponent(code)}`)
+      loadCoupons()
+    } catch (e) {
+      setCouponMsg(e instanceof ApiError ? e.message : 'Suppression impossible')
+    }
+  }
 
   async function saveTracking() {
     setSavingTracking(true)
@@ -217,10 +282,113 @@ export function Marketing() {
         </p>
       </div>
 
+      {/* ── Coupons ───────────────────────────────────────────────── */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <h3 style={{ marginTop: 0 }}>Codes promo</h3>
+        <p className="subtitle">
+          Actifs immédiatement au checkout (loyalty-svc). Le site affiche les codes non
+          expirés / non épuisés dans le carrousel « Tickets Réduction » (cache 5 min).
+        </p>
+
+        <table className="data-table" style={{ marginTop: 12 }}>
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Réduction</th>
+              <th>Utilisations</th>
+              <th>Expire</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {coupons.length === 0 && (
+              <tr>
+                <td colSpan={5} className="subtitle">Aucun code promo.</td>
+              </tr>
+            )}
+            {coupons.map((c) => (
+              <tr key={c.code}>
+                <td><b>{c.code}</b></td>
+                <td>{c.type === 'percent' ? `${c.amount} %` : `${(c.amount / 100).toFixed(2)} $`}</td>
+                <td>{c.max_uses > 0 ? `${c.used_count} / ${c.max_uses}` : `${c.used_count} / ∞`}</td>
+                <td>{c.expires_at ? new Date(c.expires_at).toLocaleDateString('fr-FR') : '—'}</td>
+                <td>
+                  <button className="btn btn-sm btn-danger" onClick={() => removeCoupon(c.code)}>
+                    Supprimer
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div
+          className="form-grid"
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginTop: 16 }}
+        >
+          <label>
+            <span>Code</span>
+            <input
+              type="text"
+              value={form.code}
+              onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
+              placeholder="MIAD10"
+            />
+          </label>
+          <label>
+            <span>Type</span>
+            <select
+              value={form.type}
+              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as 'percent' | 'fixed' }))}
+            >
+              <option value="percent">Pourcentage</option>
+              <option value="fixed">Montant fixe ($)</option>
+            </select>
+          </label>
+          <label>
+            <span>{form.type === 'percent' ? 'Pourcentage (1-100)' : 'Montant en $'}</span>
+            <input
+              type="number"
+              min="1"
+              step={form.type === 'percent' ? '1' : '0.01'}
+              value={form.amount}
+              onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+            />
+          </label>
+          <label>
+            <span>Utilisations max (0 = illimité)</span>
+            <input
+              type="number"
+              min="0"
+              value={form.max_uses}
+              onChange={(e) => setForm((f) => ({ ...f, max_uses: e.target.value }))}
+            />
+          </label>
+          <label>
+            <span>Expiration (optionnel)</span>
+            <input
+              type="date"
+              value={form.expires_at}
+              onChange={(e) => setForm((f) => ({ ...f, expires_at: e.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="form-actions" style={{ marginTop: 12 }}>
+          <button className="btn-primary" disabled={savingCoupon} onClick={saveCoupon}>
+            {savingCoupon ? 'Enregistrement…' : 'Ajouter / mettre à jour'}
+          </button>
+        </div>
+        {couponMsg && (
+          <p className="hint" style={{ marginTop: 8, fontWeight: 600 }}>
+            {couponMsg}
+          </p>
+        )}
+      </div>
+
       <EmptyState
         icon={<IconMarketing width={40} height={40} strokeWidth={1.4} />}
-        title="Coupons & fidélité à venir"
-        description="Le programme de fidélité et les coupons promotionnels (loyalty-svc) arriveront ici."
+        title="Programme de fidélité à venir"
+        description="Les points fidélité et paliers (loyalty-svc) arriveront ici."
       />
     </div>
   )
