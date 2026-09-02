@@ -16,6 +16,8 @@ function buildCSP(nonce: string): string {
     // navigateurs/outils qui le lisent, mais n'est plus requis).
     `script-src 'self' 'unsafe-inline'` +
       (dev ? " 'unsafe-eval'" : '') +
+      // Stripe recommande js.stripe.com + m.stripe.com + m.stripe.network
+      // (le PaymentElement charge du code depuis les trois).
       " https://js.stripe.com https://m.stripe.com https://m.stripe.network" +
       " https://www.gstatic.com" +
       " https://apis.google.com https://accounts.google.com" +
@@ -36,7 +38,10 @@ function buildCSP(nonce: string): string {
     // ── Connexions API ─────────────────────────────────────────────────────────
     "connect-src 'self'" +
       " https://api.miadmarket.com https://miadmarket.com https://*.miadmarket.com" +
-      " https://api.stripe.com https://q.stripe.com https://m.stripe.network" +
+      // Stripe : api (confirmPayment), r/q (télémétrie Elements — si bloquée,
+      // Elements peut ne jamais passer "ready"), m.stripe.network (fetch
+      // interne des sous-frames du PaymentElement).
+      " https://api.stripe.com https://r.stripe.com https://q.stripe.com https://m.stripe.network" +
       " https://identitytoolkit.googleapis.com https://securetoken.googleapis.com" +
       " https://fcm.googleapis.com https://firebaseinstallations.googleapis.com" +
       " https://fcmregistrations.googleapis.com https://firebase.googleapis.com" +
@@ -54,7 +59,13 @@ function buildCSP(nonce: string): string {
       " https://*.ingest.us.sentry.io https://*.ingest.sentry.io",
 
     // ── iFrames ────────────────────────────────────────────────────────────────
-    "frame-src https://js.stripe.com https://hooks.stripe.com" +
+    // Stripe : le PaymentElement (champ carte) est rendu dans une iframe
+    // servie par js.stripe.com ET par m.stripe.network (sous-frames :
+    // saisie du numéro, 3-D Secure challenge). Sans m.stripe.network ici,
+    // le champ carte reste vide et Elements ne passe jamais "ready" →
+    // l'écran "le paiement par carte ne se charge pas" (signalé 2026-09-02,
+    // ce n'était pas un bloqueur côté client mais notre propre CSP).
+    "frame-src https://js.stripe.com https://m.stripe.network https://hooks.stripe.com" +
       " https://authentification-miad.firebaseapp.com" +
       " https://accounts.google.com",
 
