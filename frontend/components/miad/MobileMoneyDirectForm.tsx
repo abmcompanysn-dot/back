@@ -10,8 +10,8 @@ import { Input } from '@/components/ui/input'
 // choisit son opérateur + saisit son numéro directement sur notre page,
 // au lieu d'être envoyé sur une page hébergée par l'agrégateur.
 //
-// Supporte DEUX agrégateurs (prop `aggregator`, déterminée côté
-// CheckoutPage.tsx par lequel est actif en Configuration) :
+// Supporte DEUX agrégateurs (prop `aggregator`, valeur INITIALE reçue de
+// CheckoutPage.tsx — le défaut global actif en Configuration) :
 // - PawaPay : schéma de requête uniforme, sélecteur pays PUIS opérateur
 //   (liste dépend du pays). Certains opérateurs (authType=REDIRECT_AUTH)
 //   exigent quand même une redirection — gérée en transparent côté
@@ -23,6 +23,19 @@ import { Input } from '@/components/ui/input'
 //   à un pays, ex. "MTN_CI"), certains exigent un OTP saisi par le
 //   client AVANT l'appel (Orange Money CI/BF), un (Wizall) a un flux à
 //   3 étapes (dépôt → OTP par SMS → confirmation séparée).
+//
+// Routage par opérateur (2026-09-02) : la commande est créée avec le
+// défaut global comme agrégateur (`aggregator` prop, figé à ce stade —
+// order-svc/payment-svc ne permettent qu'UN paiement par commande, voir
+// payment-routing.go). Mais l'admin peut régler un agrégateur différent
+// pour un opérateur précis (écran "Routage", ex. Wave forcé sur PayDunya
+// même si PawaPay est le défaut global) — jusqu'ici ce réglage n'était
+// jamais consulté par ce formulaire, donc jamais respecté (bug remonté
+// 2026-09-02). effectiveAggregator ci-dessous résout le bon agrégateur
+// PAR OPÉRATEUR SÉLECTIONNÉ via GET /api/payment-gateways/routing ; s'il
+// diffère de `aggregator` (la valeur figée à la création de commande),
+// handleSubmit appelle d'abord POST /payments/order/{id}/switch-provider
+// pour rebasculer payments.provider avant de continuer.
 
 interface MobileMoneyProvider {
   code: string
@@ -44,6 +57,20 @@ interface PaydunyaProvider {
   behavior: 'sync' | 'pending' | 'redirect'
   requires_otp: boolean
   otp_instruction: string
+}
+// RouteRow — une ligne de GET /api/payment-gateways/routing (relais de
+// payment-svc GET /payments/routing), même forme que côté admin
+// (PaymentRouting.tsx). active_aggregator est déjà résolu côté serveur
+// (override si présent, sinon défaut global) — c'est la SEULE source de
+// vérité pour savoir quel agrégateur utiliser pour un opérateur donné.
+interface RouteRow {
+  country_iso2: string
+  operator_label: string
+  pawapay_code: string | null
+  paydunya_code: string | null
+  active_aggregator: 'pawapay' | 'paydunya'
+  operator_enabled: boolean
+  country_enabled: boolean
 }
 
 // Libellés + logos pour les codes provider PawaPay (ex. ORANGE_SEN) —
@@ -100,6 +127,7 @@ const WAITING_MESSAGE_AFTER_MS = 90_000
 export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneHint, customerName, customerEmail, onSuccess, onFailure }: Props) {
   const [countries, setCountries] = useState<MobileMoneyCountry[]>([])
   const [paydunyaProviders, setPaydunyaProviders] = useState<PaydunyaProvider[]>([])
+  const [routes, setRoutes] = useState<RouteRow[]>([])
   const [countriesLoading, setCountriesLoading] = useState(true)
   const [country, setCountry] = useState(countryISO2.toUpperCase())
   const [provider, setProvider] = useState('')
@@ -116,27 +144,31 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const waitingMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Charge TOUJOURS les deux catalogues (PawaPay + PayDunya), peu importe
+  // `aggregator` — nécessaire pour fusionner en une seule liste d'opérateurs
+  // et permettre au client de choisir un opérateur dont l'agrégateur
+  // effectif (routes[].active_aggregator) diffère du défaut initial.
   useEffect(() => {
-    if (aggregator === 'pawapay') {
-      fetch('/api/payment-gateways/mobile-money-countries')
-        .then((r) => r.json())
-        .then((data) => {
-          setCountries(data.countries || [])
-          if (!data.countries?.some((c: MobileMoneyCountry) => c.iso2 === country)) {
-            setCountry(data.default_iso2 || 'SN')
-          }
-        })
-        .catch(() => {})
-        .finally(() => setCountriesLoading(false))
-    } else {
-      fetch('/api/payment-gateways/paydunya-providers')
-        .then((r) => r.json())
-        .then((data) => setPaydunyaProviders(data.providers || []))
-        .catch(() => {})
-        .finally(() => setCountriesLoading(false))
-    }
+    fetch('/api/payment-gateways/mobile-money-countries')
+      .then((r) => r.json())
+      .then((data) => {
+        setCountries(data.countries || [])
+        if (!data.countries?.some((c: MobileMoneyCountry) => c.iso2 === country)) {
+          setCountry(data.default_iso2 || 'SN')
+        }
+      })
+      .catch(() => {})
+    fetch('/api/payment-gateways/paydunya-providers')
+      .then((r) => r.json())
+      .then((data) => setPaydunyaProviders(data.providers || []))
+      .catch(() => {})
+    fetch(`/api/payment-gateways/routing?country_iso2=${countryISO2.toUpperCase()}`)
+      .then((r) => r.json())
+      .then((data) => setRoutes(data.routes || []))
+      .catch(() => {})
+      .finally(() => setCountriesLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aggregator])
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -146,26 +178,76 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
   }, [])
 
   const selectedCountry = countries.find((c) => c.iso2 === country)
-  // PawaPay : opérateurs filtrés par le pays choisi (providers_detail).
-  // PayDunya : chaque provider code EST déjà lié à un pays (ex. MTN_CI),
-  // donc filtré directement sur countryISO2 initial (pas de sélecteur
-  // pays séparé pour PayDunya — le pays de livraison déjà saisi au
-  // checkout suffit, contrairement à PawaPay où le client peut vouloir
-  // payer depuis un pays différent du pays de livraison).
-  const providers = aggregator === 'pawapay'
-    ? (selectedCountry?.providers_detail?.length
-        ? selectedCountry.providers_detail
-        : (selectedCountry?.providers || []).map((code) => ({ code, authType: '' })))
-    : paydunyaProviders.filter((p) => p.country_iso2 === countryISO2.toUpperCase()).map((p) => ({ code: p.code, authType: '' }))
-  const selectedPaydunyaProvider = aggregator === 'paydunya' ? paydunyaProviders.find((p) => p.code === provider) : null
+  // Fusion des deux catalogues en une seule liste d'opérateurs, dédupliqués
+  // par libellé normalisé (même logique que normalizeOperatorLabel côté Go
+  // — premier mot du libellé) : un opérateur supporté par les deux
+  // agrégateurs n'apparaît qu'une fois, avec son agrégateur EFFECTIF résolu
+  // via `routes` (routing par opérateur, pas le défaut global).
+  const pawapayList = (selectedCountry?.providers_detail?.length
+    ? selectedCountry.providers_detail
+    : (selectedCountry?.providers || []).map((code) => ({ code, authType: '' })))
+  const paydunyaList = paydunyaProviders.filter((p) => p.country_iso2 === countryISO2.toUpperCase())
+
+  function normalizeLabel(label: string): string {
+    return label.split(/\s+/)[0]?.toUpperCase() || label.toUpperCase()
+  }
+  function routeFor(label: string): RouteRow | undefined {
+    const key = normalizeLabel(label)
+    return routes.find((r) => normalizeLabel(r.operator_label) === key)
+  }
+
+  type MergedProvider = { code: string; authType: string; effectiveAggregator: 'pawapay' | 'paydunya'; label: string }
+  const mergedByLabel = new Map<string, MergedProvider>()
+  for (const p of pawapayList) {
+    const info = providerInfo(p.code)
+    const route = routeFor(info.label)
+    if (route && route.operator_enabled === false) continue
+    mergedByLabel.set(normalizeLabel(info.label), {
+      code: p.code,
+      authType: p.authType,
+      effectiveAggregator: route?.active_aggregator ?? 'pawapay',
+      label: info.label,
+    })
+  }
+  for (const p of paydunyaList) {
+    const key = normalizeLabel(p.label)
+    if (mergedByLabel.has(key)) continue // déjà couvert côté PawaPay
+    const route = routeFor(p.label)
+    if (route && route.operator_enabled === false) continue
+    mergedByLabel.set(key, {
+      code: p.code,
+      authType: '',
+      effectiveAggregator: route?.active_aggregator ?? 'paydunya',
+      label: p.label,
+    })
+  }
+  const providers = [...mergedByLabel.values()]
+
+  const selectedMerged = providers.find((p) => p.code === provider)
+  // Le CODE réellement utilisé pour appeler le backend dépend de
+  // l'agrégateur effectif de l'opérateur choisi, pas de `aggregator`
+  // (figé à la création de commande) — un opérateur PawaPay routé vers
+  // PayDunya doit être appelé avec son code PayDunya, pas son code
+  // PawaPay (formats différents, ex. ORANGE_SEN vs ORANGE_SN).
+  const effectiveAggregator: 'pawapay' | 'paydunya' = selectedMerged?.effectiveAggregator ?? aggregator
+  const effectiveCode = (() => {
+    if (!selectedMerged) return provider
+    if (effectiveAggregator === 'pawapay') {
+      return pawapayList.find((p) => normalizeLabel(providerInfo(p.code).label) === normalizeLabel(selectedMerged.label))?.code ?? selectedMerged.code
+    }
+    return paydunyaList.find((p) => normalizeLabel(p.label) === normalizeLabel(selectedMerged.label))?.code ?? selectedMerged.code
+  })()
+  const selectedPaydunyaProvider = effectiveAggregator === 'paydunya' ? paydunyaProviders.find((p) => p.code === effectiveCode) : null
 
   // Endpoint de statut commun aux deux agrégateurs : confirm-pawapay et
   // confirm-paydunya relisent tous deux le statut agrégé de la commande
   // depuis order-svc (déjà mis à jour par leur webhook respectif) — même
   // contrat de réponse ({status: 'pending'|'completed'|'failed'}),
-  // seul le chemin change.
+  // seul le chemin change. effectiveAggregator (pas `aggregator`, figé à
+  // la création de commande) — sinon le polling interroge le mauvais
+  // agrégateur après une bascule switch-provider.
   function startPolling() {
-    const statusEndpoint = aggregator === 'pawapay' ? 'confirm-pawapay' : 'confirm-paydunya'
+    const statusEndpoint = effectiveAggregator === 'pawapay' ? 'confirm-pawapay' : 'confirm-paydunya'
     setWaiting(true)
     setShowWaitingMessage(false)
     waitingMessageTimer.current = setTimeout(() => setShowWaitingMessage(true), WAITING_MESSAGE_AFTER_MS)
@@ -197,7 +279,7 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
       setError('Choisissez votre opérateur et saisissez votre numéro.')
       return
     }
-    if (aggregator === 'paydunya' && selectedPaydunyaProvider?.requires_otp && !otp.trim()) {
+    if (effectiveAggregator === 'paydunya' && selectedPaydunyaProvider?.requires_otp && !otp.trim()) {
       setError('Saisissez le code reçu après avoir suivi les instructions ci-dessus.')
       return
     }
@@ -206,11 +288,29 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
     try {
       const token = localStorage.getItem('miad_token') || localStorage.getItem('token')
 
-      if (aggregator === 'pawapay') {
+      // Bascule le paiement vers le bon agrégateur AVANT tout dépôt si
+      // l'opérateur choisi a un routage différent du défaut initial
+      // (`aggregator`, figé à la création de commande) — voir
+      // switch-provider côté payment-svc. Sans ça, initiateMobileMoneyDeposit/
+      // paydunyaSoftpayDepositHandler agiraient sur le mauvais provider déjà
+      // enregistré en base (bug remonté 2026-09-02, cas Wave→PayDunya).
+      if (effectiveAggregator !== aggregator) {
+        const switchRes = await fetch(`/api/orders/${orderId}/switch-payment-provider`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ provider: effectiveAggregator }),
+        })
+        if (!switchRes.ok) {
+          const switchData = await switchRes.json().catch(() => ({}))
+          throw new Error(switchData.error || "Impossible de basculer vers l'agrégateur de cet opérateur")
+        }
+      }
+
+      if (effectiveAggregator === 'pawapay') {
         const res = await fetch(`/api/orders/${orderId}/mobile-money-deposit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ provider, phone, country }),
+          body: JSON.stringify({ provider: effectiveCode, phone, country }),
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Échec du paiement')
@@ -229,7 +329,7 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
       const res = await fetch(`/api/orders/${orderId}/paydunya-softpay-deposit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ provider, phone, customerName, customerEmail, otp }),
+        body: JSON.stringify({ provider: effectiveCode, phone, customerName, customerEmail, otp }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Échec du paiement')
@@ -355,7 +455,10 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
         <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1.5 block">Opérateur</label>
         <div className="grid grid-cols-2 gap-2">
           {providers.map((p) => {
-            const info = providerInfo(p.code)
+            // p.label déjà résolu lors de la fusion — providerInfo(p.code)
+            // ne sert plus qu'au logo (même référentiel PROVIDER_INFO,
+            // indexé par préfixe de code, valable pour les deux agrégateurs).
+            const info = { ...providerInfo(p.code), label: p.label }
             return (
               <button
                 key={p.code}

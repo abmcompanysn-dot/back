@@ -387,6 +387,7 @@ func main() {
 		mux.HandleFunc("GET /payments", s.listPayments)
 		mux.HandleFunc("GET /payments/order/{order_id}", s.getPayment)
 		mux.HandleFunc("POST /payments/order/{order_id}/reverify", s.reverifyOrderPaymentHandler)
+		mux.HandleFunc("POST /payments/order/{order_id}/switch-provider", s.switchPaymentProviderHandler)
 		mux.HandleFunc("GET /payment-methods", s.listPaymentMethods)
 		mux.HandleFunc("POST /payments/webhook/stripe", s.stripeWebhook)
 		mux.HandleFunc("POST /payments/webhook/paydunya", s.paydunyaCallback)
@@ -2275,6 +2276,49 @@ func (s *server) initPayment(w http.ResponseWriter, r *http.Request) {
 		"client_secret": clientSecret, // Stripe Elements (vide pour PayDunya/PawaPay)
 		"redirect_url":  redirect,     // PayDunya (facture) ou PawaPay (Payment Page)
 	})
+}
+
+// switchPaymentProviderHandler — POST /payments/order/{order_id}/switch-provider
+// (2026-09-02). initPayment ci-dessus crée la facture de paiement (provider
+// figé) DÈS la création de commande, avant que le client ait choisi son
+// opérateur mobile money précis sur MobileMoneyDirectForm.tsx — jusqu'ici,
+// le provider retenu était toujours le défaut global (le seul agrégateur
+// actif en Configuration → Paiements), ignorant le tableau de routage par
+// opérateur (payment_routing_overrides, écran admin PaymentRouting.tsx) :
+// un client choisissant Wave (réglé sur PayDunya dans ce tableau) tombait
+// quand même sur PawaPay si c'était le défaut global (bug remonté
+// 2026-09-02, capture d'écran à l'appui).
+//
+// Cet endpoint permet au frontend, une fois l'opérateur réellement choisi,
+// de rebasculer payments.provider vers le bon agrégateur AVANT d'appeler
+// /payments/init une seconde fois (qui prendra alors la bonne branche).
+// Uniquement autorisé tant que le paiement n'a pas encore abouti — jamais
+// après un statut confirmé, pour ne pas risquer de perdre la trace d'un
+// paiement déjà traité par l'agrégateur d'origine.
+func (s *server) switchPaymentProviderHandler(w http.ResponseWriter, r *http.Request) {
+	orderID := atoi(r.PathValue("order_id"))
+	var body struct {
+		Provider string `json:"provider"` // "pawapay" | "paydunya"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.Provider != "pawapay" && body.Provider != "paydunya") {
+		kit.Fail(w, 400, "invalid_body", "provider doit être pawapay ou paydunya")
+		return
+	}
+	ctx := r.Context()
+	tag, err := s.db.Exec(ctx,
+		`UPDATE payments SET provider=$2, provider_ref='', redirect_url='', client_secret='', status='initiated'
+		 WHERE order_id=$1 AND status IN ('initiated','failed','creating')`,
+		orderID, body.Provider)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		kit.Fail(w, 409, "cannot_switch", "paiement déjà confirmé ou introuvable — impossible de changer d'agrégateur")
+		return
+	}
+	slog.Info("switchPaymentProviderHandler: agrégateur changé avant paiement", "order_id", orderID, "new_provider", body.Provider)
+	kit.JSON(w, 200, map[string]any{"order_id": orderID, "provider": body.Provider, "switched": true})
 }
 
 // paydunyaSoftpayDepositHandler — POST /payments/paydunya/softpay-deposit
