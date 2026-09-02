@@ -235,7 +235,7 @@ func (s *server) listVendorsAdmin(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
 		SELECT id, name, slug, logo_url, banner_url, country, city, phone, email,
 		       verified, rating_avg, product_count, kyc_status, kyc_documents,
-		       commission_rate, badges, suspended_until
+		       commission_rate, badges, suspended_until, created_at
 		FROM vendors %s ORDER BY id DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
@@ -254,8 +254,9 @@ func (s *server) listVendorsAdmin(w http.ResponseWriter, r *http.Request) {
 		var commissionRate *float64
 		var badgesJSON []byte
 		var suspendedUntil *time.Time
+		var createdAt time.Time
 		if err := rows.Scan(&id, &name, &slug, &logo, &banner, &country, &city, &phone, &email,
-			&verified, &rating, &count, &kycStatus, &kycDocsJSON, &commissionRate, &badgesJSON, &suspendedUntil); err != nil {
+			&verified, &rating, &count, &kycStatus, &kycDocsJSON, &commissionRate, &badgesJSON, &suspendedUntil, &createdAt); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
@@ -267,6 +268,7 @@ func (s *server) listVendorsAdmin(w http.ResponseWriter, r *http.Request) {
 		item["commission_rate"] = commissionRate
 		item["badges"] = json.RawMessage(badgesJSON)
 		item["suspended"] = suspendedUntil != nil && suspendedUntil.After(time.Now())
+		item["created_at"] = createdAt.UTC().Format(time.RFC3339)
 		items = append(items, item)
 	}
 	kit.JSON(w, 200, map[string]any{

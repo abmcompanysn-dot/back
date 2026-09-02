@@ -1047,3 +1047,44 @@ textarea:focus,
   .topbar-search { display: none; }
   .topbar-email { display: none; }
 }
+
+/* ---------- Éditeur riche (description produit) ---------- */
+.rte {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.rte-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+.rte-toolbar button {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  padding: 4px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #374151;
+}
+.rte-toolbar button:hover {
+  background: #f3f4f6;
+}
+.rte-content {
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+.rte-content:empty::before {
+  content: attr(data-placeholder);
+  color: #9aa3af;
+}
+.rte-content ul {
+  margin: 6px 0;
+  padding-left: 22px;
+}

@@ -8,6 +8,7 @@ import { VendorNav } from './VendorNav'
 interface Payout {
   id: number
   vendor_id: number
+  vendor_name?: string
   amount_usd: number
   method: string
   status: string
@@ -124,7 +125,7 @@ export function Payouts() {
             <tbody>
               {items.map((p) => (
                 <tr key={p.id}>
-                  <td>#{p.vendor_id}</td>
+                  <td>{p.vendor_name || `#${p.vendor_id}`}</td>
                   <td className="cell-primary">${p.amount_usd.toFixed(2)}</td>
                   <td>{p.method || '—'}</td>
                   <td>

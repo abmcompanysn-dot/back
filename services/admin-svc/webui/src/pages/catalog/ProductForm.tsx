@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api } from '../../lib/api'
 import { CatalogNav } from './CatalogNav'
+import { RichTextEditor } from '../../components/RichTextEditor'
 
 interface Vendor {
   id: number
@@ -626,10 +627,11 @@ export function ProductForm() {
             </div>
             <div className="form-field full">
               <label>Description détaillée</label>
-              <textarea
+              <RichTextEditor
                 rows={8}
                 value={translations.fr.description}
-                onChange={(e) => setTranslations((t) => ({ ...t, fr: { ...t.fr, description: e.target.value } }))}
+                onChange={(html) => setTranslations((t) => ({ ...t, fr: { ...t.fr, description: html } }))}
+                placeholder="Présentation du produit, matière, entretien…"
               />
             </div>
             <p className="hint form-field full">
@@ -679,7 +681,12 @@ export function ProductForm() {
               </div>
               <div className="form-field full">
                 <label>Description détaillée ({editLang.toUpperCase()})</label>
-                <textarea rows={8} value={translations[editLang].description} onChange={(e) => setTranslated('description', e.target.value)} />
+                <RichTextEditor
+                  rows={8}
+                  value={translations[editLang].description}
+                  onChange={(html) => setTranslated('description', html)}
+                  placeholder="Présentation du produit, matière, entretien…"
+                />
               </div>
               {editLang === 'en' && !productIDs.en && (
                 <p className="hint">

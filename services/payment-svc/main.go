@@ -820,7 +820,15 @@ func (s *server) listPayoutRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	items := []map[string]any{}
+	type row struct {
+		id, vendorID         int64
+		amount               float64
+		method, status, note string
+		createdAt            time.Time
+		processedAt          *time.Time
+	}
+	var scanned []row
+	vendorIDs := map[int64]bool{}
 	for rows.Next() {
 		var id, vendorID int64
 		var amount float64
@@ -831,14 +839,26 @@ func (s *server) listPayoutRequests(w http.ResponseWriter, r *http.Request) {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
+		scanned = append(scanned, row{id, vendorID, amount, method, status, adminNote, createdAt, processedAt})
+		if vendorID > 0 {
+			vendorIDs[vendorID] = true
+		}
+	}
+	// Nom de boutique en un seul appel batch — la liste affichait "#40"
+	// faute de jointure (revue UX 2026-09-02).
+	vendorNames := fetchVendorNamesBatch(r.Context(), s.vendorURL, vendorIDs)
+
+	items := []map[string]any{}
+	for _, l := range scanned {
 		var processedStr any
-		if processedAt != nil {
-			processedStr = processedAt.UTC().Format(time.RFC3339)
+		if l.processedAt != nil {
+			processedStr = l.processedAt.UTC().Format(time.RFC3339)
 		}
 		items = append(items, map[string]any{
-			"id": id, "vendor_id": vendorID, "amount_usd": amount, "method": method,
-			"status": status, "admin_note": adminNote,
-			"created_at": createdAt.UTC().Format(time.RFC3339), "processed_at": processedStr,
+			"id": l.id, "vendor_id": l.vendorID, "vendor_name": vendorNames[l.vendorID],
+			"amount_usd": l.amount, "method": l.method,
+			"status": l.status, "admin_note": l.note,
+			"created_at": l.createdAt.UTC().Format(time.RFC3339), "processed_at": processedStr,
 		})
 	}
 	kit.JSON(w, 200, map[string]any{
@@ -2055,6 +2075,35 @@ func fetchParentOrder(ctx context.Context, orderURL string, parentID int64) (*or
 		return nil, fmt.Errorf("total agrégé illisible: %q", out.Total)
 	}
 	return &orderSummary{TotalUSD: total}, nil
+}
+
+// fetchVendorNamesBatch — un GET /vendors/{id} par boutique distincte (pas
+// de vraie route batch côté vendor-svc), mais dédupliqué et appelé UNE
+// fois par page de résultats plutôt qu'à la volée par ligne d'affichage.
+// Best effort : une boutique injoignable est simplement absente de la
+// map, le frontend retombe alors sur "#<id>".
+func fetchVendorNamesBatch(ctx context.Context, vendorURL string, vendorIDs map[int64]bool) map[int64]string {
+	names := map[int64]string{}
+	for vendorID := range vendorIDs {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendors/%d", vendorURL, vendorID), nil)
+		if err != nil {
+			continue
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode == http.StatusOK {
+			var v struct {
+				StoreName string `json:"store_name"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&v) == nil {
+				names[vendorID] = v.StoreName
+			}
+		}
+		resp.Body.Close()
+	}
+	return names
 }
 
 func fetchVendorCommissionRate(ctx context.Context, vendorURL string, vendorID int64) (*float64, error) {

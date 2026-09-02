@@ -154,11 +154,11 @@ func main() {
 		fulfillmentURL:  kit.Env("FULFILLMENT_SVC_URL", "http://fulfillment-svc:8090"),
 		loyaltyURL:      kit.Env("LOYALTY_SVC_URL", "http://loyalty-svc:8091"),
 
-		jwtSecretStr:    kit.Env("JWT_SECRET", "change-me"),
-		minioEndpoint:   kit.Env("MINIO_ENDPOINT", "minio:9000"),
-		minioRootUser:   kit.Env("MINIO_ROOT_USER", ""),
-		minioRootPass:   kit.Env("MINIO_ROOT_PASSWORD", ""),
-		minioBucket:     kit.Env("MINIO_BUCKET", "miad-media"),
+		jwtSecretStr:     kit.Env("JWT_SECRET", "change-me"),
+		minioEndpoint:    kit.Env("MINIO_ENDPOINT", "minio:9000"),
+		minioRootUser:    kit.Env("MINIO_ROOT_USER", ""),
+		minioRootPass:    kit.Env("MINIO_ROOT_PASSWORD", ""),
+		minioBucket:      kit.Env("MINIO_BUCKET", "miad-media"),
 		mediaBaseURLStr:  kit.Env("MEDIA_BASE_URL", "https://img.miadmarket.ca"),
 		metaPixelIDStr:   kit.Env("META_PIXEL_ID", ""),
 		metaCapiTokenStr: kit.Env("META_CAPI_TOKEN", ""),
@@ -681,6 +681,51 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 // customers sans email (compte téléphone seul) ne peuvent pas être
 // croisés avec admins/representatives (les deux sont identifiés par
 // email) — restent seuls sur leur ligne, rôle "customer" uniquement.
+// dialCodeToCountry — indicatif téléphonique -> ISO alpha-2. Miroir de
+// COUNTRY_DIAL_CODES (frontend/lib/shipping-utils.ts), inversé et
+// restreint aux indicatifs non ambigus (ex. +1 partagé US/CA/etc. exclu
+// volontairement — mieux vaut un tiret qu'un mauvais pays affiché). Triés
+// du plus long au plus court à l'usage (countryFromPhone) pour que +221
+// ne soit jamais confondu avec un préfixe plus court inexistant ici.
+var dialCodeToCountry = map[string]string{
+	"+221": "SN", "+229": "BJ", "+225": "CI", "+228": "TG", "+237": "CM", "+234": "NG",
+	"+241": "GA", "+242": "CG", "+243": "CD", "+223": "ML", "+227": "NE", "+226": "BF",
+	"+224": "GN", "+245": "GW", "+222": "MR", "+220": "GM", "+232": "SL", "+231": "LR",
+	"+238": "CV", "+239": "ST", "+240": "GQ", "+235": "TD", "+236": "CF", "+213": "DZ",
+	"+212": "MA", "+216": "TN", "+218": "LY", "+20": "EG", "+249": "SD", "+254": "KE",
+	"+255": "TZ", "+256": "UG", "+250": "RW", "+257": "BI", "+251": "ET", "+27": "ZA",
+	"+244": "AO", "+258": "MZ", "+260": "ZM", "+263": "ZW", "+264": "NA", "+265": "MW",
+	"+33": "FR", "+32": "BE", "+49": "DE", "+31": "NL", "+39": "IT", "+34": "ES",
+	"+44": "GB", "+351": "PT", "+41": "CH", "+352": "LU", "+971": "AE", "+966": "SA",
+}
+
+// countryFromPhone — dérive un pays depuis un numéro au format libre
+// (+221771234567, 00221771234567, 221771234567…). Comparaison sur le
+// préfixe normalisé, indicatifs à 3 chiffres testés avant ceux à 2 pour
+// ne jamais faire correspondre +33x sur un +3xx à tort. Chaîne vide si
+// aucune correspondance ou numéro absent — jamais un pays inventé.
+func countryFromPhone(phone string) string {
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, phone)
+	digits = strings.TrimPrefix(digits, "00")
+	if digits == "" {
+		return ""
+	}
+	for _, length := range []int{3, 2} {
+		if len(digits) < length {
+			continue
+		}
+		if cc, ok := dialCodeToCountry["+"+digits[:length]]; ok {
+			return cc
+		}
+	}
+	return ""
+}
+
 func (s *server) listUnifiedUsers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	auth := r.Header.Get("Authorization")
@@ -712,6 +757,13 @@ func (s *server) listUnifiedUsers(w http.ResponseWriter, r *http.Request) {
 				r.Phone, _ = c["phone"].(string)
 				r.Name, _ = c["full_name"].(string)
 				r.CreatedAt, _ = c["created_at"].(string)
+				// Pays déduit de l'indicatif téléphonique — customers n'a pas
+				// de champ pays propre (l'adresse de livraison, si connue,
+				// vit dans un JSON libre côté order-svc, pas ici). Colonne
+				// PAYS systématiquement vide dans l'écran Utilisateurs
+				// (revue UX 2026-09-02) : mieux vaut une estimation issue du
+				// numéro qu'un tiret permanent.
+				r.Country = countryFromPhone(r.Phone)
 				if vid, ok := c["vendor_id"]; ok {
 					r.VendorID = vid
 					r.Roles = append(r.Roles, "vendor")

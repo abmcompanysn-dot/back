@@ -10,7 +10,9 @@ interface Order {
   id: number
   reference: string
   customer_id: number
+  customer_name?: string
   vendor_id: number
+  vendor_name?: string
   status: string
   total_usd: number
   payment_method: string
@@ -156,8 +158,8 @@ export function AllOrders({ fixedStatuses, title, subtitle }: Props) {
                   {items.map((o) => (
                     <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/admin/orders/${o.id}`)}>
                       <td className="cell-primary">{o.reference}</td>
-                      <td>#{o.customer_id}</td>
-                      <td>#{o.vendor_id}</td>
+                      <td>{o.customer_name || `#${o.customer_id}`}</td>
+                      <td>{o.vendor_name || `#${o.vendor_id}`}</td>
                       <td className="cell-secondary">{o.payment_method || '—'}</td>
                       <td className="cell-primary">${o.total_usd.toFixed(2)}</td>
                       <td>

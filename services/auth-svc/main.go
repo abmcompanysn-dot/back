@@ -228,6 +228,7 @@ func main() {
 		mux.HandleFunc("GET /admins", s.listAdmins)                                      // role admin exigé
 		mux.HandleFunc("GET /internal/admin-emails", s.listAdminEmails)                  // secret interne exigé
 		mux.HandleFunc("GET /internal/customer-emails", s.listCustomerEmails)            // secret interne exigé
+		mux.HandleFunc("GET /internal/customer-names", s.listCustomerNames)              // secret interne exigé
 		mux.HandleFunc("POST /admins", s.createAdmin)                                    // role admin exigé
 		mux.HandleFunc("PATCH /admins/{id}/active", s.setAdminActive)                    // role admin exigé
 		mux.HandleFunc("PATCH /admins/{id}/role", s.setAdminRole)                        // role admin exigé
@@ -386,9 +387,9 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	})
 	kit.JSON(w, 200, map[string]any{
 		"totp_setup_required": totpSetupRequired,
-		"session": map[string]string{"jwt": jwt, "expires_at": expires},
-		"role":    role,
-		"email":   body.Email,
+		"session":             map[string]string{"jwt": jwt, "expires_at": expires},
+		"role":                role,
+		"email":               body.Email,
 	})
 }
 
@@ -1286,6 +1287,70 @@ func (s *server) listCustomerEmails(w http.ResponseWriter, r *http.Request) {
 		"items": items, "page": page, "page_size": pageSize,
 		"total": total, "has_more": int64(page*pageSize) < total,
 	})
+}
+
+// listCustomerNames — GET /internal/customer-names?ids=1,2,3. Batch de
+// noms/emails pour les écrans admin qui affichaient un ID brut (« Client
+// #231 », commandes/payouts avec vendor_id/customer_id nus, revue UX
+// 2026-09-02) faute de jointure. Un seul aller-retour DB pour toute une
+// page de résultats plutôt qu'un appel par ligne. Protégé par le secret
+// interne, comme listCustomerEmails.
+func (s *server) listCustomerNames(w http.ResponseWriter, r *http.Request) {
+	if s.internalAPISecretStr == "" || r.Header.Get("X-Internal-Secret") != s.internalAPISecretStr {
+		kit.Fail(w, 401, "unauthorized", "secret interne invalide ou absent")
+		return
+	}
+	idsParam := r.URL.Query().Get("ids")
+	if idsParam == "" {
+		kit.JSON(w, 200, map[string]any{"customers": map[string]any{}})
+		return
+	}
+	var ids []int64
+	for _, part := range strings.Split(idsParam, ",") {
+		if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil && id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		kit.JSON(w, 200, map[string]any{"customers": map[string]any{}})
+		return
+	}
+	rows, err := s.db.Query(r.Context(),
+		"SELECT id, full_name, email, phone FROM customers WHERE id = ANY($1)", ids)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := map[string]any{}
+	for rows.Next() {
+		var id int64
+		var name, email, phone *string
+		if err := rows.Scan(&id, &name, &email, &phone); err != nil {
+			continue
+		}
+		display := ""
+		if name != nil && *name != "" {
+			display = *name
+		} else if email != nil {
+			display = *email
+		} else if phone != nil {
+			display = *phone
+		}
+		out[strconv.FormatInt(id, 10)] = map[string]any{
+			"full_name": display,
+			"email":     derefOr(email, ""),
+			"phone":     derefOr(phone, ""),
+		}
+	}
+	kit.JSON(w, 200, map[string]any{"customers": out})
+}
+
+func derefOr(s *string, fallback string) string {
+	if s == nil {
+		return fallback
+	}
+	return *s
 }
 
 // getCustomer — fiche complète (module Utilisateurs) : email/phone sont

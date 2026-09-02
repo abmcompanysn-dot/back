@@ -145,13 +145,15 @@ CREATE INDEX IF NOT EXISTS idx_returns_order ON returns (order_id);
 `
 
 type server struct {
-	db          *pgxpool.Pool
-	kafka       sarama.SyncProducer
-	timeout     time.Duration
-	shippingURL string
-	catalogURL  string // restock au moment de l'annulation (module Commandes)
-	vendorURL   string // résolution du taux de commission par vendeur (module Commandes §1.2.A)
-	paymentURL  string // re-vérification avant expiration (expireUnpaidLoop)
+	db             *pgxpool.Pool
+	kafka          sarama.SyncProducer
+	timeout        time.Duration
+	shippingURL    string
+	catalogURL     string // restock au moment de l'annulation (module Commandes)
+	vendorURL      string // résolution du taux de commission par vendeur (module Commandes §1.2.A)
+	paymentURL     string // re-vérification avant expiration (expireUnpaidLoop)
+	authURL        string // noms clients (module Commandes — écran admin, plus d'ID brut)
+	internalSecret string
 
 	settings *kit.SettingsStore
 	// platformCommissionRate : taux plateforme par défaut si le vendeur n'a
@@ -204,13 +206,15 @@ func main() {
 
 	mins, _ := strconv.Atoi(kit.Env("PAYMENT_TIMEOUT_MINUTES", "30"))
 	s := &server{
-		db:          db,
-		kafka:       kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
-		timeout:     time.Duration(mins) * time.Minute,
-		shippingURL: kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
-		catalogURL:  kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
-		vendorURL:   kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
-		paymentURL:  kit.Env("PAYMENT_SVC_URL", "http://payment-svc:8084"),
+		db:             db,
+		kafka:          kit.NewProducer(kit.Env("KAFKA_BROKERS", "kafka:9092")),
+		timeout:        time.Duration(mins) * time.Minute,
+		shippingURL:    kit.Env("SHIPPING_SVC_URL", "http://shipping-svc:8085"),
+		catalogURL:     kit.Env("CATALOG_SVC_URL", "http://catalog-svc:8081"),
+		vendorURL:      kit.Env("VENDOR_SVC_URL", "http://vendor-svc:8082"),
+		paymentURL:     kit.Env("PAYMENT_SVC_URL", "http://payment-svc:8084"),
+		authURL:        kit.Env("AUTH_SVC_URL", "http://auth-svc:8086"),
+		internalSecret: kit.Env("INTERNAL_API_SECRET", ""),
 
 		platformCommissionRate: kit.Env("PLATFORM_COMMISSION_RATE", "0.10"),
 	}
@@ -466,7 +470,15 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	items := []map[string]any{}
+	type row struct {
+		id, cust, vendor, pid                                       int64
+		ref, status, paymentStatus, fulfillmentStage, paymentMethod string
+		total                                                       float64
+		at                                                          time.Time
+	}
+	var scanned []row
+	custIDs := map[int64]bool{}
+	vendorIDs := map[int64]bool{}
 	for rows.Next() {
 		var id, cust, vendor int64
 		var parentID *int64
@@ -482,12 +494,31 @@ func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
 		if parentID != nil {
 			pid = *parentID
 		}
+		scanned = append(scanned, row{id, cust, vendor, pid, ref, status, paymentStatus, fulfillmentStage, paymentMethod, total, at})
+		if cust > 0 {
+			custIDs[cust] = true
+		}
+		if vendor > 0 {
+			vendorIDs[vendor] = true
+		}
+	}
+
+	// Noms client/boutique en 2 appels batch (pas un par ligne) — écrans
+	// admin (Commandes, Payouts) affichaient "#231"/"#40" faute de
+	// jointure (revue UX 2026-09-02). Best effort : un nom manquant
+	// retombe silencieusement sur l'id côté frontend, jamais une erreur.
+	custNames := s.fetchCustomerNames(r.Context(), custIDs)
+	vendorNames := s.fetchVendorNames(r.Context(), vendorIDs)
+
+	items := []map[string]any{}
+	for _, l := range scanned {
 		items = append(items, map[string]any{
-			"id": id, "reference": ref, "customer_id": cust, "vendor_id": vendor,
-			"parent_order_id": pid,
-			"status":          status, "payment_status": paymentStatus, "fulfillment_stage": fulfillmentStage,
-			"total_usd": total, "payment_method": paymentMethod,
-			"created_at": at.UTC().Format(time.RFC3339),
+			"id": l.id, "reference": l.ref, "customer_id": l.cust, "vendor_id": l.vendor,
+			"customer_name": custNames[l.cust], "vendor_name": vendorNames[l.vendor],
+			"parent_order_id": l.pid,
+			"status":          l.status, "payment_status": l.paymentStatus, "fulfillment_stage": l.fulfillmentStage,
+			"total_usd": l.total, "payment_method": l.paymentMethod,
+			"created_at": l.at.UTC().Format(time.RFC3339),
 		})
 	}
 	kit.JSON(w, 200, map[string]any{
@@ -799,6 +830,50 @@ func (s *server) fetchProductImagesForLines(ctx context.Context, lineItems []map
 // fetchVendorNames — un appel GET /vendors/{id} par vendeur distinct (peu
 // de vendeurs par commande en pratique, contrairement aux N produits).
 // Best effort : vendeur introuvable → nom absent pour ce vendor_id.
+// fetchCustomerNames — un seul appel batch vers auth-svc
+// GET /internal/customer-names?ids=1,2,3 (secret interne). Écrans admin
+// (Commandes, Payouts…) affichaient auparavant "Client #231" faute de
+// jointure — voir aussi fetchVendorNames juste en dessous, même intention
+// côté boutiques (revue UX 2026-09-02).
+func (s *server) fetchCustomerNames(ctx context.Context, customerIDs map[int64]bool) map[int64]string {
+	names := map[int64]string{}
+	if len(customerIDs) == 0 || s.internalSecret == "" {
+		return names
+	}
+	ids := make([]string, 0, len(customerIDs))
+	for id := range customerIDs {
+		ids = append(ids, strconv.FormatInt(id, 10))
+	}
+	url := fmt.Sprintf("%s/internal/customer-names?ids=%s", s.authURL, strings.Join(ids, ","))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return names
+	}
+	req.Header.Set("X-Internal-Secret", s.internalSecret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return names
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return names
+	}
+	var body struct {
+		Customers map[string]struct {
+			FullName string `json:"full_name"`
+		} `json:"customers"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&body) != nil {
+		return names
+	}
+	for idStr, c := range body.Customers {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+			names[id] = c.FullName
+		}
+	}
+	return names
+}
+
 func (s *server) fetchVendorNames(ctx context.Context, vendorIDs map[int64]bool) map[int64]string {
 	names := map[int64]string{}
 	for vendorID := range vendorIDs {
