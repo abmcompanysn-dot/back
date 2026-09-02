@@ -57,7 +57,26 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'Commande introuvable' }, { status: res.status })
     }
     const data = await res.json()
-    if (String(data.customer_id) !== String(user.sub)) {
+
+    // Vérification d'appartenance. getParentOrder expose customer_id depuis
+    // le 2026-09-01 — mais si le backend order-svc n'a pas encore été
+    // redéployé, ce champ est absent : on retombe alors sur la liste des
+    // commandes du client (elle contient parent_order_id) pour confirmer
+    // que ce parent lui appartient. Jamais de bypass : sans preuve
+    // d'appartenance → 404.
+    let owned = data.customer_id != null && String(data.customer_id) === String(user.sub)
+    if (data.customer_id == null) {
+      try {
+        const listRes = await fetch(`${ORDER_SVC_URL}/orders?customer_id=${user.sub}&page_size=100`, { cache: 'no-store' })
+        if (listRes.ok) {
+          const list = await listRes.json()
+          owned = (list.items || []).some(
+            (o: any) => String(o.parent_order_id || o.id) === String(id)
+          )
+        }
+      } catch { /* owned reste false → 404 ci-dessous */ }
+    }
+    if (!owned) {
       // Ne pas révéler l'existence de la commande à un tiers.
       return NextResponse.json({ error: 'Commande introuvable' }, { status: 404 })
     }
