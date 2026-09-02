@@ -33,6 +33,7 @@ import { AllOrders } from './pages/orders/AllOrders'
 import { OrderDetail } from './pages/orders/OrderDetail'
 import { Returns } from './pages/orders/Returns'
 import { FinanceOverview } from './pages/finance/FinanceOverview'
+import { PaymentsAll } from './pages/finance/PaymentsAll'
 import { Transactions } from './pages/finance/Transactions'
 import { Gateways } from './pages/finance/Gateways'
 
@@ -99,6 +100,7 @@ function AppRoutes() {
         <Route path="users/roles" element={<AdminRoles />} />
         <Route path="payments" element={<Navigate to="/admin/finance" replace />} />
         <Route path="finance" element={<FinanceOverview />} />
+        <Route path="finance/payments" element={<PaymentsAll />} />
         <Route path="finance/transactions" element={<Transactions />} />
         <Route path="finance/gateways" element={<Gateways />} />
         <Route path="shipping" element={<Shipping />} />

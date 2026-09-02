@@ -2417,20 +2417,31 @@ func (s *server) paydunyaWizallConfirmHandler(w http.ResponseWriter, r *http.Req
 	kit.JSON(w, 200, map[string]any{"success": result.Success, "message": result.Message})
 }
 
+// listPayments — GET /payments (admin uniquement, relayé par admin-svc
+// GET /admin/api/payments). ?status=confirmed|initiated|failed filtre le
+// résultat — ajouté 2026-09-02 avec provider_ref/failure_code/confirmed_at
+// (jusque-là absents de la réponse) pour la page Paiements du back-office,
+// qui répond à "est-ce que l'argent d'une commande est vraiment arrivé ?".
 func (s *server) listPayments(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page"), "1"))
 	pageSize, _ := strconv.Atoi(kit.EnvOr(r.URL.Query().Get("page_size"), "20"))
 	if page < 1 {
 		page = 1
 	}
+	where := ""
+	args := []any{}
+	if v := r.URL.Query().Get("status"); v != "" {
+		args = append(args, v)
+		where = fmt.Sprintf(" WHERE status = $%d", len(args))
+	}
 	var total int64
-	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM payments").Scan(&total); err != nil {
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM payments"+where, args...).Scan(&total); err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, order_id, provider, amount_usd, status, method, created_at FROM payments
-		ORDER BY id DESC LIMIT `+strconv.Itoa(pageSize)+` OFFSET `+strconv.Itoa((page-1)*pageSize))
+	query := `SELECT id, order_id, provider, provider_ref, amount_usd, status, method, failure_code, created_at, confirmed_at
+		FROM payments` + where + ` ORDER BY id DESC LIMIT ` + strconv.Itoa(pageSize) + ` OFFSET ` + strconv.Itoa((page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -2440,14 +2451,21 @@ func (s *server) listPayments(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, orderID int64
 		var amount float64
-		var provider, status, method string
+		var provider, ref, status, method, failureCode string
 		var at time.Time
-		_ = rows.Scan(&id, &orderID, &provider, &amount, &status, &method, &at)
-		items = append(items, map[string]any{
-			"id": id, "order_id": orderID, "provider": provider,
+		var confirmedAt *time.Time
+		_ = rows.Scan(&id, &orderID, &provider, &ref, &amount, &status, &method, &failureCode, &at, &confirmedAt)
+		item := map[string]any{
+			"id": id, "order_id": orderID, "provider": provider, "provider_ref": ref,
 			"amount_usd": amount, "currency": "USD", "status": status, "method": method,
-			"created_at": at.UTC().Format(time.RFC3339),
-		})
+			"failure_code": failureCode, "created_at": at.UTC().Format(time.RFC3339),
+		}
+		if confirmedAt != nil {
+			item["confirmed_at"] = confirmedAt.UTC().Format(time.RFC3339)
+		} else {
+			item["confirmed_at"] = nil
+		}
+		items = append(items, item)
 	}
 	kit.JSON(w, 200, map[string]any{
 		"items": items, "page": page, "page_size": pageSize,
