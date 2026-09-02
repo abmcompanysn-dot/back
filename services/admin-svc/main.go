@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -100,6 +101,13 @@ type server struct {
 	minioRootPass   string
 	minioBucket     string
 	mediaBaseURLStr string
+	// Marketing / tracking publicitaire — lus par le frontend via
+	// GET /admin/api/marketing-config (public, non authentifié : le pixel
+	// ID n'est pas un secret). Le token CAPI, lui, est secret et n'est
+	// JAMAIS renvoyé par cet endpoint (voir marketingConfigPublic).
+	metaPixelIDStr   string
+	metaCapiTokenStr string
+	gaMeasurementID  string
 }
 
 func (s *server) settingsFields() []kit.SettingsField {
@@ -110,6 +118,9 @@ func (s *server) settingsFields() []kit.SettingsField {
 		{Key: "minio_root_password", Ptr: &s.minioRootPass, Secret: true, Description: "Mot de passe root MinIO — un redémarrage du service est nécessaire après modification"},
 		{Key: "minio_bucket", Ptr: &s.minioBucket, Description: "Nom du bucket S3/MinIO utilisé pour stocker les médias — un redémarrage du service est nécessaire après modification"},
 		{Key: "media_base_url", Ptr: &s.mediaBaseURLStr, Description: "URL publique de base servie pour les médias uploadés (CDN devant MinIO) — un redémarrage du service est nécessaire après modification"},
+		{Key: "meta_pixel_id", Ptr: &s.metaPixelIDStr, Description: "ID du Pixel Meta (Facebook/Instagram) — chiffres uniquement. Injecté côté frontend au runtime, modifiable à chaud."},
+		{Key: "meta_capi_token", Ptr: &s.metaCapiTokenStr, Secret: true, Description: "Token de la Conversions API Meta (Events Manager → Paramètres → Générer un token d'accès). Utilisé serveur-à-serveur, jamais exposé au navigateur."},
+		{Key: "ga_measurement_id", Ptr: &s.gaMeasurementID, Description: "ID de mesure Google Analytics 4 (format G-XXXXXXXXXX). Optionnel."},
 	}
 }
 
@@ -148,7 +159,10 @@ func main() {
 		minioRootUser:   kit.Env("MINIO_ROOT_USER", ""),
 		minioRootPass:   kit.Env("MINIO_ROOT_PASSWORD", ""),
 		minioBucket:     kit.Env("MINIO_BUCKET", "miad-media"),
-		mediaBaseURLStr: kit.Env("MEDIA_BASE_URL", "https://img.miadmarket.ca"),
+		mediaBaseURLStr:  kit.Env("MEDIA_BASE_URL", "https://img.miadmarket.ca"),
+		metaPixelIDStr:   kit.Env("META_PIXEL_ID", ""),
+		metaCapiTokenStr: kit.Env("META_CAPI_TOKEN", ""),
+		gaMeasurementID:  kit.Env("GA_MEASUREMENT_ID", ""),
 	}
 	s.settings = kit.NewSettingsStore(db, settingsTable, s.settingsFields())
 	if err := s.settings.Load(ctx); err != nil {
@@ -178,6 +192,16 @@ func main() {
 		// (voir /admin/api/dhl/settings), pas dupliqué ici.
 		mux.HandleFunc("GET /admin/api/settings", s.requireAdmin(s.getLocalSettings))
 		mux.HandleFunc("PUT /admin/api/settings", s.requireAdmin(s.putLocalSettings))
+		// Config marketing PUBLIQUE (pas de requireAdmin) : le frontend
+		// l'appelle au runtime pour injecter le Pixel Meta / GA. Ne renvoie
+		// QUE les identifiants non sensibles (pixel id, GA id) — jamais le
+		// token CAPI. Le frontend la proxifie via /api/marketing-config.
+		mux.HandleFunc("GET /admin/api/marketing-config", s.marketingConfigPublic)
+		// Conversions API Meta — relais serveur-à-serveur. Le frontend
+		// (route /api/meta/capi) POST ici avec le secret interne ; admin-svc
+		// ajoute le token CAPI stocké et transmet à graph.facebook.com. Le
+		// token ne quitte jamais ce service.
+		mux.HandleFunc("POST /admin/api/meta/capi", s.metaCapiForward)
 		mux.HandleFunc("GET /admin/api/settings/{service}", s.requireAdmin(s.proxySettingsGet))
 		mux.HandleFunc("PUT /admin/api/settings/{service}", s.requireAdmin(s.proxySettingsPut))
 		mux.HandleFunc("GET /admin/api/overview", s.requireAdmin(s.overview))
@@ -797,6 +821,56 @@ func (s *server) systemCheck(w http.ResponseWriter, r *http.Request) {
 // propres à admin-svc lui-même (JWT_SECRET, MinIO/média).
 func (s *server) getLocalSettings(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, s.settings.Snapshot())
+}
+
+// metaCapiForward — POST /admin/api/meta/capi. Relais serveur-à-serveur
+// vers la Conversions API Meta. Le frontend (route Next /api/meta/capi)
+// appelle ici avec l'en-tête X-Internal-Secret ; on ajoute le token CAPI
+// stocké (jamais exposé au navigateur) et on transmet le corps tel quel à
+// graph.facebook.com/v19.0/{pixel_id}/events.
+func (s *server) metaCapiForward(w http.ResponseWriter, r *http.Request) {
+	secret := kit.Env("INTERNAL_API_SECRET", "")
+	if secret == "" || r.Header.Get("X-Internal-Secret") != secret {
+		kit.Fail(w, 401, "unauthorized", "secret interne requis")
+		return
+	}
+	if s.metaCapiTokenStr == "" || s.metaPixelIDStr == "" {
+		kit.Fail(w, 503, "capi_not_configured", "meta_pixel_id ou meta_capi_token absent — configurer dans Marketing")
+		return
+	}
+	body, _ := io.ReadAll(r.Body)
+	url := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/events?access_token=%s",
+		s.metaPixelIDStr, s.metaCapiTokenStr)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		kit.Fail(w, 500, "request_error", err.Error())
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		kit.Fail(w, 502, "meta_unreachable", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(out)
+}
+
+// marketingConfigPublic — GET /admin/api/marketing-config (NON authentifié).
+// Le frontend l'appelle au runtime (via /api/marketing-config) pour savoir
+// s'il doit injecter le Pixel Meta / GA et avec quel id. Ne renvoie que les
+// identifiants publics par nature (visibles dans le code client de toute
+// façon) ; le token CAPI reste côté serveur, jamais ici.
+func (s *server) marketingConfigPublic(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	kit.JSON(w, 200, map[string]any{
+		"meta_pixel_id":     s.metaPixelIDStr,
+		"ga_measurement_id": s.gaMeasurementID,
+		"capi_enabled":      s.metaCapiTokenStr != "",
+	})
 }
 
 func (s *server) putLocalSettings(w http.ResponseWriter, r *http.Request) {

@@ -72,6 +72,9 @@ const nextConfig = {
       // fichier statique) — la route reelle est /merchant-feed, exposee a
       // Google Merchant Center sous l'URL .xml attendue via cette reecriture.
       { source: '/merchant-feed.xml', destination: '/merchant-feed' },
+      // Flux Facebook / Instagram Catalogue — même contrainte "." que
+      // ci-dessus, mêmes raisons.
+      { source: '/facebook-feed.xml', destination: '/facebook-feed' },
     ]
   },
   images: {

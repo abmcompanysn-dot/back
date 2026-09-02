@@ -22,7 +22,12 @@ function buildCSP(nonce: string): string {
       " https://www.gstatic.com" +
       " https://apis.google.com https://accounts.google.com" +
       " https://app.paydunya.com https://sandbox.paydunya.com" +
-      " https://static.cloudflareinsights.com",
+      " https://static.cloudflareinsights.com" +
+      // Pixel Meta (Facebook/Instagram) + Google Analytics / Tag Manager.
+      // Chargés au runtime seulement si configurés en back-office (page
+      // Marketing) — voir components/analytics/MarketingScripts.tsx.
+      " https://connect.facebook.net" +
+      " https://www.googletagmanager.com https://www.google-analytics.com",
 
     // ── Styles ─────────────────────────────────────────────────────────────────
     "style-src 'self' 'unsafe-inline'",
@@ -30,7 +35,9 @@ function buildCSP(nonce: string): string {
     // ── Images ─────────────────────────────────────────────────────────────────
     "img-src 'self' data: blob: https:" +
       " https://pub-5830f37957e94da4a6855da37b632a3a.r2.dev" +
-      " https://secure.gravatar.com https://flagcdn.com",
+      " https://secure.gravatar.com https://flagcdn.com" +
+      // pixels de tracking (image 1×1) Meta / GA
+      " https://www.facebook.com https://www.google-analytics.com",
 
     // ── Polices ────────────────────────────────────────────────────────────────
     "font-src 'self' data:",
@@ -56,7 +63,10 @@ function buildCSP(nonce: string): string {
       // Sentry (suivi des erreurs) — l'endpoint d'ingestion du projet. Sans
       // cette entrée, la CSP bloque silencieusement tous les envois et
       // aucune erreur n'arrive dans Sentry.
-      " https://*.ingest.us.sentry.io https://*.ingest.sentry.io",
+      " https://*.ingest.us.sentry.io https://*.ingest.sentry.io" +
+      // Pixel Meta (fbevents.js POST vers facebook.com) + GA collect.
+      " https://connect.facebook.net https://www.facebook.com" +
+      " https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com",
 
     // ── iFrames ────────────────────────────────────────────────────────────────
     // Stripe : le PaymentElement (champ carte) est rendu dans une iframe

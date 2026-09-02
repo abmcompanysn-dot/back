@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import useSWRInfinite from 'swr/infinite'
 import { trackEvent } from '@/lib/analytics'
+import { mktViewContent, mktAddToCart, mktInitiateCheckout, mktSearch } from '@/lib/marketing-events'
 import { Header } from '@/components/miad/Header'
 import { HomePage, TopVendorsStrip, VendorCTA } from '@/components/miad/HomePage'
 import { HomeCategoryTabs } from '@/components/miad/HomeCategoryTabs'
@@ -733,6 +734,12 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     trackEvent('page_view')
     if (currentView === 'checkout') {
       trackEvent('checkout_start', { metadata: { cart: cart.map(i => ({ id: i.product.id, name: i.product.name, qty: i.quantity, price: i.product.price })) } })
+      mktInitiateCheckout({
+        value: cart.reduce((s, i) => s + (Number(i.variation?.price || i.product.price) || 0) * i.quantity, 0),
+        numItems: cart.reduce((s, i) => s + i.quantity, 0),
+        contentIds: cart.map(i => String(i.product.id)),
+        currency: cart[0]?.product.currency,
+      })
     }
   }, [currentView])
 
@@ -867,6 +874,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
 
   const handleProductClick = useCallback((p: WooProduct) => {
     trackEvent('product_view', { productId: p.id })
+    mktViewContent({ id: p.id, name: p.name, price: Number(p.price) || undefined, currency: p.currency })
     if (currentView === 'product' && selectedProduct?.id !== p.id) {
       // produit → produit : on pousse manuellement dans la pile
       navStack.current.push({
@@ -1491,7 +1499,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   // affiner la requete en restant sur la vue recherche ne doit pas empiler
   // une entree d'historique par frappe.
   const handleSearch = (query: string) => {
-    if (query.trim()) trackEvent('search', { searchQuery: query.trim() })
+    if (query.trim()) { trackEvent('search', { searchQuery: query.trim() }); mktSearch(query.trim()) }
     setSearchQuery(query)
     if (currentView !== 'search') navigateTo('search')
   }
@@ -1537,6 +1545,11 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         added: { id: product.id, name: product.name, qty: quantity },
         cart: cart.map(i => ({ id: i.product.id, name: i.product.name, qty: i.quantity, price: i.product.price })),
       },
+    })
+    mktAddToCart({
+      id: product.id, name: product.name,
+      price: Number(variation?.price || product.price) || 0, qty: quantity,
+      currency: product.currency,
     })
     setCart(prev => {
       const cartKey = variation ? `${product.id}-${variation.id}` : String(product.id)

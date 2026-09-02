@@ -8,6 +8,7 @@ import MagicLinkHandler from '@/components/miad/MagicLinkHandler'
 import { MotionConfigProvider } from '@/components/miad/MotionConfigProvider'
 import { CurrencyProvider } from '@/contexts/CurrencyContext'
 import { WishlistProvider } from '@/contexts/WishlistContext'
+import { MarketingScripts } from '@/components/analytics/MarketingScripts'
 import './globals.css'
 
 const inter = Inter({
@@ -119,6 +120,7 @@ export default function RootLayout({
         <link rel="dns-prefetch" href="https://flagcdn.com" />
       </head>
       <body className={`${inter.variable} font-sans antialiased`}>
+        <MarketingScripts />
         <MotionConfigProvider>
           <CurrencyProvider>
             <WishlistProvider>

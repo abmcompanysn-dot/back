@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { formatPrice } from '@/lib/woocommerce'
 import { trackEvent } from '@/lib/analytics'
+import { mktPurchase } from '@/lib/marketing-events'
 import { RecommendedProducts } from '@/components/miad/RecommendedProducts'
 
 interface PurchasedItem {
@@ -113,6 +114,16 @@ function OrderReceivedContent() {
           if (data?.status === 'completed' || (method === 'stripe' && data?.success)) {
             trackEvent('checkout_complete')
             trackEvent('payment_success', { cartValue: data.total ? parseFloat(data.total) : undefined, metadata: { paymentMethod: method } })
+            // Purchase (Meta Pixel + CAPI) — sur la page de confirmation,
+            // une seule fois par commande. La garde `state !== 'completed'`
+            // ci-dessus (via setState plus bas) empêche un double envoi si
+            // le composant re-render.
+            mktPurchase({
+              orderId,
+              value: data.total ? parseFloat(data.total) : 0,
+              contentIds: Array.isArray(data.items) ? data.items.map((it: any) => String(it.product_id ?? it.id)) : [],
+              currency: 'USD',
+            })
             setTotal(data.total ?? null)
             setItems(Array.isArray(data.items) ? data.items : [])
             setState('completed')

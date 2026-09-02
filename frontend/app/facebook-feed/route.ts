@@ -2,15 +2,15 @@ import { NextResponse } from 'next/server'
 import { buildFeed } from '@/lib/catalog-feed'
 
 export const runtime = 'edge'
-// Généré à la demande au runtime (comme app/sitemap.ts) : pagine tout le
-// catalogue via catalog-svc, indisponible au build.
 export const dynamic = 'force-dynamic'
 
-// Flux Google Merchant Center — RSS 2.0 + namespace g:.
-// Exposé aussi en /merchant-feed.xml (rewrite dans next.config.mjs).
-// Contenu construit par lib/catalog-feed.ts (partagé avec le flux Facebook).
+// Flux Facebook / Instagram Catalogue — même format RSS 2.0 + namespace g:
+// que Google (Meta l'accepte), avec en plus g:fb_product_category.
+// Exposé aussi en /facebook-feed.xml (rewrite dans next.config.mjs).
+// À coller dans Commerce Manager → Catalogue → Sources de données →
+// Flux de données → URL planifiée.
 export async function GET() {
-  const xml = await buildFeed('google')
+  const xml = await buildFeed('facebook')
   return new NextResponse(xml, {
     headers: {
       'Content-Type': 'application/xml; charset=utf-8',

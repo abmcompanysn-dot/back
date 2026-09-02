@@ -1,11 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ApiError, api } from '../lib/api'
 import { EmptyState } from '../components/EmptyState'
 import { IconMarketing } from '../components/Icons'
 
-// Coupons/fidélité (loyalty-svc) + tracking publicitaire (GTM/Meta Pixel/
-// GA/flux catalogue Shopping) restent à venir — seul l'envoi d'email en
-// masse (demandé le 2026-08-27) est construit ici pour l'instant.
+// Marketing — envoi d'email en masse (2026-08-27) + tracking publicitaire
+// & flux catalogue (2026-09-02) : Pixel Meta, GA4, Conversions API Meta,
+// et les URLs des flux Google Merchant / Facebook Catalogue.
+// Coupons/fidélité (loyalty-svc) restent à venir.
+
+const SITE = 'https://miadmarket.ca'
+
+interface AdminSettings {
+  meta_pixel_id?: string
+  ga_measurement_id?: string
+  meta_capi_token_configured?: boolean
+}
 
 const AUDIENCES = [
   { value: 'admins', label: 'Administrateurs' },
@@ -20,6 +29,46 @@ export function Marketing() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<{ sent: number; failed: number; total: number } | null>(null)
+
+  // ── Tracking & flux ──────────────────────────────────────────────────
+  const [pixelId, setPixelId] = useState('')
+  const [gaId, setGaId] = useState('')
+  const [capiToken, setCapiToken] = useState('') // vide = inchangé
+  const [capiConfigured, setCapiConfigured] = useState(false)
+  const [savingTracking, setSavingTracking] = useState(false)
+  const [trackingMsg, setTrackingMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    api
+      .get<AdminSettings>('/admin/api/settings')
+      .then((s) => {
+        setPixelId(s.meta_pixel_id || '')
+        setGaId(s.ga_measurement_id || '')
+        setCapiConfigured(!!s.meta_capi_token_configured)
+      })
+      .catch(() => {})
+  }, [])
+
+  async function saveTracking() {
+    setSavingTracking(true)
+    setTrackingMsg(null)
+    try {
+      const payload: Record<string, string> = {
+        meta_pixel_id: pixelId.trim(),
+        ga_measurement_id: gaId.trim(),
+      }
+      // Champ secret : n'envoyer que s'il a été rempli (vide = garder l'existant).
+      if (capiToken.trim()) payload.meta_capi_token = capiToken.trim()
+      await api.put('/admin/api/settings', payload)
+      setCapiToken('')
+      if (payload.meta_capi_token) setCapiConfigured(true)
+      setTrackingMsg('Enregistré. Le site s’aligne dans les 5 min (cache).')
+    } catch (e) {
+      setTrackingMsg(e instanceof ApiError ? e.message : 'Enregistrement impossible')
+    } finally {
+      setSavingTracking(false)
+    }
+  }
 
   async function send() {
     const audienceLabel = AUDIENCES.find((a) => a.value === audience)?.label || audience
@@ -91,10 +140,87 @@ export function Marketing() {
         )}
       </div>
 
+      {/* ── Tracking publicitaire ─────────────────────────────────── */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <h3 style={{ marginTop: 0 }}>Tracking publicitaire</h3>
+        <p className="subtitle">
+          Pixel Meta (Facebook/Instagram) + Google Analytics, injectés sur le site au runtime.
+          La Conversions API Meta double le suivi côté serveur (fiable malgré les bloqueurs).
+        </p>
+        <div className="form-grid">
+          <div className="form-field full">
+            <label>ID du Pixel Meta</label>
+            <input
+              type="text"
+              value={pixelId}
+              onChange={(e) => setPixelId(e.target.value)}
+              placeholder="ex. 1234567890123456 (chiffres uniquement)"
+            />
+          </div>
+          <div className="form-field full">
+            <label>ID de mesure Google Analytics 4</label>
+            <input
+              type="text"
+              value={gaId}
+              onChange={(e) => setGaId(e.target.value)}
+              placeholder="G-XXXXXXXXXX (optionnel)"
+            />
+          </div>
+          <div className="form-field full">
+            <label>
+              Token Conversions API Meta {capiConfigured && <span className="badge badge-green">configuré</span>}
+            </label>
+            <input
+              type="password"
+              value={capiToken}
+              onChange={(e) => setCapiToken(e.target.value)}
+              placeholder={capiConfigured ? 'laisser vide pour ne pas changer' : 'Events Manager → Paramètres → Générer un token'}
+            />
+          </div>
+        </div>
+        <div className="form-actions">
+          <button className="btn-primary" disabled={savingTracking} onClick={saveTracking}>
+            {savingTracking ? 'Enregistrement…' : 'Enregistrer le tracking'}
+          </button>
+        </div>
+        {trackingMsg && (
+          <p className="hint" style={{ marginTop: 8, fontWeight: 600 }}>
+            {trackingMsg}
+          </p>
+        )}
+      </div>
+
+      {/* ── Flux catalogue ────────────────────────────────────────── */}
+      <div className="form-card">
+        <h3 style={{ marginTop: 0 }}>Flux catalogue (Shopping / Catalogue)</h3>
+        <p className="subtitle">
+          URLs à soumettre dans Google Merchant Center et dans Meta Commerce Manager.
+          Actualisées automatiquement (cache 1 h) — pas d’export manuel.
+        </p>
+        <ul style={{ lineHeight: 1.9 }}>
+          <li>
+            <b>Google Merchant Center</b> →{' '}
+            <a href={`${SITE}/merchant-feed.xml`} target="_blank" rel="noreferrer">
+              {SITE}/merchant-feed.xml
+            </a>
+          </li>
+          <li>
+            <b>Facebook / Instagram Catalogue</b> →{' '}
+            <a href={`${SITE}/facebook-feed.xml`} target="_blank" rel="noreferrer">
+              {SITE}/facebook-feed.xml
+            </a>
+          </li>
+        </ul>
+        <p className="subtitle">
+          Images servies en 800×800 via Cloudflare Images. Si l’aperçu Google refuse des
+          images, activer <i>Speed → Optimization → Image Resizing</i> sur la zone Cloudflare.
+        </p>
+      </div>
+
       <EmptyState
         icon={<IconMarketing width={40} height={40} strokeWidth={1.4} />}
-        title="Module Marketing à venir"
-        description="Coupons & promotions, programme de fidélité, et pixels de tracking (GTM, Meta Pixel, Google Analytics, flux Shopping) arriveront ici."
+        title="Coupons & fidélité à venir"
+        description="Le programme de fidélité et les coupons promotionnels (loyalty-svc) arriveront ici."
       />
     </div>
   )
