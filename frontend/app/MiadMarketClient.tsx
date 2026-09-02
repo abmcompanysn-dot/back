@@ -1544,6 +1544,33 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     setCart(prev => quantity <= 0 ? prev.filter(i => i.product.id !== productId) : prev.map(i => i.product.id === productId ? { ...i, quantity } : i))
   }
 
+  // "Reprendre le paiement" d'une commande non payée (ClientOrderDetail) :
+  // recharge ses produits dans le panier puis va au checkout, où le client
+  // rechoisit son moyen de paiement (carte / Mobile Money PayDunya).
+  // Les line_items d'une commande ne portent qu'un product_id + nom + prix,
+  // pas un WooProduct complet — on refetch chaque produit par id pour que
+  // CheckoutPage ait tout ce qu'il lui faut (vendor, type, currency…).
+  const handleReorder = useCallback(async (items: Array<{ productId: number; quantity: number }>) => {
+    const fetched = await Promise.all(
+      items.map(async ({ productId, quantity }) => {
+        try {
+          const r = await fetch(`/api/products?id=${productId}&lang=${language}`)
+          if (!r.ok) return null
+          const d = await r.json()
+          const p: WooProduct | undefined = d?.products?.[0]
+          return p ? { product: p, quantity } : null
+        } catch { return null }
+      })
+    )
+    const valid = fetched.filter((x): x is { product: WooProduct; quantity: number } => x !== null)
+    if (valid.length === 0) {
+      toast.error("Impossible de recharger cette commande pour l'instant.")
+      return
+    }
+    setCart(valid)
+    navigateTo('checkout')
+  }, [language, navigateTo])
+
   const removeFromCart = (productId: string) => {
     const removed = cart.find(i => i.product.id === productId)
     trackEvent('remove_from_cart', {
@@ -2010,7 +2037,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   };
 
   return (
-    <StreamedNavClickProvider value={{ onVendorClick: handleVendorClick, onProductClick: handleProductClick, onViewAllCountry: handleViewAllCountry, onViewAllCategory: (slug: string) => { openCategory(slug) } }}>
+    <StreamedNavClickProvider value={{ onVendorClick: handleVendorClick, onProductClick: handleProductClick, onViewAllCountry: handleViewAllCountry, onViewAllCategory: (slug: string) => { openCategory(slug) }, onReorder: handleReorder }}>
       <Header {...headerProps} />
 
       {countryWasAutoDetected && currentView !== 'login' && currentView !== 'checkout' && (

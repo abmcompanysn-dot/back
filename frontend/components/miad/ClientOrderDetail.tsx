@@ -5,23 +5,26 @@ import Image from 'next/image'
 import useSWR from 'swr'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import {
-  X, Package, MapPin, CreditCard, Store, Loader2, Wallet, CheckCircle2,
+  X, Package, MapPin, CreditCard, Store, Loader2, Wallet,
 } from 'lucide-react'
-import { MobileMoneyDirectForm } from './MobileMoneyDirectForm'
+import { useStreamedNavClick } from '@/contexts/StreamedNavClickContext'
 
 // ClientOrderDetail — détail d'une commande GROUPÉE, côté CLIENT.
 //
 // Comble deux trous signalés le 2026-09-01 :
-//  1. Depuis "Mon Historique", une commande n'était pas cliquable : le
-//     client ne voyait ni le découpage par boutique, ni les images des
-//     produits. Ce panneau regroupe les line_items par vendor_name et
-//     affiche la vignette de chaque produit.
-//  2. Si le paiement Mobile Money n'a jamais abouti (statut
-//     pending_payment / payment_expired), un bouton "Reprendre le
-//     paiement" monte MobileMoneyDirectForm (le même composant qu'au
-//     checkout, qui gère opérateur + numéro + polling) — le endpoint
-//     /api/orders/{id}/mobile-money-deposit relance le dépôt côté
-//     agrégateur pour la commande déjà créée.
+//  1. Depuis "Mon Historique" / le dashboard, une commande n'était pas
+//     cliquable : le client ne voyait ni le découpage par boutique, ni les
+//     images des produits. Ce panneau regroupe les line_items par
+//     vendor_name et affiche la vignette de chaque produit.
+//  2. Si le paiement n'a jamais abouti (pending_payment / payment_expired
+//     / pending), un bouton "Reprendre le paiement" recharge les produits
+//     de la commande dans le panier et renvoie au checkout, où le client
+//     rechoisit son moyen de paiement (carte / Mobile Money PayDunya).
+//     C'est volontairement un ré-achat via le checkout normal et non une
+//     relance ciblée de l'agrégateur : le moyen de paiement d'origine peut
+//     ne plus être disponible (ex. commande créée en Stripe alors que la
+//     carte ne se charge pas — cas signalé le 2026-09-02), et le flux
+//     SoftPay/PawaPay exige une facture déjà créée pour ce même agrégateur.
 
 interface LineItem {
   product_id?: number
@@ -82,14 +85,14 @@ interface Props {
 
 export function ClientOrderDetail({ orderId, onClose }: Props) {
   const { formatPrice: fp } = useCurrency()
+  const nav = useStreamedNavClick()
   const token = typeof window !== 'undefined' ? localStorage.getItem('miad_token') : null
-  const { data: order, isLoading, error: swrError, mutate } = useSWR<ClientOrder>(
+  const { data: order, isLoading, error: swrError } = useSWR<ClientOrder>(
     token ? [`/api/orders/${orderId}`, token] : null,
     orderFetcher
   )
   const error = swrError ? (swrError.message || 'Erreur réseau') : ''
-  const [payingMobileMoney, setPayingMobileMoney] = useState(false)
-  const [paid, setPaid] = useState(false)
+  const [reordering, setReordering] = useState(false)
 
   const groups = useMemo(() => {
     const map = new Map<string, { name: string; items: LineItem[]; subtotal: number }>()
@@ -105,14 +108,27 @@ export function ClientOrderDetail({ orderId, onClose }: Props) {
 
   const st = order ? (STATUS_LABEL[order.status] ?? { label: order.status, color: 'bg-gray-100 text-gray-600' }) : null
 
-  // Reprise de paiement : seulement Mobile Money (pawapay) non abouti.
+  // Reprise de paiement : commande dont le paiement n'a jamais abouti,
+  // quel que soit le moyen choisi à l'origine (carte, Mobile Money…).
+  const UNPAID = ['pending_payment', 'payment_expired', 'pending']
   const canResumePayment =
-    !!order &&
-    (order.payment_status === 'pending_payment' || order.payment_status === 'payment_expired' ||
-     order.status === 'pending_payment' || order.status === 'payment_expired') &&
-    order.payment_method === 'pawapay'
+    !!order && (UNPAID.includes(order.payment_status || '') || UNPAID.includes(order.status || ''))
 
   const buyerName = order ? `${order.shipping.first_name} ${order.shipping.last_name}`.trim() : ''
+
+  const handleResumePayment = async () => {
+    if (!order || !nav?.onReorder) return
+    setReordering(true)
+    try {
+      const items = order.line_items
+        .filter(li => li.product_id)
+        .map(li => ({ productId: li.product_id as number, quantity: li.quantity || 1 }))
+      await nav.onReorder(items)
+      onClose()
+    } finally {
+      setReordering(false)
+    }
+  }
 
   return (
     <div
@@ -163,41 +179,24 @@ export function ClientOrderDetail({ orderId, onClose }: Props) {
           {order && (
             <div className="p-5 space-y-5">
 
-              {/* Reprise de paiement Mobile Money */}
-              {canResumePayment && !paid && (
-                payingMobileMoney ? (
-                  <div className="border border-border rounded-2xl p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-3">
-                      Finaliser le paiement Mobile Money
-                    </p>
-                    <MobileMoneyDirectForm
-                      aggregator="pawapay"
-                      orderId={order.id}
-                      countryISO2={order.shipping.country || 'sn'}
-                      phoneHint={order.shipping.phone || ''}
-                      customerName={buyerName}
-                      onSuccess={() => {
-                        setPaid(true)
-                        setPayingMobileMoney(false)
-                        mutate()
-                      }}
-                      onFailure={() => { /* le formulaire affiche déjà l'erreur */ }}
-                      onNeedsFormRestart={() => setPayingMobileMoney(false)}
-                    />
-                  </div>
-                ) : (
+              {/* Reprise de paiement — recharge la commande dans le panier
+                  et renvoie au checkout (choix du moyen de paiement). */}
+              {canResumePayment && nav?.onReorder && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-xs font-bold text-amber-800 mb-3 leading-snug">
+                    Cette commande n'a pas été payée. Reprenez le paiement — vous
+                    pourrez rechoisir votre moyen de paiement (carte ou Mobile Money).
+                  </p>
                   <button
                     type="button"
-                    onClick={() => setPayingMobileMoney(true)}
-                    className="w-full flex items-center justify-center gap-2 h-12 bg-accent text-white rounded-2xl font-bold text-sm hover:bg-accent/90 transition-all"
+                    onClick={handleResumePayment}
+                    disabled={reordering}
+                    className="w-full flex items-center justify-center gap-2 h-12 bg-accent text-white rounded-2xl font-bold text-sm hover:bg-accent/90 disabled:opacity-60 transition-all"
                   >
-                    <Wallet size={16} /> Reprendre le paiement Mobile Money
+                    {reordering
+                      ? <><Loader2 size={16} className="animate-spin" /> Préparation…</>
+                      : <><Wallet size={16} /> Reprendre le paiement</>}
                   </button>
-                )
-              )}
-              {paid && (
-                <div className="flex items-center justify-center gap-2 h-11 bg-green-50 border border-green-200 text-green-700 rounded-2xl font-bold text-sm">
-                  <CheckCircle2 size={15} /> Paiement confirmé
                 </div>
               )}
 

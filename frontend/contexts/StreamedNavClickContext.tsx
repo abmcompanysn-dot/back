@@ -31,6 +31,13 @@ interface StreamedNavClickValue {
   // (CategoryRow.tsx) — bascule vers la vue catégorie sans round-trip
   // serveur (setSelectedCategory + navigateTo('category')).
   onViewAllCategory?: (slug: string) => void
+  // "Reprendre le paiement" d'une commande non payée (ClientOrderDetail) :
+  // recharge les produits de la commande dans le panier et va au checkout,
+  // où le client rechoisit son moyen de paiement. Implémenté dans
+  // MiadMarketClient (accès au panier + navigateTo). Les line_items d'une
+  // commande ne contiennent pas un WooProduct complet — d'où le fetch par
+  // id côté implémentation.
+  onReorder?: (items: Array<{ productId: number; quantity: number }>) => Promise<void> | void
 }
 
 const StreamedNavClickContext = createContext<StreamedNavClickValue | null>(null)
