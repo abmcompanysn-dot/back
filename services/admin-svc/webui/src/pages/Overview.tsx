@@ -11,8 +11,18 @@ interface OverviewData {
   services?: Record<string, string>
 }
 
+const KPI = [
+  { key: 'orders_total', label: 'Commandes' },
+  { key: 'products_total', label: 'Produits' },
+  { key: 'vendors_total', label: 'Boutiques' },
+  { key: 'payments_total', label: 'Paiements' },
+] as const
+
 export function Overview() {
   const { data, error, loading } = useApiData<OverviewData>('/admin/api/overview')
+
+  const services = Object.entries(data?.services || {})
+  const down = services.filter(([, s]) => s.toLowerCase() !== 'ok').length
 
   return (
     <div>
@@ -35,38 +45,32 @@ export function Overview() {
       {!loading && !error && data && (
         <>
           <div className="cards">
-            <div className="card">
-              <div className="num">{data.orders_total ?? '—'}</div>
-              <div className="label">Commandes</div>
-            </div>
-            <div className="card">
-              <div className="num">{data.products_total ?? '—'}</div>
-              <div className="label">Produits</div>
-            </div>
-            <div className="card">
-              <div className="num">{data.vendors_total ?? '—'}</div>
-              <div className="label">Boutiques</div>
-            </div>
-            <div className="card">
-              <div className="num">{data.payments_total ?? '—'}</div>
-              <div className="label">Paiements</div>
+            {KPI.map(({ key, label }) => (
+              <div className="card" key={key}>
+                <div className="num">{(data[key] ?? '—').toLocaleString('fr-FR')}</div>
+                <div className="label">{label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="page-header" style={{ marginTop: 8 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 15 }}>État des services</h3>
+              <p className="subtitle" style={{ marginTop: 2 }}>
+                {down === 0
+                  ? `${services.length} services opérationnels`
+                  : `${down} service(s) en difficulté sur ${services.length}`}
+              </p>
             </div>
           </div>
 
-          <h3>État des services</h3>
-          <div className="table-card">
-            <table>
-              <tbody>
-                {Object.entries(data.services || {}).map(([name, status]) => (
-                  <tr key={name}>
-                    <td>{name}</td>
-                    <td>
-                      <StatusBadge status={status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="service-grid">
+            {services.map(([name, status]) => (
+              <div className="service-card" key={name}>
+                <span className="svc-name">{name}</span>
+                <StatusBadge status={status} />
+              </div>
+            ))}
           </div>
         </>
       )}

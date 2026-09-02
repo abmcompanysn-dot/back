@@ -1,5 +1,9 @@
 :root {
-  color-scheme: light dark;
+  /* La console est verrouillée en clair. `light dark` faisait hériter aux
+     <input>/<select>/<textarea> sans background explicite le fond SOMBRE du
+     navigateur en mode sombre OS → texte foncé sur fond sombre, illisible
+     sur presque toutes les pages (revue UX 2026-09-02). */
+  color-scheme: light;
 
   /* Palette MIAD Market (2026-08-26) — blanc / vert / orange. Le vert
      #005826 est déjà la couleur de marque utilisée sur les bannières
@@ -771,4 +775,275 @@ button:disabled {
   border-color: var(--miad-green);
   background: var(--miad-green-light);
   color: var(--miad-green);
+}
+
+/* ============================================================
+   Correctifs UX globaux (revue 2026-09-02)
+   ============================================================ */
+
+/* ---------- Champs de saisie : fond blanc explicite partout ----------
+   Corrige le "champ noir illisible" signalé sur Produits, Vendeurs,
+   Commandes, Utilisateurs, Médiathèque, Ajouter un produit… La cause
+   était `color-scheme` + aucun background sur les inputs. On force ici
+   pour TOUS les champs, y compris ceux sans classe dédiée. */
+input,
+select,
+textarea,
+.search-input,
+.form-field input,
+.form-field select,
+.form-field textarea,
+.login-card input {
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: #9aa3af;
+  opacity: 1;
+}
+input:focus,
+select:focus,
+textarea:focus,
+.search-input:focus {
+  outline: none;
+  border-color: var(--miad-green);
+  box-shadow: 0 0 0 3px rgba(0, 88, 38, 0.12);
+}
+/* Barre de recherche : loupe + confort de saisie */
+.search-input {
+  padding: 9px 12px 9px 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239aa3af' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 10px center;
+}
+
+/* ---------- Hiérarchie typographique des en-têtes de page ---------- */
+.page-header h2 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+}
+.page-header .subtitle {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+/* ---------- Chiffres KPI plus présents ---------- */
+.card .num {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+.card .label {
+  font-size: 12px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.card .trend {
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+.card .trend.up { color: #10b981; }
+.card .trend.down { color: #ef4444; }
+
+/* ---------- Lien Déconnexion : lisible sur le vert foncé ---------- */
+.sidebar-footer .btn-ghost {
+  color: rgba(255, 255, 255, 0.92);
+  border-color: rgba(255, 255, 255, 0.28);
+  background: transparent;
+}
+.sidebar-footer .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+/* ---------- Badges de statut : plus contrastés + icône ---------- */
+.badge-green  { background: #d1fae5; color: #065f46; }
+.badge-orange { background: #ffedd5; color: #9a3412; }
+.badge-red    { background: #fee2e2; color: #991b1b; }
+.badge-gray   { background: #e5e7eb; color: #374151; }
+.badge-blue   { background: #dbeafe; color: #1e40af; }
+.badge-dot::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* ---------- Grille de cartes services (au lieu d'une liste) ---------- */
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+.service-card {
+  background: #fff;
+  border: 1px solid var(--miad-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.service-card .svc-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* ---------- Barre d'actions collante (formulaires longs) ---------- */
+.sticky-actions {
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  border-top: 1px solid var(--miad-border);
+  padding: 12px 0;
+  margin-top: 24px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  z-index: 4;
+}
+
+/* ---------- Boutons : contraste + hover ---------- */
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+  transition: filter 0.12s ease;
+}
+.btn-primary:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled),
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* ---------- Topbar enrichi (fil d'Ariane + recherche + profil) ---------- */
+.app-topbar {
+  gap: 20px;
+}
+.topbar-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.crumb-section {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.crumb-sep {
+  color: #cbd5e1;
+}
+.crumb-sub {
+  font-size: 14px;
+  color: #6b7280;
+}
+.topbar-search {
+  flex: 1;
+  max-width: 460px;
+  position: relative;
+}
+.topbar-search input {
+  width: 100%;
+  padding: 8px 12px 8px 34px;
+  font-size: 13px;
+  background: #f4f5f7;
+  border: 1px solid #e4e6e9;
+  border-radius: 8px;
+}
+.topbar-search input:focus {
+  background: #fff;
+}
+.topbar-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #9aa3af;
+  display: inline-flex;
+  pointer-events: none;
+}
+.topbar-search-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.topbar-user {
+  position: relative;
+  flex-shrink: 0;
+}
+.topbar-user-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid #e4e6e9;
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+  cursor: pointer;
+  max-width: 220px;
+}
+.topbar-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--miad-green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.topbar-email {
+  font-size: 12.5px;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: #fff;
+  border: 1px solid #e4e6e9;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  min-width: 170px;
+  padding: 4px;
+  z-index: 20;
+}
+.topbar-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+.topbar-menu button:hover {
+  background: #f4f5f7;
+}
+
+@media (max-width: 720px) {
+  .topbar-search { display: none; }
+  .topbar-email { display: none; }
 }

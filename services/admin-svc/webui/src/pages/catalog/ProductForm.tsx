@@ -1140,12 +1140,14 @@ export function ProductForm() {
         )}
       </div>
 
-      <div className="form-actions">
-        <button className="btn-primary" disabled={saving} onClick={save}>
-          {saving ? 'Enregistrement…' : isEdit ? 'Enregistrer les modifications' : 'Créer le produit'}
-        </button>
+      {/* Barre d'actions collante : enregistrer sans devoir défiler
+          jusqu'en bas d'un formulaire long (revue UX 2026-09-02). */}
+      <div className="sticky-actions">
         <button className="btn-ghost" onClick={() => navigate('/admin/catalog/products')}>
           Annuler
+        </button>
+        <button className="btn-primary" disabled={saving} onClick={save}>
+          {saving ? 'Enregistrement…' : isEdit ? 'Enregistrer les modifications' : 'Créer le produit'}
         </button>
       </div>
     </div>

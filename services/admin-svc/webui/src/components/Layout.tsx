@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import {
   IconChevronLeft,
@@ -14,6 +14,7 @@ import {
   IconMail,
   IconMarketing,
   IconOrders,
+  IconSearch,
   IconSecurity,
   IconShipping,
   IconStore,
@@ -21,7 +22,7 @@ import {
 } from './Icons'
 
 const TABS = [
-  { path: '/admin/', label: "Tableau de bord", icon: IconDashboard, end: true },
+  { path: '/admin/', label: 'Tableau de bord', icon: IconDashboard, end: true },
   { path: '/admin/catalog/products', label: 'Catalogue', icon: IconCatalog },
   { path: '/admin/media', label: 'Médiathèque', icon: IconImage },
   { path: '/admin/vendors', label: 'Vendeurs', icon: IconStore },
@@ -37,13 +38,12 @@ const TABS = [
   { path: '/admin/configuration', label: 'Configuration', icon: IconConfiguration },
 ]
 
-const PAGE_TITLES: Record<string, string> = {
-  '/admin/': "Tableau de bord",
-  '/admin/catalog/products': 'Catalogue',
-  '/admin/catalog/products/new': 'Catalogue',
-  '/admin/catalog/brands': 'Catalogue',
-  '/admin/catalog/categories': 'Catalogue',
-  '/admin/catalog/reviews': 'Catalogue',
+// Fil d'Ariane : segment de menu + éventuelle sous-page. Le topbar affiche
+// « Catalogue › Produits » plutôt qu'un titre unique qui doublonnait avec
+// le <h2> de chaque page (revue UX 2026-09-02).
+const SECTION: Record<string, string> = {
+  '/admin/': 'Tableau de bord',
+  '/admin/catalog': 'Catalogue',
   '/admin/media': 'Médiathèque',
   '/admin/vendors': 'Vendeurs',
   '/admin/orders': 'Commandes',
@@ -51,16 +51,47 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/shipping': 'Livraison',
   '/admin/marketing': 'Marketing',
   '/admin/email-templates': 'Modèles de messages',
+  '/admin/finance': 'Finances',
   '/admin/payments': 'Finances',
   '/admin/payment-routing': 'Mobile Money',
   '/admin/security': 'Sécurité',
   '/admin/system': 'Système',
   '/admin/configuration': 'Configuration',
 }
+const SUBPAGE: Record<string, string> = {
+  '/admin/catalog/products': 'Produits',
+  '/admin/catalog/products/new': 'Nouveau produit',
+  '/admin/catalog/brands': 'Marques',
+  '/admin/catalog/categories': 'Catégories & attributs',
+  '/admin/catalog/reviews': 'Avis',
+  '/admin/catalog/pending': 'En attente',
+  '/admin/catalog/variations-maintenance': 'Maintenance variations',
+  '/admin/vendors/new': 'Nouveau vendeur',
+  '/admin/vendors/kyc': 'Demandes KYC',
+  '/admin/vendors/payouts': 'Retraits & payouts',
+  '/admin/vendors/map': 'Carte des boutiques',
+  '/admin/finance/transactions': 'Transactions',
+  '/admin/finance/gateways': 'Passerelles',
+  '/admin/users/roles': 'Rôles',
+  '/admin/orders/returns': 'Retours',
+}
+
+function crumbs(pathname: string): { section: string; sub?: string } {
+  const sub = SUBPAGE[pathname]
+  // section = plus long préfixe connu
+  const key =
+    Object.keys(SECTION)
+      .filter((k) => k !== '/admin/' && pathname.startsWith(k))
+      .sort((a, b) => b.length - a.length)[0] ?? (pathname === '/admin/' ? '/admin/' : '')
+  return { section: SECTION[key] ?? 'MIAD Market', sub }
+}
 
 export function Layout() {
-  const { logout } = useAuth()
+  const { logout, email } = useAuth()
+  const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('miad_admin_sidebar') === 'collapsed')
+  const [q, setQ] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
 
   function toggle() {
     setCollapsed((v) => {
@@ -70,10 +101,20 @@ export function Layout() {
     })
   }
 
+  // Recherche globale : route selon le préfixe tapé, sinon commandes par défaut.
+  function onSearch(e: React.FormEvent) {
+    e.preventDefault()
+    const term = q.trim()
+    if (!term) return
+    const enc = encodeURIComponent(term)
+    if (/@/.test(term)) navigate(`/admin/users?q=${enc}`)
+    else if (/^\d{3,}$/.test(term)) navigate(`/admin/orders?q=${enc}`)
+    else navigate(`/admin/catalog/products?q=${enc}`)
+    setQ('')
+  }
+
   const location = useLocation()
-  const currentTitle =
-    PAGE_TITLES[location.pathname] ??
-    (location.pathname.startsWith('/admin/catalog/') ? 'Catalogue' : 'MIAD Market')
+  const { section, sub } = crumbs(location.pathname)
 
   return (
     <div className="app-shell">
@@ -104,7 +145,11 @@ export function Layout() {
           })}
         </nav>
         <div className="sidebar-footer">
-          <button className="btn-ghost" onClick={logout} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10 }}>
+          <button
+            className="btn-ghost"
+            onClick={logout}
+            style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10 }}
+          >
             <IconLogout />
             {!collapsed && <span>Déconnexion</span>}
           </button>
@@ -113,7 +158,40 @@ export function Layout() {
 
       <div className="app-content">
         <header className="app-topbar">
-          <h1>{currentTitle}</h1>
+          <div className="topbar-crumbs">
+            <span className="crumb-section">{section}</span>
+            {sub && (
+              <>
+                <span className="crumb-sep">›</span>
+                <span className="crumb-sub">{sub}</span>
+              </>
+            )}
+          </div>
+
+          <form className="topbar-search" onSubmit={onSearch}>
+            <span className="topbar-search-icon">
+              <IconSearch />
+            </span>
+            <input
+              type="search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Rechercher un produit, une commande, un email…"
+            />
+          </form>
+
+          <div className="topbar-user">
+            <button className="topbar-user-btn" onClick={() => setMenuOpen((v) => !v)}>
+              <span className="topbar-avatar">{(email || 'A').slice(0, 1).toUpperCase()}</span>
+              <span className="topbar-email">{email || 'Admin'}</span>
+            </button>
+            {menuOpen && (
+              <div className="topbar-menu" onMouseLeave={() => setMenuOpen(false)}>
+                <button onClick={() => { setMenuOpen(false); navigate('/admin/security') }}>Sécurité (2FA)</button>
+                <button onClick={logout}>Déconnexion</button>
+              </div>
+            )}
+          </div>
         </header>
         <main className="app-main">
           <Outlet />
