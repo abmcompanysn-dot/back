@@ -120,8 +120,26 @@ export async function fetchProductBySlug(slug: string): Promise<any | null> {
     const res = await fetch(url, { next: { revalidate: 3600, tags: [`product-${slug}`] } })
     if (!res.ok) return null
     const data = await res.json()
-    const raw = isNumeric ? data : data.items?.[0]
+    let raw = isNumeric ? data : data.items?.[0]
     if (!raw?.id) return null
+
+    // GET /products?slug= (liste) renvoie description / subtitle /
+    // specifications VIDES — seul GET /products/{id} (détail) les remplit.
+    // Une fiche produit a besoin de la fiche complète (description, tableau
+    // de caractéristiques, variations…) : on refait donc systématiquement
+    // un appel par id après avoir résolu le slug. Sinon la section
+    // DESCRIPTION affiche "Aucune description disponible" alors que la
+    // donnée existe bien en base (bug fondateur 2026-09-02).
+    if (!isNumeric) {
+      const full = await fetch(`${CATALOG_SVC_URL}/products/${raw.id}?lang=fr`, {
+        next: { revalidate: 3600, tags: [`product-${slug}`, `product-${raw.id}`] },
+      })
+      if (full.ok) {
+        const fullData = await full.json()
+        if (fullData?.id) raw = fullData
+      }
+    }
+
     return mapProduct(raw)
   } catch {
     return null
