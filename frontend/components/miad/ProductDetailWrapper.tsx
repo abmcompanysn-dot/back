@@ -4,9 +4,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { ProductDetail } from './ProductDetail'
-import { StandaloneHeader } from './StandaloneHeader'
+import { SiteHeaderStandalone } from './SiteHeaderStandalone'
 import { type WooProduct, type WooProductVariation, type WooVendor } from '@/lib/woocommerce'
-import { useCurrency } from '@/contexts/CurrencyContext'
 import { subscribeCart, getCartCount, getServerCartCount, addItemToCart } from '@/lib/cart-store'
 
 interface ProductDetailWrapperProps {
@@ -18,7 +17,6 @@ const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 export function ProductDetailWrapper({ product, userCountry = 'SN' }: ProductDetailWrapperProps) {
   const router = useRouter()
-  const { formatPrice: fp } = useCurrency()
   const cartCount = useSyncExternalStore(subscribeCart, getCartCount, getServerCartCount)
 
   // Charger les produits de la même boutique pour "Plus de cette boutique"
@@ -64,14 +62,7 @@ export function ProductDetailWrapper({ product, userCountry = 'SN' }: ProductDet
 
   return (
     <div className="min-h-screen bg-background">
-      <StandaloneHeader
-        mode="product"
-        title={product.name}
-        subtitle={fp(product.price)}
-        image={product.image?.startsWith('http') ? product.image : undefined}
-        rating={product.rating}
-        countryCode={product.countryCode}
-      />
+      <SiteHeaderStandalone />
 
       <ProductDetail
         product={product}
