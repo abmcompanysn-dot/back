@@ -459,6 +459,12 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   // 2026-08-29 (et déjà notée dans CLAUDE.md comme "skeleton indéfini").
   const pendingVendorFetch = useRef(Boolean(forcedVendorSlug) && !selectedVendor)
   const [vendorFetchSettled, setVendorFetchSettled] = useState(false)
+  // Slug produit / boutique dont le fetch de secours (effet "réactivité URL"
+  // plus bas) a déjà été LANCÉ, pour ne pas le relancer en boucle : cet
+  // effet vide selectedProduct/selectedVendor avant de fetch, ce qui le
+  // re-déclenche (selectedProduct est dans ses deps) alors que le produit
+  // n'est toujours pas dans allProducts → sans cette garde, refetch infini.
+  const urlFetchInFlightRef = useRef<string>('')
   useEffect(() => {
     if (forcedView !== 'store' || !forcedVendorSlug || selectedVendor) return
     const controller = new AbortController()
@@ -1168,6 +1174,16 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     const slug = searchParams.get('slug')
     const code = searchParams.get('code')
 
+    // Relâcher la garde anti-refetch dès que l'URL ne cible plus CE slug
+    // précis (retour accueil, autre produit, autre boutique) : sinon un
+    // slug dont le fetch de secours a échoué une fois resterait bloqué (la
+    // ref n'est pas relâchée sur échec pour éviter une boucle immédiate) et
+    // un nouveau clic sur le même lien n'afficherait plus qu'un skeleton.
+    const currentTarget = (v === 'product' || v === 'vendor') && slug ? `${v}:${slug}` : ''
+    if (urlFetchInFlightRef.current && urlFetchInFlightRef.current !== currentTarget) {
+      urlFetchInFlightRef.current = ''
+    }
+
     if (v === 'country' && code) {
       // Le garde-fou ne doit sauter que si on affiche déjà cette vue pays —
       // pas seulement si activeCountry a la bonne valeur en mémoire (qui
@@ -1188,55 +1204,110 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     if (!v || !slug) return
 
     if (v === 'product') {
-      if (selectedProduct?.slug === slug) return
+      if (selectedProduct?.slug === slug) { urlFetchInFlightRef.current = ''; return }
       const found = allProducts.find(p => p.slug === slug)
       if (found) {
+        urlFetchInFlightRef.current = ''
         setSelectedProduct(found)
         setCurrentView('product')
         window.scrollTo(0, 0)
         return
       }
-      // Pas encore dans le lot chargé côté client — même fetch de secours
-      // que l'effet de chargement direct (forcedProductSlug) plus haut.
-      // lang=${language} : même correctif que ce fetch jumeau (voir son
-      // commentaire) — sans ça, flash FR/EN visible sur la fiche produit.
-      const controller = new AbortController()
-      fetch(`/api/products?slug=${encodeURIComponent(slug)}&lang=${language}`, { signal: controller.signal })
+      // Slug pas encore dans le lot chargé côté client → fetch de secours.
+      // On ne vide PAS selectedProduct de façon synchrone (cet effet a
+      // selectedProduct dans ses deps : le re-render relancerait l'effet et
+      // son cleanup avorterait ce fetch → skeleton infini). L'ancienne
+      // fiche reste affichée le temps du fetch, puis :
+      //  - produit trouvé → on l'affiche
+      //  - slug inconnu / API en erreur → on remet selectedProduct à null
+      //    ET on bascule productFetchSettled : le garde-fou anti-skeleton
+      //    (plus bas, deps incluant productFetchSettled) fait alors le
+      //    retour propre à l'accueil, au lieu de laisser la fiche figée sur
+      //    le mauvais produit ou un skeleton infini après rafraîchissement
+      //    (signalé le 2026-09-02 : "on change de page produit, ça reste
+      //    bloqué, aucun produit").
+      // urlFetchInFlightRef : ne pas relancer le même fetch si l'effet
+      // re-tourne (changement d'une autre dep) pendant qu'il est en vol.
+      // Une seule tentative par slug : la ref n'est relâchée qu'au succès
+      // (l'effet re-tourne alors avec selectedProduct.slug === slug et
+      // sort). Sur échec on fait le retour accueil AVEC nettoyage d'URL
+      // (router.replace('/')) — sans ça, ?v=product&slug=X resterait dans
+      // l'URL et cet effet retenterait le fetch à chaque re-render (boucle).
+      if (urlFetchInFlightRef.current === `product:${slug}`) return
+      urlFetchInFlightRef.current = `product:${slug}`
+      pendingProductFetch.current = true
+      // lang=${language} : sans ça flash FR/EN sur la fiche (bug 2026-09-01).
+      fetch(`/api/products?slug=${encodeURIComponent(slug)}&lang=${language}`)
         .then(r => r.ok ? r.json() : null)
         .then(data => {
+          if (searchParams.get('slug') !== slug) return // URL déjà changée
           const p = data?.products?.[0]
-          if (p) { setSelectedProduct(p); setCurrentView('product'); window.scrollTo(0, 0) }
+          if (p) {
+            urlFetchInFlightRef.current = ''
+            setSelectedProduct(p); setCurrentView('product'); window.scrollTo(0, 0)
+          } else {
+            setSelectedProduct(null); setSearchQuery(''); setCurrentView('home')
+            router.replace('/', { scroll: false })
+          }
         })
-        .catch(() => {})
-      return () => controller.abort()
+        .catch(() => {
+          if (searchParams.get('slug') !== slug) return
+          setSelectedProduct(null); setSearchQuery(''); setCurrentView('home')
+          router.replace('/', { scroll: false })
+        })
+        .finally(() => {
+          pendingProductFetch.current = false
+          setProductFetchSettled(s => !s)
+        })
+      return
     }
 
     if (v === 'vendor') {
-      if (selectedVendor?.slug === slug || selectedVendor?.id === slug) return
+      if (selectedVendor?.slug === slug || selectedVendor?.id === slug) { urlFetchInFlightRef.current = ''; return }
       const found = stores.find(s => s.slug === slug || s.id === slug)
       if (found) {
+        urlFetchInFlightRef.current = ''
         setSelectedVendor(found)
         setVendorKey(k => k + 1)
         setCurrentView('store')
         window.scrollTo(0, 0)
         return
       }
-      // Pas dans les 100 premières boutiques déjà chargées côté client —
-      // fetch de secours ciblé (même mécanisme que v=product ci-dessus).
-      // Avant ce correctif (2026-08-28), le lien restait silencieusement
-      // sur l'accueil sans jamais afficher la boutique visée (signalé :
-      // clic sur "JMK Créations" depuis le carrousel Boutiques officielles).
-      const controller = new AbortController()
-      fetch(`/api/stores?slug=${encodeURIComponent(slug)}`, { signal: controller.signal })
+      // Même robustesse que v=product (voir commentaire ci-dessus) : fetch
+      // de secours sans vider selectedVendor de façon synchrone ; sur
+      // échec, selectedVendor repasse à null + bascule vendorFetchSettled
+      // pour que le garde-fou anti-skeleton renvoie à l'accueil au lieu de
+      // figer l'ancienne boutique. Avant le correctif d'origine
+      // (2026-08-28) le lien restait silencieusement sur l'accueil ; ici on
+      // ajoute la sortie propre quand la boutique n'existe pas.
+      if (urlFetchInFlightRef.current === `vendor:${slug}`) return
+      urlFetchInFlightRef.current = `vendor:${slug}`
+      pendingVendorFetch.current = true
+      fetch(`/api/stores?slug=${encodeURIComponent(slug)}`)
         .then(r => r.ok ? r.json() : null)
         .then(data => {
+          if (searchParams.get('slug') !== slug) return
           const s = data?.stores?.[0]
-          if (s) { setSelectedVendor(s); setVendorKey(k => k + 1); setCurrentView('store'); window.scrollTo(0, 0) }
+          if (s) {
+            urlFetchInFlightRef.current = ''
+            setSelectedVendor(s); setVendorKey(k => k + 1); setCurrentView('store'); window.scrollTo(0, 0)
+          } else {
+            setSelectedVendor(null); setSearchQuery(''); setCurrentView('home')
+            router.replace('/', { scroll: false })
+          }
         })
-        .catch(() => {})
-      return () => controller.abort()
+        .catch(() => {
+          if (searchParams.get('slug') !== slug) return
+          setSelectedVendor(null); setSearchQuery(''); setCurrentView('home')
+          router.replace('/', { scroll: false })
+        })
+        .finally(() => {
+          pendingVendorFetch.current = false
+          setVendorFetchSettled(s => !s)
+        })
+      return
     }
-  }, [searchParams, allProducts, stores, selectedProduct, selectedVendor, activeCountry, currentView, language])
+  }, [searchParams, allProducts, stores, selectedProduct, selectedVendor, activeCountry, currentView, language, router])
 
   // Récupération des résultats de recherche via l'API
   const { data: searchResultsData, isLoading: searchLoading } = useSWR(
