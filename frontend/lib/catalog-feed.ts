@@ -28,6 +28,26 @@ interface CatalogProduct {
   category_slug?: string
   translation_of_id?: number | null
   type?: string
+  tags?: string[]
+  specifications?: { k: string; v: string }[]
+}
+
+// Extrait une valeur des specifications par mots-clés de clé (insensible
+// casse/accents). Ex. specValue(p, ['coloris', 'couleur']).
+function specValue(p: CatalogProduct, keys: string[]): string {
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  for (const spec of p.specifications || []) {
+    if (keys.some((k) => norm(spec.k).includes(k))) return spec.v
+  }
+  return ''
+}
+
+// Image "produit" propre pour g:image_link : Google veut PNG/JPG/WEBP en
+// image principale (AVIF accepté seulement en additional_image_link). On
+// choisit donc la 1re image non-AVIF ; à défaut, la 1re tout court.
+function primaryImage(images: { src: string }[]): string {
+  const nonAvif = images.find((i) => i.src && !/\.avif(\?|$)/i.test(i.src))
+  return (nonAvif || images[0])?.src || ''
 }
 
 function escapeXml(v: string): string {
@@ -87,19 +107,25 @@ function buildItem(
   platform: Platform
 ): string {
   if (!p.slug) return ''
-  const mainImage = p.images?.[0]?.src
-  if (!mainImage) return ''
+  const main = primaryImage(p.images || [])
+  if (!main) return ''
 
   const price = parseFloat(p.price || p.regular_price || '0')
   if (!price) return ''
 
   const title = escapeXml(p.name)
-  const rawDesc = stripHtml(p.description || p.subtitle || p.name)
-  const description = escapeXml(rawDesc.slice(0, platform === 'facebook' ? 9999 : 5000) || p.name)
+  // Description : la vraie si elle existe, sinon sous-titre, sinon un
+  // fallback lisible (nom + catégorie) plutôt que juste le nom répété —
+  // Google pénalise une description = titre.
+  const realDesc = stripHtml(p.description || '')
+  const fallbackDesc = [p.name, p.category_name].filter(Boolean).join(' — ')
+  const rawDesc = realDesc || stripHtml(p.subtitle || '') || fallbackDesc
+  const description = escapeXml(rawDesc.slice(0, platform === 'facebook' ? 9999 : 5000))
   const link = `${BASE}/product/${p.slug}`
-  const imageLink = escapeXml(feedImage(mainImage, 800))
+  const imageLink = escapeXml(feedImage(main, 800))
   const additionalImages = (p.images || [])
-    .slice(1, 11)
+    .filter((img) => img.src && img.src !== main)
+    .slice(0, 10)
     .map((img) => `      <g:additional_image_link>${escapeXml(feedImage(img.src, 800))}</g:additional_image_link>`)
     .join('\n')
 
@@ -111,6 +137,25 @@ function buildItem(
 
   const taxo = taxonomyFor(p.category_slug || p.category_name)
   const productType = escapeXml(p.category_name || '')
+  const isApparel = /vetement|mode|chaussure|sac|accessoire/i.test(
+    (p.category_slug || p.category_name || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+  )
+
+  // Attributs produit — Google les attend sur les vêtements/accessoires.
+  const color = specValue(p, ['coloris', 'couleur', 'color'])
+  const size = specValue(p, ['taille', 'pointure', 'size'])
+  const material = specValue(p, ['matiere', 'matériau', 'composition', 'tissu'])
+  const apparelAttrs = isApparel
+    ? [
+        `      <g:age_group>adult</g:age_group>`,
+        `      <g:gender>unisex</g:gender>`,
+        color ? `      <g:color>${escapeXml(color)}</g:color>` : '',
+        size ? `      <g:size>${escapeXml(size)}</g:size>` : '',
+        material ? `      <g:material>${escapeXml(material)}</g:material>` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : ''
 
   // Regroupe une traduction/variante avec son parent (Google & FB veulent
   // un item_group_id commun pour les variantes d'un même produit).
@@ -138,6 +183,7 @@ ${additionalImages}
       <g:google_product_category>${taxo.googleId}</g:google_product_category>
       ${platform === 'facebook' ? `<g:fb_product_category>${escapeXml(taxo.fbPath)}</g:fb_product_category>` : ''}
       ${productType ? `<g:product_type>${productType}</g:product_type>` : ''}
+${apparelAttrs}
 ${gtin}
 ${identifiers}
       <g:shipping>
