@@ -374,16 +374,24 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     }
   })
 
-  // Restore language and view from storage after hydration (avoids error #418).
+  // Restore language from storage after hydration (avoids error #418).
   // Sauté si l'URL fournissait déjà ?lang= explicitement (initialLang) : dans
   // ce cas homeSections est déjà rendu côté serveur dans cette langue-là, la
-  // remplacer par la valeur localStorage/navigator ici recréerait exactement
-  // le décalage FR/EN qu'on corrige (voir MiadMarketClientProps.initialLang).
+  // remplacer par la valeur localStorage ici recréerait exactement le
+  // décalage FR/EN qu'on corrige (voir MiadMarketClientProps.initialLang).
+  //
+  // Plus de bascule auto sur navigator.language : le sélecteur FR/EN est
+  // masqué depuis le 2026-07-14 (le site reste en français), et les
+  // traductions EN du catalogue ne sont PAS enrichies (description/
+  // subtitle/tags vides côté EN). Un navigateur configuré en anglais
+  // basculait donc toute la fiche produit sur ?lang=en et affichait
+  // "Aucune description disponible" alors que le FR est complet (signalé
+  // le 2026-09-02). On ne suit plus que 'miad_lang' s'il a été posé
+  // explicitement.
   useEffect(() => {
     if (initialLang) return
     const saved = localStorage.getItem('miad_lang') as 'fr' | 'en'
     if (saved === 'fr' || saved === 'en') setLanguage(saved)
-    else if (navigator.language.startsWith('en')) setLanguage('en')
   }, [initialLang])
 
   // Capture du code de parrainage représentant (?ref=CODE) — persisté en

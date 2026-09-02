@@ -461,6 +461,34 @@ export async function GET(req: Request) {
 
     let products = rawProducts.map(mapProduct);
 
+    // Repli FR pour une fiche produit dont la traduction EN est incomplète.
+    // L'enrichissement catalogue (sous-titre / description structurée / tags
+    // / specifications) n'a été fait QUE sur les fiches FR — la version EN
+    // liée a souvent description="" / subtitle="" (constaté le 2026-09-02 :
+    // produit 120 en EN → "Aucune description disponible" alors que le FR
+    // est complet). Quand on charge une fiche détail (slug ou id résolu) en
+    // anglais et que sa description est vide, on récupère la version FR du
+    // même produit et on comble les champs manquants (jamais un écrasement
+    // de contenu EN réellement présent).
+    if ((resolvedId || id) && lang === 'en' && products[0] && !products[0].description) {
+      try {
+        const frUrl = new URL(`${CATALOG_SVC_URL}/products/${resolvedId || id}`);
+        frUrl.searchParams.set('lang', 'fr');
+        const frRes = await fetch(frUrl.toString(), { next: { revalidate: cacheStrategy, tags: ['products'] } });
+        if (frRes.ok) {
+          const frMapped = mapProduct(await frRes.json());
+          products[0] = {
+            ...products[0],
+            description: products[0].description || frMapped.description,
+            subtitle: products[0].subtitle || frMapped.subtitle,
+            tags: (products[0].tags && products[0].tags.length) ? products[0].tags : frMapped.tags,
+            specifications: (products[0].specifications && products[0].specifications.length)
+              ? products[0].specifications : frMapped.specifications,
+          };
+        }
+      } catch { /* on garde la fiche EN telle quelle */ }
+    }
+
     if (search && !id) {
       try {
         const bindings = await getCloudflareBindings()
