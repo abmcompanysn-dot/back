@@ -75,6 +75,25 @@ CREATE TABLE IF NOT EXISTS admin_ip_seen (
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (account_id, ip)
 );
+
+-- Suivi d'erreurs frontend maison (2026-09-03) — remplace Sentry côté
+-- navigateur, incompatible avec le pipeline @cloudflare/next-on-pages de
+-- ce projet (voir frontend/next.config.mjs, tenté puis abandonné deux
+-- fois : @sentry/nextjs a cassé 16 déploiements le 2026-08-29, @sentry/
+-- cloudflare cassait le site entier faute d'API compatible avec un
+-- middleware Next.js). app/global-error.tsx (frontend) poste ici chaque
+-- crash React attrapé, plutôt qu'un simple console.error invisible.
+CREATE TABLE IF NOT EXISTS client_error_log (
+  id BIGSERIAL PRIMARY KEY,
+  message TEXT NOT NULL,
+  stack TEXT DEFAULT '',
+  digest TEXT DEFAULT '',
+  url TEXT DEFAULT '',
+  user_agent TEXT DEFAULT '',
+  user_id TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_client_error_created ON client_error_log (created_at DESC);
 `
 
 //go:embed webui/dist
@@ -527,6 +546,12 @@ func main() {
 		mux.HandleFunc("POST /admin/api/exchange-rates", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.shippingURL+"/exchange-rates")
 		}))
+		// Suivi d'erreurs frontend maison — POST protégé par secret interne
+		// (jamais le JWT admin : appelé par le serveur Next.js pour le
+		// compte de n'importe quel visiteur, pas seulement les admins),
+		// GET protégé par requireAdmin (page back-office "Erreurs du site").
+		mux.HandleFunc("POST /admin/api/log-client-error", s.clientErrorWrite)
+		mux.HandleFunc("GET /admin/api/client-errors", s.requireAdmin(s.listClientErrors))
 		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
 		// Coupons — page Marketing du back-office (CRUD via loyalty-svc).
@@ -1741,6 +1766,94 @@ func (s *server) internalSecurityEventWrite(w http.ResponseWriter, r *http.Reque
 	}
 	go s.dispatchSecurityAlert(ev)
 	kit.JSON(w, 202, map[string]any{"ok": true})
+}
+
+// clientErrorWrite — POST /admin/api/log-client-error. Suivi d'erreurs
+// frontend maison (2026-09-03), voir le commentaire sur client_error_log
+// dans `schema` plus haut pour le contexte (remplace Sentry, incompatible
+// avec ce projet). Protégé par le secret interne — jamais appelé
+// directement par le navigateur du visiteur (qui ne connaît pas ce
+// secret), toujours relayé par app/api/log-client-error/route.ts côté
+// Next.js. Best-effort : ne fait jamais planter le site qui rapporte
+// l'erreur — toujours 202, même si l'écriture échoue (loggé côté serveur
+// seulement).
+func (s *server) clientErrorWrite(w http.ResponseWriter, r *http.Request) {
+	if !s.requireInternal(r) {
+		kit.Fail(w, 401, "unauthorized", "secret interne requis")
+		return
+	}
+	var body struct {
+		Message   string `json:"message"`
+		Stack     string `json:"stack"`
+		Digest    string `json:"digest"`
+		URL       string `json:"url"`
+		UserAgent string `json:"user_agent"`
+		UserID    string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
+		kit.Fail(w, 400, "invalid_body", "champ 'message' obligatoire")
+		return
+	}
+	truncate := func(s string, max int) string {
+		if len(s) > max {
+			return s[:max]
+		}
+		return s
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO client_error_log (message, stack, digest, url, user_agent, user_id)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		truncate(body.Message, 2000), truncate(body.Stack, 8000), body.Digest,
+		truncate(body.URL, 500), truncate(body.UserAgent, 500), body.UserID,
+	); err != nil {
+		kit.Logger("admin-svc").Warn("client_error_log insert échoué", "err", err.Error())
+	}
+	kit.JSON(w, 202, map[string]any{"ok": true})
+}
+
+// listClientErrors — GET /admin/api/client-errors. Page back-office
+// "Erreurs du site" (JWT admin requis, voir requireAdmin à l'enregistrement
+// de la route).
+func (s *server) listClientErrors(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(kit.EnvOr(q.Get("page"), "1"))
+	pageSize, _ := strconv.Atoi(kit.EnvOr(q.Get("page_size"), "40"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 40
+	}
+	var total int64
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM client_error_log").Scan(&total); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, message, stack, digest, url, user_agent, user_id, created_at
+		FROM client_error_log ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+		pageSize, (page-1)*pageSize)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var message, stack, digest, url, userAgent, userID string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &message, &stack, &digest, &url, &userAgent, &userID, &createdAt); err != nil {
+			kit.Fail(w, 500, "db_error", err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "message": message, "stack": stack, "digest": digest,
+			"url": url, "user_agent": userAgent, "user_id": userID,
+			"created_at": createdAt.UTC().Format(time.RFC3339),
+		})
+	}
+	kit.JSON(w, 200, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize})
 }
 
 // internalSecurityBlockWrite — POST /internal/security-block

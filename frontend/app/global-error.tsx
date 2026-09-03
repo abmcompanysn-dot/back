@@ -2,8 +2,12 @@
 
 import { useEffect } from 'react'
 import Image from 'next/image'
-// Sentry frontend désactivé le 2026-08-29 (voir next.config.mjs) — l'erreur
-// globale est loguée en console ; le suivi backend Go reste actif.
+// Sentry frontend désactivé le 2026-08-29 (voir next.config.mjs, deux
+// tentatives infructueuses le 2026-09-03 : @sentry/nextjs cassait le
+// build Cloudflare, @sentry/cloudflare cassait le site entier à
+// l'exécution faute d'API compatible avec un middleware Next.js) —
+// suivi maison à la place (POST vers /api/log-client-error, visible
+// dans le back-office page "Erreurs du site").
 
 const primaryButtonStyle: React.CSSProperties = {
   width: '100%', padding: '14px', background: '#e85d04',
@@ -26,6 +30,17 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error('[MIAD] Global error:', error)
+    // Best-effort, jamais bloquant — voir /api/log-client-error.
+    fetch('/api/log-client-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: error.message,
+        stack: error.stack || '',
+        digest: error.digest || '',
+        url: typeof window !== 'undefined' ? window.location.href : '',
+      }),
+    }).catch(() => {})
   }, [error])
 
   return (

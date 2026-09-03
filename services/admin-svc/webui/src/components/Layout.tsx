@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import {
+  IconAlert,
   IconChevronLeft,
   IconChevronRight,
   IconCatalog,
@@ -35,6 +36,7 @@ const TABS = [
   { path: '/admin/finance', label: 'Finances', icon: IconFinance },
   { path: '/admin/payment-routing', label: 'Mobile Money', icon: IconFinance },
   { path: '/admin/security', label: 'Sécurité', icon: IconSecurity },
+  { path: '/admin/client-errors', label: 'Erreurs du site', icon: IconAlert },
   { path: '/admin/system', label: 'Système', icon: IconSystem },
   { path: '/admin/configuration', label: 'Configuration', icon: IconConfiguration },
 ]
@@ -57,6 +59,7 @@ const SECTION: Record<string, string> = {
   '/admin/payments': 'Finances',
   '/admin/payment-routing': 'Mobile Money',
   '/admin/security': 'Sécurité',
+  '/admin/client-errors': 'Erreurs du site',
   '/admin/system': 'Système',
   '/admin/configuration': 'Configuration',
 }
