@@ -287,8 +287,17 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     try {
       const token = localStorage.getItem('miad_token')
       const res = await fetch(`/api/products/${p.id}`, { headers: { Authorization: `Bearer ${token}` } })
-      if (res.ok) full = await res.json()
-    } catch {}
+      if (res.ok) {
+        full = await res.json()
+      } else {
+        // Échec silencieux avant le 2026-09-03 : le formulaire s'ouvrait
+        // avec des champs vides sans qu'aucun signal n'explique pourquoi.
+        // Un avertissement visible vaut mieux qu'un mystère.
+        toast.warning('Certains champs (description, catégorie…) n’ont pas pu être rechargés — vérifiez avant de sauvegarder.')
+      }
+    } catch {
+      toast.warning('Certains champs (description, catégorie…) n’ont pas pu être rechargés — vérifiez avant de sauvegarder.')
+    }
 
     // Charger les variations existantes si produit variable
     let existingVariations: VariationRow[] = []
@@ -932,8 +941,17 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
                             {siteCategories.reduce((acc: React.ReactNode[], parent) => {
                               if (!parent.isRoot || parent.slug === 'uncategorized') return acc
                               const children = siteCategories.filter(c => c.parent === parent.id && !c.isRoot)
+                              // Un produit peut être classé directement sur la catégorie racine
+                              // (pas seulement une sous-catégorie) — avant ce fix, cette racine
+                              // n'apparaissait JAMAIS comme option sélectionnable dès qu'elle avait
+                              // des enfants (seul le optgroup de ses enfants était affiché), donc
+                              // le sélecteur retombait silencieusement sur "Choisir une
+                              // catégorie..." même quand le produit avait bien une catégorie
+                              // enregistrée (signalé par le fondateur 2026-09-03, produit "Sac
+                              // KOUTA — Jaune" classé directement sur "Sacs - Maroquinerie").
                               acc.push(children.length > 0 ? (
                                 <optgroup key={parent.id} label={parent.name}>
+                                  <option value={parent.slug}>{parent.name} (général)</option>
                                   {children.map(child => (
                                     <option key={child.id} value={child.slug}>{child.name}</option>
                                   ))}
