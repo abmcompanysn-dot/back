@@ -939,6 +939,20 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
           // résoudre produit/boutique depuis ce slug — il gère déjà le cas
           // "pas encore en mémoire" via son propre fetch de secours. On ne
           // fait ici que NE PAS écraser la vue avec 'home'.
+          //
+          // MAIS ce hook (searchParams) peut ne pas s'être resynchronisé
+          // avec l'URL réelle au moment précis où CE popstate handler
+          // s'exécute (course avec la resynchronisation interne du routeur
+          // Next.js) — dans ce cas l'effet réactif se déclenche avec
+          // d'anciennes valeurs, ne fait rien, et la page reste figée sur
+          // son état précédent (régression signalée le 2026-09-03 : "retour
+          // arrière bloque sur l'accueil" / "boutique → accueil bloqué sans
+          // produit", après le premier correctif du jour). router.replace
+          // sur l'URL courante force cette resynchronisation de façon fiable
+          // avant de compter sur l'effet réactif — sans ajouter d'entrée
+          // d'historique (replace, jamais push) ni recharger de données
+          // serveur (juste une resynchronisation client du routeur).
+          router.replace(window.location.pathname + window.location.search, { scroll: false })
           return
         }
         setCurrentView('home')
