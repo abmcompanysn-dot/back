@@ -190,6 +190,7 @@ async function HomeData({ searchParams }: { searchParams: Promise<PageSearchPara
         forcedView={(params.v === 'vendor' ? 'store' : params.v) as any}
         forcedProductSlug={params.v === 'product' ? params.slug : undefined}
         forcedVendorSlug={params.v === 'vendor' ? params.slug : undefined}
+        forcedCategorySlug={params.v === 'category' ? params.slug : undefined}
         shippingRates={SHIPPING_FALLBACK}
         stripeReturn={params.payment_success === '1' ? { orderId: Number(params.order_id) || 0, paymentIntentId: params.payment_intent } : undefined}
         sharedCartId={params.cart}

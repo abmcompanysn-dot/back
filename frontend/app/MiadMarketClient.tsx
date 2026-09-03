@@ -228,6 +228,7 @@ type MiadMarketClientProps = {
   forcedView?: View;
   forcedVendorSlug?: string;
   forcedProductSlug?: string;
+  forcedCategorySlug?: string;
   shippingRates: Record<string, any>;
   stripeReturn?: { orderId: number; paymentIntentId?: string };
   sharedCartId?: string;
@@ -294,7 +295,7 @@ const PageSkeleton = () => (
   </div>
 )
 
-export default function MiadMarketClient({ initialProducts, initialCategories, initialStores, initialUserCountryCode, forcedView, forcedVendorSlug, forcedProductSlug, shippingRates, stripeReturn, sharedCartId, homeSections, initialLang }: MiadMarketClientProps) {
+export default function MiadMarketClient({ initialProducts, initialCategories, initialStores, initialUserCountryCode, forcedView, forcedVendorSlug, forcedProductSlug, forcedCategorySlug, shippingRates, stripeReturn, sharedCartId, homeSections, initialLang }: MiadMarketClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // --- 1. ETATS (Doivent être en haut pour éviter les erreurs de TDZ) ---
@@ -328,7 +329,16 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   // client) — pilote l'affichage du CountryDetectionBanner tant qu'il n'a
   // pas confirmé/changé son pays (voir app/page.tsx pour la détection).
   const [countryWasAutoDetected] = useState(!!initialUserCountryCode);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+  // Chargement direct d'une page catégorie (?v=category&slug=X — lien
+  // partagé, favori, nouvel onglet) : sans cet initialiseur, selectedCategory
+  // restait null indéfiniment même avec currentView='category' déjà forcé
+  // par forcedView — le rendu (case 'category') retombait alors sur
+  // <PageSkeleton /> pour toujours, et le garde-fou anti-skeleton plus bas
+  // (qui exige justement `&& selectedCategory` dans sa condition) ne se
+  // déclenchait jamais pour corriger le tir. contrairement à selectedProduct/
+  // selectedVendor, cet équivalent pour les catégories n'avait jamais été
+  // écrit — bug trouvé le 2026-09-03 en testant la navigation (skill browse).
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(forcedCategorySlug || null)
   // Filtres de la page catégorie, remontés ici (voir CategoryFilterState) :
   // état partagé pour survivre à l'ouverture d'un produit et être restauré
   // à l'identique au retour arrière (snapshot navStack).
