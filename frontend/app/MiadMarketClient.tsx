@@ -917,10 +917,30 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       if (navStack.current.length > 0) {
         restoreFromStack()
       } else {
-        // Pile vide : on est a l'accueil (ou a l'entree-garde initiale).
-        // router.refresh() seulement si l'accueil n'a jamais ete peint dans
-        // ce montage (meme raison que restoreFromStack ci-dessus : eviter le
-        // flash <HomeShell> au retour quand l'accueil est deja en memoire).
+        // Pile en mémoire vide NE VEUT PAS DIRE qu'on doit revenir à
+        // l'accueil — ça arrive aussi quand ce montage n'a jamais construit
+        // de snapshot pour l'URL courante (ex. fiche produit ouverte
+        // directement, puis navigation ailleurs, puis retour arrière : la
+        // pile React n'a jamais connu cet aller, seul l'historique
+        // navigateur le sait). Avant ce fix, ce cas forçait TOUJOURS
+        // l'accueil, quelle que soit l'URL réelle vers laquelle on vient de
+        // reculer (?v=product&slug=X restait affiché dans la barre
+        // d'adresse mais montrait l'accueil) — signalé le 2026-09-03
+        // ("j'étais dans une boutique, retour vers l'accueil, retour vers
+        // la boutique → accueil affiché"). On relit l'URL réelle
+        // (window.location, pas le searchParams du hook qui peut ne pas
+        // encore avoir resynchronisé) et on ne retombe sur l'accueil que
+        // si elle ne cible vraiment rien de particulier.
+        const params = new URLSearchParams(window.location.search)
+        const v = params.get('v')
+        const slug = params.get('slug')
+        if ((v === 'product' || v === 'vendor') && slug) {
+          // Laisse l'effet réactif à searchParams (plus haut, ~ligne 1247)
+          // résoudre produit/boutique depuis ce slug — il gère déjà le cas
+          // "pas encore en mémoire" via son propre fetch de secours. On ne
+          // fait ici que NE PAS écraser la vue avec 'home'.
+          return
+        }
         setCurrentView('home')
         setSearchQuery('')
         window.scrollTo(0, 0)
