@@ -324,20 +324,26 @@
 	# et /dhl/orders/{id}/create-shipment (créer un VRAI colis DHL, coûte
 	# de l'argent réel), POST/DELETE /dhl/hs-codes|boxes (config
 	# douanière), DELETE /dhl/logs (purge) — tous sans authentification.
-	# Seul /tracking/search/{number} (suivi public d'un colis par son
-	# numéro) a un usage public légitime ; le frontend n'appelle même pas
-	# le reste de fulfillment-svc directement (voir FULFILLMENT_SVC_URL,
-	# seul /shipments en POST est utilisé, depuis le back-office
+	# Le frontend n'appelle fulfillment-svc directement que pour
+	# /shipments en POST (voir FULFILLMENT_SVC_URL, back-office
 	# authentifié — laissé pour compat mais à migrer vers /admin/api/*).
+	# GET /tracking/search/{number} (suivi par numéro) N'EST PAS routé
+	# ici bien qu'il puisse sembler "public par nature" — vérifié dans
+	# frontend/app/api/order-tracking/route.ts : un développeur précédent
+	# a explicitement documenté que router ce endpoint directement, sans
+	# vérification d'identité, serait "une régression de sécurité"
+	# (n'importe qui devinant un numéro de suivi verrait toute la
+	# commande de n'importe qui — order_number, client_name, adresse). Le
+	# frontend n'a d'ailleurs aucun consommateur branché dessus
+	# actuellement (page /suivi/[orderId]/[token] appelle encore
+	# l'ancienne URL WordPress mort). Ne router qu'une fois qu'un vrai
+	# mécanisme de token public par commande existera côté Go.
 	handle /shipments* {
 		reverse_proxy fulfillment-svc:8090
 	}
-	handle /tracking/search/* {
-		reverse_proxy fulfillment-svc:8090
-	}
-	# Tout le reste de /tracking/* et tout /dhl/* (settings, hs-codes,
-	# boxes, logs, création d'étiquette) reste joignable uniquement par
-	# admin-svc en interne — jamais via ce Caddyfile public.
+	# Tout /tracking/* et tout /dhl/* (settings, hs-codes, boxes, logs,
+	# recherche par numéro, création d'étiquette) reste joignable
+	# uniquement par admin-svc en interne — jamais via ce Caddyfile public.
 
 	# Coins/fidélité + représentants pays — loyalty-svc
 	#
