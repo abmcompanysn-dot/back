@@ -2,8 +2,10 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import useSWRInfinite from 'swr/infinite'
+import { Loader2 } from 'lucide-react'
 import { trackEvent } from '@/lib/analytics'
 import { mktViewContent, mktAddToCart, mktInitiateCheckout, mktSearch } from '@/lib/marketing-events'
 import { Header } from '@/components/miad/Header'
@@ -15,7 +17,6 @@ import { CategoriesSection } from '@/components/miad/CategoriesSection'
 import { toast } from 'sonner'
 import { ProductDetail } from '@/components/miad/ProductDetail'
 import { CartPage } from '@/components/miad/CartPage'
-import { CheckoutPage } from '@/components/miad/CheckoutPage'
 import { Dashboard } from '@/components/miad/Dashboard'
 import { ClientDashboard } from '@/components/miad/ClientDashboard'
 import { LoginPage } from '@/components/miad/LoginPage'
@@ -45,6 +46,26 @@ import { CART_KEY } from '@/lib/cart-store'
 import { StreamedNavClickProvider } from '@/contexts/StreamedNavClickContext'
 import { CountryDetectionBanner } from '@/components/miad/CountryDetectionBanner'
 import { ScrollToTopButton } from '@/components/miad/ScrollToTopButton'
+
+// Chargement différé — CheckoutPage embarque le SDK Stripe (~365 Ko, le
+// plus gros fichier JS de tout le site, mesuré le 2026-09-03), utile
+// seulement à l'étape paiement. En import statique, ce poids partait sur
+// TOUTE navigation (accueil, fiche produit, boutique...) puisque
+// MiadMarketClient.tsx est le composant central de toutes les vues.
+// next/dynamic ne charge ce chunk qu'au moment où currentView passe à
+// 'checkout' — ssr: false car CheckoutPage dépend du panier (localStorage,
+// jamais disponible côté serveur) comme tout le reste de ce fichier.
+const CheckoutPage = dynamic(
+  () => import('@/components/miad/CheckoutPage').then(m => m.CheckoutPage),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <Loader2 size={28} className="animate-spin text-accent" />
+      </div>
+    ),
+  }
+)
 
 type View =
   | 'home'
