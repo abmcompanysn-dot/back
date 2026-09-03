@@ -296,9 +296,6 @@ const PageSkeleton = () => (
 )
 
 export default function MiadMarketClient({ initialProducts, initialCategories, initialStores, initialUserCountryCode, forcedView, forcedVendorSlug, forcedProductSlug, forcedCategorySlug, shippingRates, stripeReturn, sharedCartId, homeSections, initialLang }: MiadMarketClientProps) {
-  if (typeof window !== 'undefined') {
-    console.log('[DEBUG mount]', { forcedView, forcedCategorySlug, forcedVendorSlug, forcedProductSlug })
-  }
   const router = useRouter()
   const searchParams = useSearchParams()
   // --- 1. ETATS (Doivent être en haut pour éviter les erreurs de TDZ) ---
@@ -1289,8 +1286,20 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     }
   }, [currentView, infiniteProducts, productsLoading, size, setSize, isReachingEnd]);
 
+  // revalidateIfStale:false (swrOptions) empêche normalement tout refetch
+  // tant qu'un fallbackData existe — correct pour l'accueil (initialCategories
+  // vient du SSR, jamais vide). MAIS un chargement direct de ?v=category|
+  // product|vendor (page.tsx, branche !isHomeNavigation) passe TOUJOURS
+  // initialCategories=[] (pas de SSR pour ces routes) : sans override, ce
+  // tableau vide était traité comme une vraie donnée déjà à jour, categories
+  // restait vide pour toujours, et la page catégorie ne trouvait jamais son
+  // categoryObj — squelette infini (bug trouvé le 2026-09-03, cause racine
+  // finale après plusieurs correctifs partiels le même jour). On force donc
+  // revalidateIfStale quand il n'y a rien à afficher, pour laisser SWR
+  // relancer la vraie requête même avec ce fallback vide.
   const { data: categoriesData, isLoading: categoriesLoading, error: categoriesError } = useSWR(`/api/categories?lang=${language}`, fetcherWithAuth, {
     ...swrOptions,
+    revalidateIfStale: initialCategories.length === 0,
     fallbackData: { categories: initialCategories }
   })
   useEffect(() => { if (categoriesError) handleSWRFetchError(categoriesError); }, [categoriesError]);
@@ -1969,11 +1978,6 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         );
 
       case 'category':
-        // DEBUG TEMPORAIRE 2026-09-03 — à retirer une fois le bug de
-        // squelette infini sur lien direct catégorie confirmé résolu.
-        if (typeof window !== 'undefined') {
-          console.log('[DEBUG category]', { selectedCategory, categoriesCount: categories.length, forcedView, forcedCategorySlug })
-        }
         if (!selectedCategory) return <PageSkeleton />;
         const categoryObj = categories.find((c: WooCategory) => c.slug === selectedCategory);
         // Skeleton uniquement pendant le chargement — si catégories chargées et slug introuvable,
