@@ -50,14 +50,34 @@ async function fetchAllProductIds(opts: {
   };
 
   const MAX_PAGES = 30;
-  const ids: number[] = [];
-  for (let page = 1; page <= MAX_PAGES; page++) {
+  const fetchPage = async (page: number) => {
     const res = await fetch(buildUrl(page), { next: { revalidate: opts.cacheStrategy, tags: ['products', `product-ids-p${page}`] } });
-    if (!res.ok) break;
-    const data: any = await res.json().catch(() => ({}));
-    const batch: Array<{ id: number }> = data.items || [];
-    ids.push(...batch.map(p => p.id));
-    if (!data.has_more || batch.length === 0) break;
+    if (!res.ok) return null;
+    return res.json().catch(() => null) as Promise<any>;
+  };
+
+  // Page 1 d'abord, seule (on ne connaît pas encore total_pages) — puis le
+  // reste EN PARALLÈLE plutôt que page par page dans une boucle séquentielle.
+  // Avant ce fix : jusqu'à 30 aller-retours l'un après l'autre vers
+  // catalog-svc pour une seule visite (page catégorie/accueil), chacun avec
+  // sa propre latence edge→VPS — dépassait le budget de temps de la route
+  // (maxDuration=60) sur une catégorie à ~4000 produits (39 pages à 100),
+  // renvoyant "Le serveur est saturé" côté client alors que catalog-svc
+  // lui-même tournait très bien (CPU quasi nul, vérifié) — signalé le
+  // 2026-09-03 (page catégorie bloquée en squelette de chargement indéfini).
+  const first = await fetchPage(1);
+  if (!first) return [];
+  const ids: number[] = (first.items || []).map((p: { id: number }) => p.id);
+  const totalPages = Math.min(Number(first.total_pages) || 1, MAX_PAGES);
+
+  if (totalPages > 1) {
+    const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+    const results = await Promise.all(remainingPages.map(fetchPage));
+    for (const data of results) {
+      if (!data) continue;
+      const batch: Array<{ id: number }> = data.items || [];
+      ids.push(...batch.map(p => p.id));
+    }
   }
   return ids;
 }
