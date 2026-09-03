@@ -68,7 +68,34 @@ export async function GET(request: Request) {
     } catch {
       ordersData = null;
     }
-    const ordersArray: any[] = Array.isArray(ordersData?.items) ? ordersData.items : [];
+    // Mappe le format brut order-svc (created_at/total_usd, une ligne par
+    // SOUS-commande vendeur) vers le format attendu par ClientDashboard.tsx
+    // (date_created/total, une ligne par commande PARENT groupée) — même
+    // logique que /api/orders/route.ts. Avant ce fix, recentOrders utilisait
+    // ordersArray brut tel quel : ClientDashboard lisait order.date_created
+    // (absent, seul created_at existe) et Number(order.total) (absent, seul
+    // total_usd existe), donnant "Invalid Date" et "NaN $" sur le tableau de
+    // bord — bug remonté 2026-09-03 (captures #459/#458/#456).
+    const rawOrders: any[] = Array.isArray(ordersData?.items) ? ordersData.items : [];
+    const mappedOrders = rawOrders.map((o: any) => ({
+      ...o,
+      total: o.total_usd ?? o.total ?? 0,
+      date_created: o.created_at ?? o.date_created ?? null,
+      date_modified: o.updated_at ?? o.created_at ?? o.date_modified ?? null,
+      line_items: o.line_items ?? [],
+    }))
+    const byParentCustomer = new Map<number, any>();
+    for (const o of mappedOrders) {
+      const pid = o.parent_order_id || o.id;
+      const g = byParentCustomer.get(pid);
+      if (!g) {
+        byParentCustomer.set(pid, { ...o, id: pid, parent_order_id: pid, total: Number(o.total) || 0 });
+      } else {
+        g.total += Number(o.total) || 0;
+        if (o.date_created && (!g.date_created || o.date_created < g.date_created)) g.date_created = o.date_created;
+      }
+    }
+    const ordersArray: any[] = Array.from(byParentCustomer.values()).sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
 
     // Calcul des statistiques pour les badges du Dashboard (AliExpress Style)
     // order-svc utilise des statuts différents de l'ancien WooCommerce
