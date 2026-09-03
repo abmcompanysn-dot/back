@@ -17,6 +17,7 @@ import { type WooProduct } from '@/lib/woocommerce'
 import { QRCodeImage } from './QRCodeImage'
 import { LazyImage } from './LazyImage'
 import { VendorShippingAddressForm } from './VendorShippingAddressForm'
+import { PriceInputWithCurrency } from './PriceInputWithCurrency'
 
 type DashboardProps = {
   onBack: () => void
@@ -851,12 +852,12 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label htmlFor="product-regular-price" className="text-[10px] font-black uppercase text-slate-400 mb-1.5 block">Prix normal ($) *</label>
-                            <Input id="product-regular-price" type="number" step="0.01" placeholder="0.00" value={productForm.regularPrice || productForm.price} onChange={e => setProductForm(f => ({ ...f, regularPrice: e.target.value }))} required />
+                            <label htmlFor="product-regular-price" className="text-[10px] font-black uppercase text-slate-400 mb-1.5 block">Prix normal *</label>
+                            <PriceInputWithCurrency id="product-regular-price" placeholder="0.00" usdValue={productForm.regularPrice || productForm.price} onUsdChange={usd => setProductForm(f => ({ ...f, regularPrice: usd }))} required />
                           </div>
                           <div>
-                            <label htmlFor="product-sale-price" className="text-[10px] font-black uppercase text-slate-400 mb-1.5 block">Prix promo ($) <span className="text-orange-500">🔥</span></label>
-                            <Input id="product-sale-price" type="number" step="0.01" placeholder="Laisser vide si pas de promo" value={productForm.salePrice} onChange={e => setProductForm(f => ({ ...f, salePrice: e.target.value, price: e.target.value || f.regularPrice }))} />
+                            <label htmlFor="product-sale-price" className="text-[10px] font-black uppercase text-slate-400 mb-1.5 block">Prix promo <span className="text-orange-500">🔥</span></label>
+                            <PriceInputWithCurrency id="product-sale-price" placeholder="Laisser vide si pas de promo" usdValue={productForm.salePrice} onUsdChange={usd => setProductForm(f => ({ ...f, salePrice: usd, price: usd || f.regularPrice }))} />
                           </div>
                         </div>
                         {productForm.salePrice && (
@@ -1042,14 +1043,14 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
                                   {/* Prix + Stock */}
                                   <div className="grid grid-cols-3 gap-2">
                                     <div>
-                                      <label htmlFor={`var-${vi}-regular-price`} className="text-[9px] font-black uppercase text-slate-400 block mb-0.5">Prix normal ($)</label>
-                                      <Input id={`var-${vi}-regular-price`} type="number" step="0.01" value={v.regularPrice} placeholder="0.00" className="h-8 text-xs"
-                                        onChange={e => { const vars = [...productForm.variations]; vars[vi] = { ...vars[vi], regularPrice: e.target.value }; setProductForm(f => ({ ...f, variations: vars })) }} />
+                                      <label htmlFor={`var-${vi}-regular-price`} className="text-[9px] font-black uppercase text-slate-400 block mb-0.5">Prix normal</label>
+                                      <PriceInputWithCurrency id={`var-${vi}-regular-price`} usdValue={v.regularPrice} placeholder="0.00" className="[&_input]:h-8 [&_input]:text-xs"
+                                        onUsdChange={usd => { const vars = [...productForm.variations]; vars[vi] = { ...vars[vi], regularPrice: usd }; setProductForm(f => ({ ...f, variations: vars })) }} />
                                     </div>
                                     <div>
-                                      <label htmlFor={`var-${vi}-sale-price`} className="text-[9px] font-black uppercase text-orange-400 block mb-0.5">Prix promo ($) 🔥</label>
-                                      <Input id={`var-${vi}-sale-price`} type="number" step="0.01" value={v.salePrice} placeholder="Optionnel" className="h-8 text-xs"
-                                        onChange={e => { const vars = [...productForm.variations]; vars[vi] = { ...vars[vi], salePrice: e.target.value, price: e.target.value || v.regularPrice }; setProductForm(f => ({ ...f, variations: vars })) }} />
+                                      <label htmlFor={`var-${vi}-sale-price`} className="text-[9px] font-black uppercase text-orange-400 block mb-0.5">Prix promo 🔥</label>
+                                      <PriceInputWithCurrency id={`var-${vi}-sale-price`} usdValue={v.salePrice} placeholder="Optionnel" className="[&_input]:h-8 [&_input]:text-xs"
+                                        onUsdChange={usd => { const vars = [...productForm.variations]; vars[vi] = { ...vars[vi], salePrice: usd, price: usd || v.regularPrice }; setProductForm(f => ({ ...f, variations: vars })) }} />
                                     </div>
                                     <div>
                                       <label htmlFor={`var-${vi}-stock`} className="text-[9px] font-black uppercase text-slate-400 block mb-0.5">Stock</label>
