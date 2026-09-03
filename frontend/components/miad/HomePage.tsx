@@ -133,7 +133,7 @@ function prefetchStoreProducts(store: WooVendor) {
 // Repli propre quand la boutique n'a pas de logo (ou que l'image casse) —
 // avant, le repli pointait vers /vendor-placeholder.png qui n'existe pas,
 // donc l'image cassait et se cachait (onError), laissant un cercle vide.
-function VendorAvatar({ logo, name }: { logo?: string; name: string }) {
+function VendorAvatar({ logo, name, priority = false }: { logo?: string; name: string; priority?: boolean }) {
   const [errored, setErrored] = useState(false)
   const valid = !!logo && !errored
   return valid ? (
@@ -144,6 +144,8 @@ function VendorAvatar({ logo, name }: { logo?: string; name: string }) {
         className="object-cover rounded-full"
         alt={name}
         onError={() => setErrored(true)}
+        priority={priority}
+        loading={priority ? undefined : 'lazy'}
       />
     </div>
   ) : (
@@ -215,7 +217,7 @@ export function TopVendorsStrip({ stores, onStoreClick, language = 'fr' }: { sto
           onScroll={(e) => { topVendorsStripScrollLeft = e.currentTarget.scrollLeft }}
           className="flex gap-6 overflow-x-auto scrollbar-hide pb-4"
         >
-          {stores.map(store => (
+          {stores.map((store, i) => (
             <button
               type="button"
               key={store.id}
@@ -225,7 +227,16 @@ export function TopVendorsStrip({ stores, onStoreClick, language = 'fr' }: { sto
             >
               <div className="relative w-16 h-16">
                 <div className="w-full h-full rounded-full border-2 border-border p-0.5 group-hover:border-accent transition-colors overflow-hidden bg-muted">
-                  <VendorAvatar logo={store.logo} name={store.name} />
+                  {/* Ce strip est tout en haut de l'accueil ("AVANT le hero",
+                      voir commentaire de section) — les 8 premiers logos
+                      (visibles dès le chargement, avant tout défilement)
+                      chargent en priorité plutôt qu'en lazy, corrige le
+                      chargement lent des logos signalé le 2026-09-03 (les
+                      images restaient longtemps floues/vides sur cette
+                      section pourtant visible immédiatement). Au-delà de 8,
+                      lazy reste le bon choix (hors écran tant qu'on ne
+                      défile pas). */}
+                  <VendorAvatar logo={store.logo} name={store.name} priority={i < 8} />
                 </div>
                 {store.countryCode && (
                   <Image
