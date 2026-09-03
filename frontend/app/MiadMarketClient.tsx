@@ -29,6 +29,7 @@ import { MobileSidebar } from '@/components/miad/MobileSidebar'
 import { CategoriesListPage } from '@/components/miad/CategoriesListPage'
 import { StoresListPage } from '@/components/miad/StoresListPage'
 import { ProductCard } from '@/components/miad/ProductCard'
+import { QuickViewModal } from '@/components/miad/QuickViewModal'
 import { Button } from '@/components/ui/button'
 import { HelpCenter } from '@/components/miad/HelpCenter'
 import { OrderHistory } from '@/components/miad/OrderHistory'
@@ -309,6 +310,11 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     if (!forcedProductSlug) return null
     return initialProducts.find(p => p.slug === forcedProductSlug) ?? null
   })
+  // Aperçu rapide (2026-09-03) — état DISTINCT de selectedProduct (celui-ci
+  // pilote toute la navigation currentView==='product' + historique) : la
+  // modale ne doit jamais interférer avec la pile de navigation ni pousser
+  // d'entrée d'historique, juste s'ouvrir/fermer par-dessus la vue courante.
+  const [quickViewProduct, setQuickViewProduct] = useState<WooProduct | null>(null)
   const [selectedVendor, setSelectedVendor] = useState<WooVendor | null>(() => {
     if (!forcedVendorSlug) return null
     return initialStores.find(s => s.slug === forcedVendorSlug || s.id === forcedVendorSlug) ?? null
@@ -1927,6 +1933,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
             onFiltersChange={setCategoryFilters}
             onProductClick={(p: WooProduct) => { handleProductClick(p) }}
             onAddToCart={handleQuickAdd}
+            onQuickView={setQuickViewProduct}
           />
         );
 
@@ -2216,6 +2223,12 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         userType={userType}
         onNavigate={setCurrentView}
         onLogout={handleLogout}
+      />
+      <QuickViewModal
+        product={quickViewProduct}
+        onClose={() => setQuickViewProduct(null)}
+        onAddToCart={handleQuickAdd}
+        onViewFull={(p) => { setQuickViewProduct(null); handleProductClick(p) }}
       />
     </StreamedNavClickProvider>
   )

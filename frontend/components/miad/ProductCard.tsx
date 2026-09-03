@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { mutate } from 'swr'
-import { Star, ShoppingCart, Truck, ShoppingBag, Heart } from 'lucide-react'
+import { Star, ShoppingCart, Truck, ShoppingBag, Heart, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { type WooProduct } from '@/lib/woocommerce'
 import { getAnchorPrice } from '@/lib/coins'
@@ -29,9 +29,15 @@ interface ProductCardProps {
   hideVendorInfo?: boolean
   onAddToCart: (product: WooProduct) => void
   userCountry?: string
+  // Optionnel : si fourni, affiche un bouton "Aperçu rapide" (icône œil,
+  // visible au survol comme le cœur favori) qui ouvre QuickViewModal au
+  // lieu de naviguer vers la fiche complète. Omis → comportement
+  // inchangé pour les usages existants de ProductCard qui n'ont pas
+  // encore de modale à proposer.
+  onQuickView?: (product: WooProduct) => void
 }
 
-export function ProductCard({ product, onClick, onAddToCart, hideVendorInfo, userCountry = '' }: ProductCardProps) {
+export function ProductCard({ product, onClick, onAddToCart, hideVendorInfo, userCountry = '', onQuickView }: ProductCardProps) {
   const { formatPrice: fp } = useCurrency()
   const { isFavorite, toggle: toggleWishlist } = useWishlist()
   const favorite = isFavorite(product.id)
@@ -85,6 +91,16 @@ export function ProductCard({ product, onClick, onAddToCart, hideVendorInfo, use
           <div className="absolute bottom-1.5 left-1.5 flex items-center gap-0.5 bg-emerald-500 text-white px-1.5 py-0.5 rounded text-[9px] font-black shadow">
             <Truck size={9} /><span>3$ local</span>
           </div>
+        )}
+        {onQuickView && (
+          <button
+            type="button"
+            aria-label="Aperçu rapide"
+            onClick={(e) => { e.stopPropagation(); onQuickView(product) }}
+            className="absolute bottom-1.5 right-1.5 w-7 h-7 flex items-center justify-center rounded-full bg-white/90 backdrop-blur-sm shadow-sm opacity-0 group-hover:opacity-100 transition-opacity hover:scale-110"
+          >
+            <Eye size={14} className="text-foreground" />
+          </button>
         )}
       </div>
 

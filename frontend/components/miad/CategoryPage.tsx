@@ -49,9 +49,10 @@ interface CategoryPageProps {
   onBack: () => void
   onProductClick: (product: WooProduct) => void
   onAddToCart: (product: WooProduct) => void
+  onQuickView?: (product: WooProduct) => void
 }
 
-export function CategoryPage({ category, products: initialProducts, language = 'fr', filters, onFiltersChange, onBack, onProductClick, onAddToCart }: CategoryPageProps) {
+export function CategoryPage({ category, products: initialProducts, language = 'fr', filters, onFiltersChange, onBack, onProductClick, onAddToCart, onQuickView }: CategoryPageProps) {
   const { sortBy, selectedCountries, priceRange, minRating } = filters
   const patch = (p: Partial<CategoryFilters>) => onFiltersChange({ ...filters, ...p })
   const setSortBy = (v: string) => patch({ sortBy: v })
@@ -167,7 +168,7 @@ export function CategoryPage({ category, products: initialProducts, language = '
             ) : filteredProducts.length > 0 ? (
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                 {filteredProducts.map(product => (
-                  <ProductCard key={product.id} product={product} onClick={onProductClick} onAddToCart={onAddToCart} />
+                  <ProductCard key={product.id} product={product} onClick={onProductClick} onAddToCart={onAddToCart} onQuickView={onQuickView} />
                 ))}
               </div>
             ) : (
