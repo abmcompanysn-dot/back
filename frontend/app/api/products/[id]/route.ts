@@ -16,6 +16,37 @@ async function checkProductOwnership(productId: string, vendorId: number): Promi
   return product?.vendor_id === vendorId
 }
 
+// GET /api/products/[id] — détail complet d'un produit (description,
+// category_id, stock, attributes, tags... — tout ce que GET /products
+// (la LISTE, utilisée par /api/vendor/products) omet volontairement pour
+// rester léger, voir listProducts côté catalog-svc). Ajouté le 2026-09-03 :
+// le formulaire "Modifier le produit" du dashboard vendeur (Dashboard.tsx
+// handleEditClick) ne recevait jusqu'ici que les champs partiels de la
+// liste — description et catégorie apparaissaient donc TOUJOURS vides à
+// l'édition, même quand le produit les avait bien en base (signalé par
+// le fondateur, capture "Modifier le produit").
+export async function GET(
+  request: Request,
+  { params }: { params: { id: string } }
+) {
+  const auth = request.headers.get('Authorization')
+  if (!auth?.startsWith('Bearer ')) {
+    return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
+  }
+  const user = await fetchWpUser(auth.slice(7))
+  if (!user) return NextResponse.json({ error: 'Session invalide' }, { status: 401 })
+  if (!isAdmin(user)) {
+    if (!user.vendor_id) return NextResponse.json({ error: 'Accès réservé aux vendeurs' }, { status: 403 })
+    const owns = await checkProductOwnership(params.id, Number(user.vendor_id))
+    if (!owns) return NextResponse.json({ error: 'Ce produit ne vous appartient pas' }, { status: 403 })
+  }
+
+  const res = await fetch(`${CATALOG_SVC_URL}/products/${params.id}`, { cache: 'no-store' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return NextResponse.json({ error: data?.error?.message || 'Produit introuvable' }, { status: res.status })
+  return NextResponse.json(data)
+}
+
 // PUT /api/products/[id] — édition d'un produit par le vendeur connecté.
 // Migré vers PATCH {CATALOG_SVC_URL}/products/{id} (partiel — seuls les
 // champs fournis sont modifiés côté catalog-svc).

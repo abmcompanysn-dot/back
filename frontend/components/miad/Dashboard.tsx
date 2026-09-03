@@ -275,6 +275,21 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     setEditingProductId(p.id)
     const isVariable = p.type === 'variable'
 
+    // Détail complet du produit — GET /api/vendor/products (la liste, qui a
+    // fourni `p`) omet volontairement description/category_id/stock/
+    // attributes pour rester léger (voir listProducts côté catalog-svc) :
+    // le formulaire d'édition affichait donc TOUJOURS ces champs vides,
+    // même quand le produit les avait bien en base (signalé par le
+    // fondateur 2026-09-03). GET /api/products/{id} (nouveau, relais direct
+    // de catalog-svc GET /products/{id}) a tout — on part de lui, avec `p`
+    // en repli si l'appel échoue (mieux qu'un formulaire totalement vide).
+    let full: any = p
+    try {
+      const token = localStorage.getItem('miad_token')
+      const res = await fetch(`/api/products/${p.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      if (res.ok) full = await res.json()
+    } catch {}
+
     // Charger les variations existantes si produit variable
     let existingVariations: VariationRow[] = []
     if (isVariable) {
@@ -298,19 +313,19 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
     }
 
     setProductForm({
-      name:            p.name,
-      price:           p.price?.toString() || '',
-      regularPrice:    p.regularPrice?.toString() || '',
-      salePrice:       p.salePrice?.toString() || '',
-      stock:           p.stock?.toString() || '',
-      mainImage:       p.image || '',
+      name:            full.name || p.name,
+      price:           (full.regular_price ?? full.price ?? p.price)?.toString() || '',
+      regularPrice:    (full.regular_price ?? p.regularPrice)?.toString() || '',
+      salePrice:       (full.sale_price ?? p.salePrice)?.toString() || '',
+      stock:           (full.stock ?? p.stock)?.toString() || '',
+      mainImage:       full.image || p.image || '',
       mainImageId:     0,
-      galleryImages:   p.images?.join(',') || '',
+      galleryImages:   (full.images || []).map((img: any) => img.src ?? img).join(',') || p.images?.join(',') || '',
       galleryImageIds: [],
-      category:        p.categorySlug || '',
-      description:     p.description || '',
-      type:            p.type || 'simple',
-      attributes:      (p.attributes || []).map((a: any) => ({ id: nextAttrId.current++, name: a.name, options: a.options?.join(', ') || '' })),
+      category:        full.category_slug || full.categorySlug || p.categorySlug || '',
+      description:     full.description || p.description || '',
+      type:            full.type || p.type || 'simple',
+      attributes:      (full.attributes || p.attributes || []).map((a: any) => ({ id: nextAttrId.current++, name: a.name, options: a.options?.join(', ') || '' })),
       variations:      existingVariations,
     })
     setIsAddingProduct(true)
