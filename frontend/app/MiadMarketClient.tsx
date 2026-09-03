@@ -1182,7 +1182,19 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   // évite un appel réseau inutile constaté le 2026-07-11 : cliquer une carte
   // produit/boutique depuis une section streamée (navigation Link réelle,
   // donc remount de ce composant) relançait tout le catalogue pour rien.
-  const needsCatalog = currentView !== 'product' && currentView !== 'store'
+  //
+  // 'category' exclue aussi (2026-09-03) : CategoryPage.tsx a son PROPRE
+  // fetch dédié (/api/products?category=X, ligne ~74 de ce fichier),
+  // allProducts ne lui sert à rien — pourtant ce useSWRInfinite tournait
+  // quand même en tâche de fond sur cette vue, tirant jusqu'à 5 pages de
+  // 100 produits (le préchargement "Marché [Pays]" de l'accueil, déjà
+  // limité à currentView==='home' juste plus bas, mais le PREMIER appel
+  // page=1 de useSWRInfinite lui-même n'était pas concerné par cette
+  // garde) — confirmé par capture réseau (skill browse) : une page
+  // catégorie ouverte en lien direct tirait /api/products?page=1,2,3...
+  // en plus de son propre fetch, contribuant au blocage en squelette
+  // signalé le 2026-09-03.
+  const needsCatalog = currentView !== 'product' && currentView !== 'store' && currentView !== 'category'
   const { data: infiniteProducts, size, setSize, isValidating: productsLoading, mutate: mutateProducts, error: productsError } = useSWRInfinite(
     (index, previousPageData) => {
       if (!needsCatalog) return null
