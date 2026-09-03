@@ -78,7 +78,21 @@ metadata:
   name: caddy
   namespace: miad
 spec:
-  type: LoadBalancer
+  # ClusterIP, PAS LoadBalancer — corrigé le 2026-09-03. Ce VPS héberge
+  # aussi un second projet (miadtalent, namespace miadtalen) dont Traefik
+  # (kube-system) est le SEUL service en LoadBalancer, celui qui tient
+  # réellement les ports 80/443 externes (svclb-traefik) et route ensuite
+  # vers ce Caddy en interne via Ingress/IngressRoute. Avec LoadBalancer
+  # ici, ce service reprenait les ports 80/443 à chaque ré-application de
+  # ce manifeste (ex. vps-bootstrap.sh), privant svclb-traefik de ses
+  # ports (Pending) et cassant tout le trafic miadtalent (Caddy MIAD
+  # Market n'a pas son passe-plat) — incident recontacté 3 fois avant ce
+  # fix, patché à chaque fois en urgence côté cluster
+  # (kubectl patch svc caddy -p '{"spec":{"type":"ClusterIP"}}') sans
+  # jamais corriger la source, donc le problème revenait au déploiement
+  # suivant. Ne JAMAIS repasser ce service en LoadBalancer tant que
+  # Traefik reste le point d'entrée partagé des deux projets sur ce VPS.
+  type: ClusterIP
   selector: { app: caddy }
   ports:
     - { name: http, port: 80, targetPort: 80 }
