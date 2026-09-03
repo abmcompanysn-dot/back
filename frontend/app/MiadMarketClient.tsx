@@ -296,6 +296,9 @@ const PageSkeleton = () => (
 )
 
 export default function MiadMarketClient({ initialProducts, initialCategories, initialStores, initialUserCountryCode, forcedView, forcedVendorSlug, forcedProductSlug, forcedCategorySlug, shippingRates, stripeReturn, sharedCartId, homeSections, initialLang }: MiadMarketClientProps) {
+  if (typeof window !== 'undefined') {
+    console.log('[DEBUG mount]', { forcedView, forcedCategorySlug, forcedVendorSlug, forcedProductSlug })
+  }
   const router = useRouter()
   const searchParams = useSearchParams()
   // --- 1. ETATS (Doivent être en haut pour éviter les erreurs de TDZ) ---
