@@ -91,6 +91,50 @@ function mapProduct(p: any): any {
   }
 }
 
+// Version allégée de mapProduct — pour les listes de cartes produit de
+// l'accueil (fetchInitialProducts/fetchCategoryRow), PAS pour la fiche
+// produit détaillée (fetchProductBySlug garde mapProduct complet).
+//
+// Trouvé le 2026-09-03 : la page d'accueil pesait 316 Ko de HTML, dont la
+// majorité était le payload React (self.__next_f.push) sérialisant ~47
+// produits avec TOUS les champs de mapProduct (poids, dimensions,
+// spécifications, variations, attributs bruts, vendeur complet...) — la
+// plupart valant $undefined ou [] pour la majorité du catalogue (306
+// occurrences de $undefined mesurées sur cette seule page). Une carte
+// produit d'accueil (ProductCard.tsx/LinkProductCard.tsx) n'a jamais lu
+// que les champs ci-dessous — vérifié champ par champ dans les deux
+// composants avant de couper le reste, et confirmé qu'aucun composant
+// panier/checkout ne lit de champ au-delà de ceux-ci sur un item du
+// panier (addToCart stocke le produit tel quel dans le panier).
+function mapProductCard(p: any): any {
+  return {
+    id: p.id || null,
+    name: decodeHtmlEntities(p.name || ''),
+    slug: p.slug || '',
+    price: parseFloat(p.price || '0'),
+    regularPrice: parseFloat(p.regular_price || p.price || '0'),
+    salePrice: p.on_sale && p.sale_price ? parseFloat(p.sale_price) : undefined,
+    onSale: !!p.on_sale,
+    image: p.images?.[0]?.src || '',
+    categorySlug: p.categories?.[0]?.slug || '',
+    stock: p.stock_quantity ?? 0,
+    inStock: p.stock_status ? p.stock_status === 'instock' : p.status === 'active',
+    rating: parseFloat(p.average_rating || '0'),
+    salesCount: p.rating_count || 0,
+    countryCode: getCountryCode(p.store),
+    currency: '$',
+    lang: (p.lang as 'fr' | 'en') || 'fr',
+    type: p.type || 'simple',
+    vendor: p.store
+      ? {
+          id: p.store.id?.toString() || null,
+          name: p.store.store_name || p.store.name || 'Boutique',
+          slug: p.store.slug || '',
+        }
+      : null,
+  }
+}
+
 function mapStore(s: any): any {
   return {
     id: s.id?.toString() || null,
@@ -198,7 +242,10 @@ export const fetchInitialProducts = cache(async (perPage = 100, lang: 'fr' | 'en
     })
     if (!res.ok) return []
     const data = await res.json()
-    return (data.items || []).map(mapProduct).map((p: any) => ({ ...p, lang }))
+    // mapProductCard (allégé) — cette fonction n'alimente que des sections
+    // d'accueil affichées en cartes (FoodServer via fetchProductsByCategorySlug,
+    // fetchHomeCountryData). Voir le commentaire sur mapProductCard.
+    return (data.items || []).map(mapProductCard).map((p: any) => ({ ...p, lang }))
   } catch {
     return []
   }
@@ -334,8 +381,10 @@ export async function fetchCategoryRow(
     )
     if (!res.ok) return { products: [], totalPages: 0 }
     const data = await res.json()
+    // mapProductCard (allégé) — n'alimente que les rangées catégorie de
+    // l'accueil (CategorySections.tsx → CategoryRow.tsx → ProductCard).
     return {
-      products: (data.items || []).map(mapProduct),
+      products: (data.items || []).map(mapProductCard),
       totalPages: data.total_pages || 1,
     }
   } catch {
