@@ -963,7 +963,20 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         }
         setCurrentView('home')
         setSearchQuery('')
-        window.scrollTo(0, 0)
+        // Restaure la position de scroll mémorisée pour l'accueil (posée
+        // par navigateTo juste avant d'être parti sur le produit/la
+        // boutique) au lieu de forcer le haut de page — avant ce fix, un
+        // retour arrière vers l'accueil depuis ce chemin (pile en mémoire
+        // vide) remettait TOUJOURS à 0, même si le visiteur avait scrollé
+        // loin avant de cliquer (signalé le 2026-09-03 : "vérifier qu'on
+        // revient à la dernière position"). pendingScrollY (même mécanisme
+        // que restoreFromStack, avec son retry multi-frame le temps que la
+        // grille de produits atteigne sa hauteur finale) déclenche la
+        // restauration réelle via l'effet dédié plus haut — seul CE chemin
+        // (pile en mémoire vide) l'oubliait, retombait sur un window.scrollTo
+        // direct qui aurait pu s'exécuter avant que le contenu soit assez
+        // haut pour y arriver.
+        pendingScrollY.current = scrollPositions.current.get('home') ?? 0
         if (!homeRenderedRef.current) router.refresh()
       }
     }
