@@ -78,25 +78,44 @@ const CurrencyContext = createContext<CurrencyContextValue | null>(null)
 export function CurrencyProvider({ children }: { children: ReactNode }) {
   const [currency, setCurrencyState] = useState<Currency>('USD')
 
-  // Taux dynamiques depuis WP Admin (même endpoint que les tarifs livraison)
-  const { data } = useSWR('/api/shipping-rates', fetcher, {
-    fallbackData:      { currency_rates: FALLBACK_RATES },
+  // Taux de change — /api/exchange-rates relaie shipping-svc GET
+  // /exchange-rates, LA source unique déjà utilisée par payment-svc pour
+  // convertir les prix au moment du paiement mobile money, rafraîchie
+  // automatiquement chaque jour (voir shipping-svc/exchange-rates-refresh.go)
+  // et modifiable manuellement dans le back-office (page Devises). Avant
+  // le 2026-09-03, ce contexte lisait `/api/shipping-rates` → un champ
+  // `currency_rates` qui n'existait dans AUCUNE réponse (ni le payload
+  // réel, ni son fallback) : le sélecteur de devise du site tournait donc
+  // en permanence sur FALLBACK_RATES codé en dur, jamais un vrai taux à
+  // jour ni synchronisé avec ce qu'un client paie réellement.
+  //
+  // Le backend suit les devises par CODE ISO précis (XOF, XAF, GHS, CAD…)
+  // alors que ce contexte fusionne toute la zone Franc CFA sous un seul
+  // "FCFA" (voir COUNTRY_TO_CURRENCY plus haut) — XOF sert de taux
+  // représentatif pour FCFA (Sénégal et la plupart des pays de la zone
+  // sont en XOF ; l'écart avec XAF est historiquement nul, parité fixe
+  // 1:1 entre les deux francs CFA). EUR/GNF/GBP/MAD ne sont pas suivies
+  // côté paiement (PawaPay/PayDunya ne les utilisent pas) : elles gardent
+  // leur taux codé en dur (FALLBACK_RATES), personne d'autre ne les alimente.
+  const { data } = useSWR('/api/exchange-rates', fetcher, {
+    fallbackData:      { rates: {} as Record<string, number> },
     revalidateOnFocus: false,
     dedupingInterval:  300_000, // 5 min
   })
 
-  // Taux actifs : priorité aux valeurs admin, sinon fallback codé
+  // Taux actifs : priorité aux valeurs backend (payment-svc/admin), sinon
+  // fallback codé pour les devises non suivies côté paiement.
   const rates: CurrencyRates = useMemo(() => ({
     USD:  1,
-    EUR:  data?.currency_rates?.EUR  ?? FALLBACK_RATES.EUR,
-    FCFA: data?.currency_rates?.FCFA ?? FALLBACK_RATES.FCFA,
-    GHS:  data?.currency_rates?.GHS  ?? FALLBACK_RATES.GHS,
-    GNF:  data?.currency_rates?.GNF  ?? FALLBACK_RATES.GNF,
-    CAD:  data?.currency_rates?.CAD  ?? FALLBACK_RATES.CAD,
-    GBP:  data?.currency_rates?.GBP  ?? FALLBACK_RATES.GBP,
-    MAD:  data?.currency_rates?.MAD  ?? FALLBACK_RATES.MAD,
+    EUR:  FALLBACK_RATES.EUR,
+    FCFA: data?.rates?.XOF ?? FALLBACK_RATES.FCFA,
+    GHS:  data?.rates?.GHS ?? FALLBACK_RATES.GHS,
+    GNF:  FALLBACK_RATES.GNF,
+    CAD:  data?.rates?.CAD ?? FALLBACK_RATES.CAD,
+    GBP:  FALLBACK_RATES.GBP,
+    MAD:  FALLBACK_RATES.MAD,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [data?.currency_rates])
+  }), [data?.rates?.XOF, data?.rates?.GHS, data?.rates?.CAD])
 
   useEffect(() => {
     const saved = localStorage.getItem(LS_KEY) as Currency | null

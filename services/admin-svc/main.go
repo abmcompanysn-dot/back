@@ -518,6 +518,15 @@ func main() {
 		mux.HandleFunc("POST /admin/api/domestic-tiers", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.shippingURL+"/shipping-domestic/tiers")
 		}))
+		// Taux de change — source UNIQUE (voir shipping-svc, table
+		// exchange_rates), rafraîchie automatiquement chaque jour ET
+		// modifiable manuellement ici. Page Devises du back-office (2026-09-03).
+		// Consommée aussi par le frontend public via /api/exchange-rates ->
+		// shipping-svc GET /exchange-rates (même endpoint, sans auth admin).
+		mux.HandleFunc("GET /admin/api/exchange-rates", s.requireAdmin(s.proxy(func() string { return s.shippingURL + "/exchange-rates" })))
+		mux.HandleFunc("POST /admin/api/exchange-rates", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			forwardWithBody(w, r, http.MethodPost, s.shippingURL+"/exchange-rates")
+		}))
 		mux.HandleFunc("GET /admin/api/shipments", s.requireAdmin(s.proxy(func() string { return s.fulfillmentURL + "/shipments" })))
 		mux.HandleFunc("GET /admin/api/coins/leaderboard", s.requireAdmin(s.proxy(func() string { return s.loyaltyURL + "/coins/leaderboard" })))
 		// Coupons — page Marketing du back-office (CRUD via loyalty-svc).
