@@ -338,3 +338,37 @@ mais **aucun des 10 services n'a encore tourné avec une vraie base
 Postgres/Redis/Kafka** — ni ici, ni ailleurs. Le premier test d'exécution
 réelle (`docker compose up` ou `vps-bootstrap.sh`) reste à faire avant toute
 bascule de trafic réel depuis miadmarket.com.
+
+## 13. Bugs connus non résolus
+
+### Page catégorie bloquée en chargement quand ouverte en lien direct (2026-09-03)
+
+Ouvrir une URL `miadmarket.ca/?v=category&slug=X` **directement** (lien
+partagé, favori, nouvel onglet, actualisation de page) laisse la page
+bloquée indéfiniment sur un squelette de chargement — jamais de vrais
+produits affichés. **Cliquer sur une catégorie depuis le site (navigation
+normale) fonctionne bien** : seul l'accès direct par URL est concerné.
+
+Investigation approfondie (session du 2026-09-03, tests réels via le skill
+`browse`) a déjà éliminé 5 causes distinctes, toutes corrigées au passage
+(voir l'historique git du même jour, `frontend/app/MiadMarketClient.tsx`
+et `frontend/app/api/products/route.ts`) :
+1. Requêtes catalogue séquentielles côté serveur → parallélisées.
+2. Préchargement de 500 produits pour l'accueil, actif même hors accueil.
+3. Fetch catalogue global actif à tort sur la vue catégorie.
+4. `selectedCategory` jamais initialisé depuis l'URL (`forcedCategorySlug`
+   manquant, contrairement à `forcedProductSlug`/`forcedVendorSlug`) —
+   corrigé, confirmé par debug en direct.
+5. `revalidateIfStale: false` (SWR) empêchant tout refetch de la liste des
+   catégories quand elle démarre vide — tenté, **n'a pas résolu le
+   problème** malgré la théorie qui semblait tenir.
+
+Après ces 5 correctifs, `/api/categories` (et `/api/products?category=...`)
+ne sont **toujours jamais appelés** sur cette page en lien direct (confirmé
+par capture réseau) — la vraie cause reste donc non identifiée. Prochaines
+pistes à explorer : vérifier si le composant `CategoryPage` (ou son
+`useSWR` dédié) se monte réellement dans ce scénario ; comparer avec le
+comportement du composant `HomePage`/`ProductDetail` (mêmes hooks SWR, qui
+eux fonctionnent en lien direct) ; envisager un vrai breakpoint navigateur
+(pas juste `console.log` + skill `browse`) pour inspecter l'état React en
+direct.
