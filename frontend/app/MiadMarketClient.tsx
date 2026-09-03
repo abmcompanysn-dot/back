@@ -1242,6 +1242,19 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   // chacune répond — sans les pauses de 3s entre chaque — donc tout le
   // catalogue arrive en ~1-2s au lieu de s'étaler sur 12-15s.
   useEffect(() => {
+    // UNIQUEMENT sur l'accueil : ce préchargement alimente les sections
+    // "Marché [Pays]" de la page d'accueil (HomePage.tsx) — il n'a aucune
+    // utilité sur les autres vues, qui affichent leurs propres produits
+    // (CategoryPage via son prop `products`, ProductDetail sa propre
+    // fiche...). Avant ce fix, ce useEffect tournait quelle que soit
+    // `currentView` : ouvrir une page catégorie en lien direct déclenchait
+    // quand même ce fetch de 500 produits (5 pages de 100, séquentielles
+    // côté client car useSWRInfinite dépend de previousPageData) EN PLUS du
+    // chargement réel de la catégorie — saturait le réseau du navigateur
+    // pour rien et contribuait au blocage en squelette signalé le
+    // 2026-09-03 (voir aussi le fix de fetchAllProductIds côté serveur,
+    // même journée — deux causes distinctes du même symptôme).
+    if (currentView !== 'home') return;
     if (productsLoading || isReachingEnd || size !== 1) return;
     if (infiniteProducts && infiniteProducts.length === size) {
       const backgroundTimer = setTimeout(() => {
@@ -1249,7 +1262,7 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       }, 1000); // Court délai pour ne pas concurrencer le chargement initial critique
       return () => clearTimeout(backgroundTimer);
     }
-  }, [infiniteProducts, productsLoading, size, setSize, isReachingEnd]);
+  }, [currentView, infiniteProducts, productsLoading, size, setSize, isReachingEnd]);
 
   const { data: categoriesData, isLoading: categoriesLoading, error: categoriesError } = useSWR(`/api/categories?lang=${language}`, fetcherWithAuth, {
     ...swrOptions,
