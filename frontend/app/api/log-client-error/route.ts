@@ -29,6 +29,9 @@ export async function POST(request: Request) {
         url: String(body.url || ''),
         user_agent: request.headers.get('user-agent') || '',
         user_id: String(body.user_id || ''),
+        // 'js_error' (défaut, crashs React via global-error.tsx) ou
+        // 'image_error' (échec définitif de chargement, voir LazyImage.tsx).
+        type: body.type === 'image_error' ? 'image_error' : 'js_error',
       }),
     })
   } catch {

@@ -80,6 +80,31 @@ function cancelQueued(id: symbol) {
 }
 // ------------------------------------------------------------------
 
+// Suivi d'erreurs maison (2026-09-03, remplace Sentry — voir global-
+// error.tsx) étendu aux images qui échouent définitivement (miniature ET
+// originale en échec) — demandé le 2026-09-03 après le fix du bouton
+// retour, pour que la page back-office "Erreurs du site" remonte aussi
+// les images cassées, pas seulement les crashs JS. reportedImageErrors
+// throttle par URL (module-level, partagé par toutes les LazyImage de la
+// page) : une image cassée peut apparaître dans plusieurs cartes/sections
+// à la fois (même produit dans "Nouveautés" et "Recommandés" par ex.) —
+// sans ça un seul visiteur sur une page très chargée enverrait des
+// dizaines de requêtes identiques pour la même URL cassée.
+const reportedImageErrors = new Set<string>()
+function reportImageError(src: string) {
+  if (reportedImageErrors.has(src)) return
+  reportedImageErrors.add(src)
+  fetch('/api/log-client-error', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'image_error',
+      message: `Image introuvable : ${src}`,
+      url: typeof window !== 'undefined' ? window.location.href : '',
+    }),
+  }).catch(() => {})
+}
+
 // 2500px chargeait quasiment toutes les images de la page en même temps
 // (dizaines de sections sur l'accueil), saturant les connexions concurrentes
 // vers le CDN/origine et laissant des cartes vides plusieurs secondes. Monté
@@ -210,6 +235,7 @@ export function LazyImage({ rootMargin = '1000px 0px', thumbnail = true, src, cl
         }
         releaseOnce()
         setErroredSrc(src)
+        if (src) reportImageError(src)
         onError?.(e)
       }}
       {...props}

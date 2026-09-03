@@ -94,6 +94,14 @@ CREATE TABLE IF NOT EXISTS client_error_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_client_error_created ON client_error_log (created_at DESC);
+-- type distingue les crashs JS ('js_error', valeur par défaut — table déjà
+-- en place avant cette colonne) des échecs de chargement d'image
+-- ('image_error', ajouté depuis LazyImage.tsx quand une image épuise son
+-- retry miniature→originale) — demandé le 2026-09-03 après le fix
+-- popstate, pour que la page "Erreurs du site" remonte aussi les images
+-- cassées/lentes, pas seulement les crashs React.
+ALTER TABLE client_error_log ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'js_error';
+CREATE INDEX IF NOT EXISTS idx_client_error_type ON client_error_log (type);
 `
 
 //go:embed webui/dist
@@ -1789,10 +1797,14 @@ func (s *server) clientErrorWrite(w http.ResponseWriter, r *http.Request) {
 		URL       string `json:"url"`
 		UserAgent string `json:"user_agent"`
 		UserID    string `json:"user_id"`
+		Type      string `json:"type"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
 		kit.Fail(w, 400, "invalid_body", "champ 'message' obligatoire")
 		return
+	}
+	if body.Type == "" {
+		body.Type = "js_error"
 	}
 	truncate := func(s string, max int) string {
 		if len(s) > max {
@@ -1801,10 +1813,10 @@ func (s *server) clientErrorWrite(w http.ResponseWriter, r *http.Request) {
 		return s
 	}
 	if _, err := s.db.Exec(r.Context(), `
-		INSERT INTO client_error_log (message, stack, digest, url, user_agent, user_id)
-		VALUES ($1,$2,$3,$4,$5,$6)`,
+		INSERT INTO client_error_log (message, stack, digest, url, user_agent, user_id, type)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		truncate(body.Message, 2000), truncate(body.Stack, 8000), body.Digest,
-		truncate(body.URL, 500), truncate(body.UserAgent, 500), body.UserID,
+		truncate(body.URL, 500), truncate(body.UserAgent, 500), body.UserID, body.Type,
 	); err != nil {
 		kit.Logger("admin-svc").Warn("client_error_log insert échoué", "err", err.Error())
 	}
@@ -1824,15 +1836,27 @@ func (s *server) listClientErrors(w http.ResponseWriter, r *http.Request) {
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 40
 	}
+	// Filtre optionnel ?type=js_error|image_error — page "Erreurs du site"
+	// permet de séparer les deux (voir clientErrorWrite pour le contexte).
+	typeFilter := q.Get("type")
+	where := ""
+	args := []any{}
+	if typeFilter != "" {
+		where = "WHERE type = $1"
+		args = append(args, typeFilter)
+	}
+
 	var total int64
-	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM client_error_log").Scan(&total); err != nil {
+	countArgs := append([]any{}, args...)
+	if err := s.db.QueryRow(r.Context(), "SELECT count(*) FROM client_error_log "+where, countArgs...).Scan(&total); err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, message, stack, digest, url, user_agent, user_id, created_at
-		FROM client_error_log ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
-		pageSize, (page-1)*pageSize)
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`
+		SELECT id, message, stack, digest, url, user_agent, user_id, type, created_at
+		FROM client_error_log %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)),
+		args...)
 	if err != nil {
 		kit.Fail(w, 500, "db_error", err.Error())
 		return
@@ -1841,15 +1865,15 @@ func (s *server) listClientErrors(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var message, stack, digest, url, userAgent, userID string
+		var message, stack, digest, url, userAgent, userID, errType string
 		var createdAt time.Time
-		if err := rows.Scan(&id, &message, &stack, &digest, &url, &userAgent, &userID, &createdAt); err != nil {
+		if err := rows.Scan(&id, &message, &stack, &digest, &url, &userAgent, &userID, &errType, &createdAt); err != nil {
 			kit.Fail(w, 500, "db_error", err.Error())
 			return
 		}
 		items = append(items, map[string]any{
 			"id": id, "message": message, "stack": stack, "digest": digest,
-			"url": url, "user_agent": userAgent, "user_id": userID,
+			"url": url, "user_agent": userAgent, "user_id": userID, "type": errType,
 			"created_at": createdAt.UTC().Format(time.RFC3339),
 		})
 	}

@@ -5,9 +5,12 @@ import { api, ApiError } from '../lib/api'
 // Remplace Sentry côté navigateur, incompatible avec le pipeline
 // @cloudflare/next-on-pages de ce projet (deux tentatives infructueuses
 // le 2026-09-03 : @sentry/nextjs cassait le build, @sentry/cloudflare
-// cassait le site entier à l'exécution). Chaque crash React attrapé par
-// app/global-error.tsx (frontend) est enregistré ici via
-// POST /api/log-client-error → admin-svc → client_error_log.
+// cassait le site entier à l'exécution). Deux types d'erreurs remontées
+// via POST /api/log-client-error → admin-svc → client_error_log :
+// 'js_error' (crash React, app/global-error.tsx) et 'image_error'
+// (chargement d'image définitivement échoué, LazyImage.tsx — ajouté après
+// coup le même jour, demande du fondateur suite aux signalements
+// d'images lentes/cassées).
 
 interface ClientError {
   id: number
@@ -17,7 +20,13 @@ interface ClientError {
   url: string
   user_agent: string
   user_id: string
+  type: string
   created_at: string
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  js_error: 'Erreur JS',
+  image_error: 'Image cassée',
 }
 
 function formatDate(iso: string): string {
@@ -32,6 +41,7 @@ export function ClientErrors() {
   const [items, setItems] = useState<ClientError[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const [typeFilter, setTypeFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<number | null>(null)
@@ -41,8 +51,9 @@ export function ClientErrors() {
     setLoading(true)
     setError(null)
     try {
+      const typeParam = typeFilter ? `&type=${typeFilter}` : ''
       const data = await api.get<{ items: ClientError[]; total: number }>(
-        `/admin/api/client-errors?page=${page}&page_size=${pageSize}`
+        `/admin/api/client-errors?page=${page}&page_size=${pageSize}${typeParam}`
       )
       setItems(data.items || [])
       setTotal(data.total || 0)
@@ -52,6 +63,12 @@ export function ClientErrors() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    setPage(1)
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typeFilter])
 
   useEffect(() => {
     load()
@@ -66,10 +83,26 @@ export function ClientErrors() {
         <div>
           <h2>Erreurs du site</h2>
           <p className="subtitle">
-            Crashs rencontrés par les visiteurs sur miadmarket.ca — remplace le suivi
-            Sentry, non compatible avec ce site. Les erreurs les plus récentes en premier.
+            Crashs et images cassées rencontrés par les visiteurs sur miadmarket.ca —
+            remplace le suivi Sentry, non compatible avec ce site. Les plus récentes en premier.
           </p>
         </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {[
+          { value: '', label: 'Tout' },
+          { value: 'js_error', label: 'Erreurs JS' },
+          { value: 'image_error', label: 'Images cassées' },
+        ].map((opt) => (
+          <button
+            key={opt.value}
+            className={`btn btn-sm ${typeFilter === opt.value ? 'btn-primary' : ''}`}
+            onClick={() => setTypeFilter(opt.value)}
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
 
       {error && <div className="alert alert-red" style={{ marginBottom: 16 }}>{error}</div>}
@@ -84,6 +117,7 @@ export function ClientErrors() {
           <table className="table">
             <thead>
               <tr>
+                <th>Type</th>
                 <th>Quand</th>
                 <th>Message</th>
                 <th>Page</th>
@@ -94,6 +128,11 @@ export function ClientErrors() {
               {items.map((e) => (
                 <>
                   <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => setExpanded(expanded === e.id ? null : e.id)}>
+                    <td>
+                      <span className={`badge ${e.type === 'image_error' ? 'badge-orange' : 'badge-red'}`}>
+                        {TYPE_LABELS[e.type] || e.type}
+                      </span>
+                    </td>
                     <td className="subtitle" style={{ whiteSpace: 'nowrap' }}>{formatDate(e.created_at)}</td>
                     <td>{e.message}</td>
                     <td className="subtitle" style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -103,7 +142,7 @@ export function ClientErrors() {
                   </tr>
                   {expanded === e.id && (
                     <tr key={`${e.id}-detail`}>
-                      <td colSpan={4}>
+                      <td colSpan={5}>
                         <div style={{ background: 'var(--muted, #f5f5f5)', padding: 12, borderRadius: 8, fontSize: 12 }}>
                           {e.digest && <p><strong>Digest :</strong> {e.digest}</p>}
                           {e.user_id && <p><strong>Utilisateur :</strong> {e.user_id}</p>}
