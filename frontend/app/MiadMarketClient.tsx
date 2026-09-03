@@ -1966,6 +1966,11 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
         );
 
       case 'category':
+        // DEBUG TEMPORAIRE 2026-09-03 — à retirer une fois le bug de
+        // squelette infini sur lien direct catégorie confirmé résolu.
+        if (typeof window !== 'undefined') {
+          console.log('[DEBUG category]', { selectedCategory, categoriesCount: categories.length, forcedView, forcedCategorySlug })
+        }
         if (!selectedCategory) return <PageSkeleton />;
         const categoryObj = categories.find((c: WooCategory) => c.slug === selectedCategory);
         // Skeleton uniquement pendant le chargement — si catégories chargées et slug introuvable,
