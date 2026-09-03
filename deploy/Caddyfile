@@ -142,17 +142,37 @@
 	# On ne route donc plus que les chemins ET méthodes réellement appelés
 	# par le frontend Next.js public (voir ORDER_SVC_URL dans
 	# frontend/app/api/**) — jamais un /orders* générique.
-	# GET /orders (sans id) reste STRICTEMENT INTERDIT — c'est la fuite
-	# constatée (liste toutes les commandes du site). GET /orders/{id}
-	# (une seule commande, appelé par frontend/app/api/vendor/orders/route.ts
-	# pour vérifier l'appartenance avant un changement de statut) reste
-	# nécessaire ; il n'a PAS de vérification d'appartenance côté order-svc
-	# lui-même — seul Next.js vérifie que order.vendor_id == JWT.vendor_id
-	# avant d'appeler le PUT status. Donc un tiers qui connaît/devine un id
-	# de commande peut encore lire cette commande (montant, adresse) en
-	# appelant origin.miadmarket.ca directement, en contournant Next.js.
-	# Fix complet = secret interne partagé Next.js→order-svc (chantier
-	# distinct, pas fait ici) ; en attendant on limite au strict nécessaire.
+	#
+	# GET /orders SANS filtre = STRICTEMENT INTERDIT (c'est la fuite
+	# constatée : liste toutes les commandes du site). MAIS le frontend
+	# légitime appelle GET /orders?customer_id=<sub>&page_size=50
+	# (frontend/app/api/orders/route.ts, "Mon compte" → mes commandes)
+	# et GET /orders?vendor_id=<id> (tableau de bord vendeur, via
+	# vendor-svc) — on autorise donc GET /orders UNIQUEMENT quand un
+	# paramètre customer_id OU vendor_id est présent (matcher `query`).
+	# Une requête GET /orders nue continue de tomber en 404 passerelle.
+	# Reste la limite connue : order-svc ne revérifie pas que le
+	# customer_id/vendor_id demandé correspond au JWT (seul Next.js le
+	# fait) — fix complet = secret interne partagé Next.js→order-svc,
+	# chantier distinct.
+	@orders_list_scoped {
+		method GET
+		path /orders
+		query customer_id=*
+	}
+	@orders_list_vendor {
+		method GET
+		path /orders
+		query vendor_id=*
+	}
+	handle @orders_list_scoped {
+		reverse_proxy order-svc:8083
+	}
+	handle @orders_list_vendor {
+		reverse_proxy order-svc:8083
+	}
+	# GET /orders/{id} (une commande), GET /orders/parent/{id} (vue
+	# groupée pour /order-received), GET /orders/{id}/events…
 	@orders_public {
 		method GET
 		path /orders/parent/* /orders/*
@@ -186,14 +206,71 @@
 	# approve|pawapay (déclencher un VRAI virement vers un compte Mobile
 	# Money), GET /finance/* (données financières complètes) étaient tous
 	# publiquement accessibles alors qu'ils ont déjà un équivalent protégé
-	# (requireAdmin) via /admin/api/*. Seuls les chemins que le checkout et
-	# les webhooks des agrégateurs appellent réellement restent publics ici.
+	# (requireAdmin) via /admin/api/*. Seuls les chemins que le checkout,
+	# le suivi de paiement client et le tableau de bord vendeur appellent
+	# réellement restent publics ici (voir PAYMENT_SVC_URL dans
+	# frontend/app/api/**). Les écritures d'administration
+	# (PUT/DELETE /payments/routing, operator-enabled, country-enabled,
+	# POST /payout-requests/{id}/approve|reject|pawapay, PUT /settings,
+	# GET /finance/*, GET /payments liste) restent hors de ce fichier.
 	@payments_public {
 		path /payments/init /payments/paydunya/softpay-deposit /payments/paydunya/wizall-confirm
-		path /payments/order/*/reverify
+		path /payments/order/*/reverify /payments/order/*/switch-provider
 		path /payments/webhook/stripe /payments/webhook/paydunya /payments/webhook/pawapay
 	}
 	handle @payments_public {
+		reverse_proxy payment-svc:8084
+	}
+	# GET /payments/order/{id} — statut d'un paiement par n° de commande,
+	# lu au retour d'une redirection PawaPay/PayDunya
+	# (frontend/app/api/orders/{id}/confirm-*). Lecture seule.
+	@payment_status {
+		method GET
+		path /payments/order/*
+	}
+	handle @payment_status {
+		reverse_proxy payment-svc:8084
+	}
+	# GET /payments/routing — quel agrégateur Mobile Money est actif, lu
+	# par le checkout (frontend/app/api/payment-gateways/routing). Les
+	# écritures (PUT/DELETE) passent par admin-svc.
+	@payment_routing_read {
+		method GET
+		path /payments/routing
+	}
+	handle @payment_routing_read {
+		reverse_proxy payment-svc:8084
+	}
+	# Portefeuille vendeur — solde, transactions, demandes de retrait.
+	# vendor_id vérifié côté Next.js depuis le JWT
+	# (frontend/app/api/vendor/wallet/route.ts) avant l'appel ;
+	# payment-svc ne revérifie pas (même limite connue que /orders/{id}).
+	#   - GET /wallet/{vendor_id} et /wallet/{vendor_id}/transactions
+	#   - GET /payout-requests UNIQUEMENT avec ?vendor_id=... (sans ce
+	#     filtre, listerait TOUTES les demandes de retrait du site)
+	#   - POST /payout-requests (le vendeur demande un retrait)
+	# L'APPROBATION (POST /payout-requests/{id}/approve|reject|pawapay)
+	# n'est PAS ici — réservée à admin-svc.
+	@vendor_wallet_get {
+		method GET
+		path /wallet/*
+	}
+	handle @vendor_wallet_get {
+		reverse_proxy payment-svc:8084
+	}
+	@payout_requests_scoped {
+		method GET
+		path /payout-requests
+		query vendor_id=*
+	}
+	@payout_requests_create {
+		method POST
+		path /payout-requests
+	}
+	handle @payout_requests_scoped {
+		reverse_proxy payment-svc:8084
+	}
+	handle @payout_requests_create {
 		reverse_proxy payment-svc:8084
 	}
 	handle /payment-methods {
