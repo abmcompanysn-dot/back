@@ -58,11 +58,37 @@
 	# variations en appelant origin.miadmarket.ca directement — même
 	# limite connue que /orders/{id} plus bas (fix = secret interne
 	# partagé Next.js→catalog-svc, chantier distinct).
+	#
+	# PATCH/DELETE /products/{id} (édition/suppression du produit lui-même,
+	# pas ses variations) manquaient ici depuis le durcissement du
+	# 2026-09-03 — "Mettre à jour" dans le dashboard vendeur (Dashboard.tsx
+	# handleSubmitProduct → PUT /api/products/{id} côté Next.js → PATCH
+	# catalog-svc) échouait en "route inconnue sur la passerelle" pour
+	# TOUT vendeur, pas juste un cas isolé (trouvé le 2026-09-03, signalé
+	# par le fondateur juste après le durcissement). Même garde-fou que
+	# ci-dessus : checkProductOwnership() côté Next.js
+	# (app/api/products/[id]/route.ts) vérifie déjà que le produit
+	# appartient bien au vendeur du JWT avant d'appeler catalog-svc.
 	@catalog_vendor_write {
 		method POST PUT DELETE
 		path /vendor/products /products/*/variations /products/*/variations/* /products/*/reviews
 	}
 	handle @catalog_vendor_write {
+		reverse_proxy catalog-svc:8081
+	}
+	# PATCH/DELETE /products/{id} SEUL (un seul segment après /products/,
+	# jamais /products/bulk ni un sous-chemin plus profond — Caddy ne
+	# permet pas d'exclure un préfixe précis dans un matcher de path, donc
+	# ce groupe reste volontairement séparé et étroit plutôt que d'élargir
+	# @catalog_vendor_write à /products/* qui aurait aussi rouvert
+	# POST /products/bulk, retiré ce matin pour cause d'accès non
+	# authentifié — voir commentaire ci-dessus).
+	@catalog_product_write {
+		method PATCH DELETE
+		path /products/*
+		not path /products/*/*
+	}
+	handle @catalog_product_write {
 		reverse_proxy catalog-svc:8081
 	}
 	# /wishlist/{customer_id}/* et /cart/{customer_id}/* : customer_id
