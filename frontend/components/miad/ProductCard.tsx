@@ -45,12 +45,33 @@ export function ProductCard({ product, onClick, onAddToCart, hideVendorInfo, use
   const [imgErrored, setImgErrored] = useState(false)
   const [imgLoaded, setImgLoaded] = useState(() => !!product.image && loadedImagesCache.has(product.image))
 
+  // Ordinateur (pas mobile) : clic simple sur une carte produit ouvre un
+  // NOUVEL onglet, comme AliExpress — demande explicite du fondateur
+  // 2026-09-03, malgré la réserve UX habituelle (un clic simple qui ouvre
+  // un popup surprend souvent les visiteurs) : il a confirmé vouloir ce
+  // comportement précis après l'avoir vu sur AliExpress desktop. Détecté
+  // via `(pointer: fine)` (souris/trackpad — un vrai signal de capacité
+  // d'entrée, contrairement à la largeur d'écran qui se trompe sur les
+  // tablettes/grands téléphones) plutôt qu'un test de taille d'écran.
+  // Mobile garde le comportement normal (navigation sur place, onClick).
+  const isDesktopPointer = typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches
+  const productHref = product.slug ? `/?v=product&slug=${product.slug}` : undefined
+
+  function handleCardClick(e: React.MouseEvent) {
+    if (isDesktopPointer && productHref) {
+      e.preventDefault()
+      window.open(productHref, '_blank', 'noopener,noreferrer')
+      return
+    }
+    onClick(product)
+  }
+
   return (
     <div
       className="bg-card border border-border rounded-md overflow-hidden hover:shadow-lg transition-all group cursor-pointer flex flex-col h-full"
       role="button"
       tabIndex={0}
-      onClick={() => onClick(product)}
+      onClick={handleCardClick}
       onMouseEnter={() => prefetchProduct(product)}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(product) } }}
     >
