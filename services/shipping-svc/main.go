@@ -240,6 +240,12 @@ func main() {
 		log.Error("seed des taux de change impossible", "err", err)
 		return
 	}
+	// Rafraîchissement automatique (voir exchange-rates-refresh.go) : le
+	// seed ci-dessus ne s'exécute qu'une fois (ON CONFLICT DO NOTHING),
+	// les valeurs y restaient donc figées indéfiniment (XOF à 600 alors
+	// que le taux réel dérive) — un tick immédiat puis 1×/jour via une
+	// API gratuite corrige ça sans jamais bloquer le démarrage du service.
+	s.startExchangeRateRefreshLoop(log)
 	if err := s.seedDomesticTiers(ctx); err != nil {
 		log.Error("seed des tranches nationales impossible", "err", err)
 		return
