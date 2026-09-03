@@ -382,15 +382,25 @@ export function Dashboard({ onBack, onLogout, onSessionExpired, storeName = 'Ma 
         })
       }
 
-      toast.success(editingProductId ? "Produit mis à jour !" : "Produit publié !")
-      setIsAddingProduct(false)
-      setEditingProductId(null)
       mutateProducts()
-      setProductForm({
-        name: '', price: '', regularPrice: '', salePrice: '', stock: '',
-        mainImage: '', mainImageId: 0, galleryImages: '', galleryImageIds: [],
-        category: '', description: '', type: 'simple', attributes: [], variations: [],
-      })
+      if (editingProductId) {
+        // Modification : on reste sur la fiche (pas de retour à la liste,
+        // pas de reset du formulaire) — avant ce fix, "Mettre à jour"
+        // renvoyait systématiquement à la liste complète des produits,
+        // comme après une création, obligeant à rouvrir la fiche depuis
+        // la liste pour le moindre ajustement supplémentaire (signalé par
+        // le fondateur 2026-09-03).
+        toast.success("Produit mis à jour !")
+      } else {
+        toast.success("Produit publié !")
+        setIsAddingProduct(false)
+        setEditingProductId(null)
+        setProductForm({
+          name: '', price: '', regularPrice: '', salePrice: '', stock: '',
+          mainImage: '', mainImageId: 0, galleryImages: '', galleryImageIds: [],
+          category: '', description: '', type: 'simple', attributes: [], variations: [],
+        })
+      }
     } catch (err: any) {
       toast.error(err.message)
     } finally {
