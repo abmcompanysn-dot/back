@@ -171,6 +171,9 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
   // `aggregator` — nécessaire pour fusionner en une seule liste d'opérateurs
   // et permettre au client de choisir un opérateur dont l'agrégateur
   // effectif (routes[].active_aggregator) diffère du défaut initial.
+  // Chargé une seule fois (indépendant du pays sélectionné) — paydunyaList/
+  // pawapayList filtrent ensuite eux-mêmes par `country` (state), pas par
+  // countryISO2 (la prop figée, voir bug corrigé ci-dessous).
   useEffect(() => {
     fetch('/api/payment-gateways/mobile-money-countries')
       .then((r) => r.json())
@@ -181,17 +184,26 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
         }
       })
       .catch(() => {})
+      .finally(() => setCountriesLoading(false))
     fetch('/api/payment-gateways/paydunya-providers')
       .then((r) => r.json())
       .then((data) => setPaydunyaProviders(data.providers || []))
       .catch(() => {})
-    fetch(`/api/payment-gateways/routing?country_iso2=${countryISO2.toUpperCase()}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // routes (operator_enabled/country_enabled) DOIT se recharger à chaque
+  // changement de pays dans CE sélecteur — bug corrigé 2026-09-03 : c'était
+  // fusionné avec l'effet ci-dessus (donc filtré une seule fois sur
+  // countryISO2, la prop figée) — un client livré au Sénégal choisissant
+  // "Côte d'Ivoire" ici gardait les routes du Sénégal, laissant passer des
+  // opérateurs d'un autre pays comme "actifs" par erreur.
+  useEffect(() => {
+    fetch(`/api/payment-gateways/routing?country_iso2=${country.toUpperCase()}`)
       .then((r) => r.json())
       .then((data) => setRoutes(data.routes || []))
       .catch(() => {})
-      .finally(() => setCountriesLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [country])
 
   useEffect(() => {
     return () => {
@@ -209,7 +221,17 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
   const pawapayList = (selectedCountry?.providers_detail?.length
     ? selectedCountry.providers_detail
     : (selectedCountry?.providers || []).map((code) => ({ code, authType: '' })))
-  const paydunyaList = paydunyaProviders.filter((p) => p.country_iso2 === countryISO2.toUpperCase())
+  // BUG CORRIGÉ (2026-09-03) : filtrait sur countryISO2 (la PROP figée —
+  // le pays de livraison déjà saisi au checkout), pas sur `country` (le
+  // state de CE sélecteur, mis à jour quand le client change de pays
+  // dans ce formulaire) — pawapayList, lui, utilise bien `country` via
+  // selectedCountry. Résultat concret repéré : client livré au Sénégal
+  // mais choisissant "Côte d'Ivoire" ici voyait les opérateurs PawaPay
+  // ivoiriens (corrects) mélangés aux opérateurs PayDunya SÉNÉGALAIS
+  // (Free Money, Expresso, Wizall — respectant l'ancien countryISO2),
+  // donnant l'impression que tous les opérateurs étaient "actifs"
+  // partout alors qu'ils venaient en fait d'un autre pays.
+  const paydunyaList = paydunyaProviders.filter((p) => p.country_iso2 === country.toUpperCase())
 
   function normalizeLabel(label: string): string {
     return label.split(/\s+/)[0]?.toUpperCase() || label.toUpperCase()
