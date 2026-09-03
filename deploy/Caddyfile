@@ -26,51 +26,174 @@
 	encode zstd gzip
 
 	# Catalogue — catalog-svc
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : /products*, /categories* et /reviews*
+	# routaient TOUT sans filtre vers catalog-svc, qui n'a AUCUN contrôle
+	# d'accès sur ses handlers directs (comme order-svc/payment-svc plus
+	# bas). Concrètement, ça exposait publiquement, sans authentification :
+	# PATCH/DELETE /products/{id} (modifier/supprimer n'importe quel
+	# produit), POST /products/bulk, POST/PATCH/DELETE /categories,
+	# POST/PATCH/DELETE /brands, POST/DELETE /attributes*, PATCH
+	# /reviews/{id} (modération), POST /admin/backfill-*, POST
+	# /admin/collapse-fake-variables, POST /admin/reviews/seed*. On ne
+	# route donc plus que GET (lecture catalogue, publique par nature) +
+	# les quelques écritures réellement appelées par le frontend public
+	# (création produit vendeur, variations, avis) — jamais un
+	# /products*|/categories*|/reviews* générique.
 	handle_path /catalog/* {
 		reverse_proxy catalog-svc:8081
 	}
-	handle /products* {
+	@catalog_get {
+		method GET
+		path /products /products/* /categories /search/* /brands /attributes
+	}
+	handle @catalog_get {
 		reverse_proxy catalog-svc:8081
 	}
-	handle /categories* {
+	# Création produit vendeur + gestion de ses variations — vendor_id
+	# vérifié côté Next.js depuis le JWT avant l'appel (voir
+	# frontend/app/api/products/route.ts, frontend/app/api/products/[id]/
+	# variations/route.ts) ; catalog-svc lui-même ne revérifie rien, donc
+	# un tiers connaissant/devinant un id produit peut encore altérer ses
+	# variations en appelant origin.miadmarket.ca directement — même
+	# limite connue que /orders/{id} plus bas (fix = secret interne
+	# partagé Next.js→catalog-svc, chantier distinct).
+	@catalog_vendor_write {
+		method POST PUT DELETE
+		path /vendor/products /products/*/variations /products/*/variations/* /products/*/reviews
+	}
+	handle @catalog_vendor_write {
 		reverse_proxy catalog-svc:8081
 	}
-	handle /search/* {
-		reverse_proxy catalog-svc:8081
-	}
+	# /wishlist/{customer_id}/* et /cart/{customer_id}/* : customer_id
+	# vient de l'URL, sans vérification côté catalog-svc que l'appelant
+	# est bien ce client (même limite structurelle que /orders/{id} et
+	# /vendor/profile plus haut — impact ici limité à une nuisance,
+	# panier/liste d'envies, aucune donnée financière ni PII exposée par
+	# ces deux routes) ; laissé en l'état, ces routes sont publiques par
+	# nature (comme le panier d'un site classique).
 	handle /wishlist* {
 		reverse_proxy catalog-svc:8081
 	}
 	handle /cart* {
 		reverse_proxy catalog-svc:8081
 	}
-	# Avis produits (section avis complète : upload photo, vote "utile",
-	# confirmation de livraison) — catalog-svc. AVANT /orders* car deux
-	# endpoints avis sont sous /orders/{id}/... (can-review,
-	# delivery-confirmation) mais servis par catalog-svc, pas order-svc.
-	handle /reviews* {
+	# Avis produits — upload photo, vote "utile", confirmation de
+	# livraison. AVANT /orders* car deux endpoints avis sont sous
+	# /orders/{id}/... (can-review, delivery-confirmation) mais servis
+	# par catalog-svc, pas order-svc. GET /products/{id}/reviews couvert
+	# par @catalog_get, POST /products/{id}/reviews par
+	# @catalog_vendor_write ci-dessus ; ici seulement ce qui n'a pas le
+	# préfixe /products/*.
+	@reviews_public {
+		path /reviews/upload /reviews/*/helpful
+	}
+	handle @reviews_public {
 		reverse_proxy catalog-svc:8081
 	}
 	@order_review path_regexp orev ^/orders/[^/]+/(can-review|delivery-confirmation)$
 	handle @order_review {
 		reverse_proxy catalog-svc:8081
 	}
+	# Le reste (GET /reviews liste admin, PATCH /reviews/{id} modération,
+	# POST /admin/reviews/*) reste joignable uniquement par admin-svc en
+	# interne — jamais via ce Caddyfile public.
 
 	# Boutiques & vendeurs — vendor-svc
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : /vendor/* routait TOUT sans filtre,
+	# notamment PUT /vendor/profile — qui accepte vendor_id DANS LE BODY,
+	# sans aucune vérification côté vendor-svc que l'appelant est bien ce
+	# vendeur (seul Next.js le vérifie depuis le JWT avant d'appeler,
+	# frontend/app/api/vendor/profile/route.ts) : n'importe qui pouvait
+	# modifier le profil de N'IMPORTE QUEL vendeur en changeant juste
+	# vendor_id dans le JSON envoyé directement à origin.miadmarket.ca.
+	# /vendors* (sans le "/", liste admin + KYC) n'était déjà routé nulle
+	# part ici — laissé ainsi, joignable seulement via /admin/api/*.
 	handle /stores* {
 		reverse_proxy vendor-svc:8082
 	}
-	handle /vendor/* {
+	@vendor_public {
+		method GET
+		path /vendor/*/dashboard /vendor/*/orders /vendor/*/products
+	}
+	handle @vendor_public {
+		reverse_proxy vendor-svc:8082
+	}
+	@vendor_profile_write {
+		method PUT
+		path /vendor/profile
+	}
+	handle @vendor_profile_write {
 		reverse_proxy vendor-svc:8082
 	}
 
 	# Commandes — order-svc
-	handle /orders* {
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : ce bloc laissait passer TOUTES les
+	# méthodes sur /orders* sans aucun contrôle d'accès côté Go (order-svc
+	# ne vérifie ni JWT ni secret interne sur ses handlers directs — seule
+	# la version /admin/api/orders/* via admin-svc a requireAdmin). Constaté
+	# exploitable en prod : GET /orders (sans customer_id) renvoyait TOUTES
+	# les commandes du site — email, montant, référence — à n'importe qui.
+	# PUT /orders/{id}/status et POST /orders/{id}/cancel étaient
+	# structurellement accessibles de la même façon (changer le statut ou
+	# annuler la commande de n'importe quel client, sans authentification).
+	# On ne route donc plus que les chemins ET méthodes réellement appelés
+	# par le frontend Next.js public (voir ORDER_SVC_URL dans
+	# frontend/app/api/**) — jamais un /orders* générique.
+	# GET /orders (sans id) reste STRICTEMENT INTERDIT — c'est la fuite
+	# constatée (liste toutes les commandes du site). GET /orders/{id}
+	# (une seule commande, appelé par frontend/app/api/vendor/orders/route.ts
+	# pour vérifier l'appartenance avant un changement de statut) reste
+	# nécessaire ; il n'a PAS de vérification d'appartenance côté order-svc
+	# lui-même — seul Next.js vérifie que order.vendor_id == JWT.vendor_id
+	# avant d'appeler le PUT status. Donc un tiers qui connaît/devine un id
+	# de commande peut encore lire cette commande (montant, adresse) en
+	# appelant origin.miadmarket.ca directement, en contournant Next.js.
+	# Fix complet = secret interne partagé Next.js→order-svc (chantier
+	# distinct, pas fait ici) ; en attendant on limite au strict nécessaire.
+	@orders_public {
+		method GET
+		path /orders/parent/* /orders/*
+	}
+	handle @orders_public {
 		reverse_proxy order-svc:8083
 	}
+	@orders_public_write {
+		method POST
+		path /orders /orders/*/confirm /orders/parent/*/confirm
+	}
+	handle @orders_public_write {
+		reverse_proxy order-svc:8083
+	}
+	@orders_public_put {
+		method PUT
+		path /orders/*/status /orders/parent/*/shipping-address
+	}
+	handle @orders_public_put {
+		reverse_proxy order-svc:8083
+	}
+	# Tout le reste de /orders* (liste complète sans filtre, annulation,
+	# retours, réglages commission…) reste joignable UNIQUEMENT par
+	# admin-svc sur le réseau interne k8s (/admin/api/orders/*), jamais ici.
 
-	# Paiement (webhooks Stripe/PayDunya inclus) — payment-svc
-	handle /payments/* {
+	# Paiement (webhooks Stripe/PayDunya/PawaPay inclus) — payment-svc
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : /payments/* routait aussi TOUT vers
+	# payment-svc sans filtre — PUT/DELETE /payments/routing (basculer
+	# l'agrégateur Mobile Money par pays), POST /payout-requests/{id}/
+	# approve|pawapay (déclencher un VRAI virement vers un compte Mobile
+	# Money), GET /finance/* (données financières complètes) étaient tous
+	# publiquement accessibles alors qu'ils ont déjà un équivalent protégé
+	# (requireAdmin) via /admin/api/*. Seuls les chemins que le checkout et
+	# les webhooks des agrégateurs appellent réellement restent publics ici.
+	@payments_public {
+		path /payments/init /payments/paydunya/softpay-deposit /payments/paydunya/wizall-confirm
+		path /payments/order/*/reverify
+		path /payments/webhook/stripe /payments/webhook/paydunya /payments/webhook/pawapay
+	}
+	handle @payments_public {
 		reverse_proxy payment-svc:8084
 	}
 	handle /payment-methods {
@@ -107,6 +230,28 @@
 		respond @notget 405
 		reverse_proxy shipping-svc:8085
 	}
+	# AUDIT SÉCURITÉ 2026-09-03 : même trou que /shipping/* ci-dessus pour
+	# la GRILLE TARIFAIRE nationale — POST /shipping-domestic/tiers et
+	# DELETE /shipping-domestic/tiers/{id} (config globale, aucune raison
+	# d'être appelés par le frontend public) étaient modifiables sans le
+	# moindre contrôle d'accès côté Go. Ils passent désormais exclusivement
+	# par admin-svc (réseau interne k8s). /vendor-shipping-address reste en
+	# l'état : son POST est un vrai besoin frontend authentifié côté
+	# Next.js (vendeur connecté définissant sa propre adresse) — le
+	# bloquer casserait cette fonctionnalité ; le manque d'un secret
+	# partagé Next.js→backends pour cette route est une limite connue,
+	# distincte, à traiter via un chantier d'auth inter-services plutôt
+	# qu'un simple filtre Caddy. /exchange-rates en revanche n'a AUCUN
+	# appelant frontend (vérifié — grep vide sur SHIPPING_SVC_URL côté
+	# frontend/app/api/) : POST /exchange-rates (fixer manuellement un
+	# taux de change, impacte tous les prix affichés du site) n'a aucune
+	# raison d'être public, donc restreint au GET comme les autres routes
+	# de configuration globale.
+	handle /shipping-domestic/tiers* {
+		@notget2 not method GET
+		respond @notget2 405
+		reverse_proxy shipping-svc:8085
+	}
 	handle /shipping-domestic/* {
 		reverse_proxy shipping-svc:8085
 	}
@@ -114,6 +259,8 @@
 		reverse_proxy shipping-svc:8085
 	}
 	handle /exchange-rates {
+		@notget3 not method GET
+		respond @notget3 405
 		reverse_proxy shipping-svc:8085
 	}
 
@@ -135,51 +282,102 @@
 	}
 
 	# Notifications (Kafka consumer, stats en lecture) + push FCM — notification-svc
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : /push/* routait TOUT sans filtre — POST
+	# /push/send et /push/broadcast (envoyer une notification push à un
+	# client précis, voire à TOUS les clients, sans authentification —
+	# vecteur de spam/abus direct) étaient publiquement accessibles. Seul
+	# POST /push/subscribe (enregistrer le device du visiteur, appelé par
+	# le frontend public) est un usage légitime.
 	handle /notifications* {
 		reverse_proxy notification-svc:8087
 	}
-	handle /push/* {
+	handle /push/subscribe {
 		reverse_proxy notification-svc:8087
 	}
+	# /push/send, /push/broadcast, /push/stats restent joignables
+	# uniquement par admin-svc en interne — jamais via ce Caddyfile public.
 
 	# Emails transactionnels + webhooks entrants (Resend) — email-svc
-	handle /emails* {
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : /emails* et /email-templates* routaient
+	# TOUT sans filtre — POST /emails/broadcast (email à toute la base
+	# clients, sans authentification), PUT /email-templates/{name}
+	# (modifier le CONTENU d'un email transactionnel — ex. remplacer le
+	# lien de réinitialisation de mot de passe par un lien de phishing)
+	# étaient publiquement accessibles. Seul POST /emails/send (envoi
+	# ciblé, ex. confirmation de commande) a un usage public réel côté
+	# Next.js (voir EMAIL_SVC_URL dans frontend/app/api/).
+	handle /emails/send {
 		reverse_proxy email-svc:8089
 	}
-	handle /email-templates* {
-		reverse_proxy email-svc:8089
-	}
+	# /emails/broadcast, /emails/stats, GET/PUT /email-templates/*
+	# restent joignables uniquement par admin-svc en interne.
 	handle /webhooks/* {
 		reverse_proxy email-svc:8089
 	}
 
 	# Tracking unifié + DHL — fulfillment-svc
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : /dhl/* routait TOUT sans filtre, dont
+	# PUT /dhl/settings (clés API DHL en clair), POST /dhl/create-shipment
+	# et /dhl/orders/{id}/create-shipment (créer un VRAI colis DHL, coûte
+	# de l'argent réel), POST/DELETE /dhl/hs-codes|boxes (config
+	# douanière), DELETE /dhl/logs (purge) — tous sans authentification.
+	# Seul /tracking/search/{number} (suivi public d'un colis par son
+	# numéro) a un usage public légitime ; le frontend n'appelle même pas
+	# le reste de fulfillment-svc directement (voir FULFILLMENT_SVC_URL,
+	# seul /shipments en POST est utilisé, depuis le back-office
+	# authentifié — laissé pour compat mais à migrer vers /admin/api/*).
 	handle /shipments* {
 		reverse_proxy fulfillment-svc:8090
 	}
-	handle /tracking/* {
+	handle /tracking/search/* {
 		reverse_proxy fulfillment-svc:8090
 	}
-	handle /dhl/* {
-		reverse_proxy fulfillment-svc:8090
-	}
+	# Tout le reste de /tracking/* et tout /dhl/* (settings, hs-codes,
+	# boxes, logs, création d'étiquette) reste joignable uniquement par
+	# admin-svc en interne — jamais via ce Caddyfile public.
 
 	# Coins/fidélité + représentants pays — loyalty-svc
+	#
+	# AUDIT SÉCURITÉ 2026-09-03 : /coupons* et /representative* routaient
+	# TOUT sans filtre — POST /coupons (créer/modifier un code promo,
+	# remise arbitraire) et DELETE /coupons/{code} n'ont aucun contrôle
+	# d'accès côté loyalty-svc (déjà protégés par requireAdmin via
+	# /admin/api/* — voir services/admin-svc/main.go). Idem
+	# PATCH /representative/messages/{id}, POST .../reply,
+	# POST /representative/orders/{id}/acknowledge. On ne garde que les
+	# usages publics réels (voir LOYALTY_SVC_URL dans frontend/app/api/) :
+	# liste des coupons actifs, validation au checkout, envoi d'un message
+	# de contact au représentant pays.
 	handle /coins* {
 		reverse_proxy loyalty-svc:8091
 	}
-	handle /coupons* {
+	@coupons_public {
+		method GET POST
+		path /coupons /coupons/validate
+	}
+	handle @coupons_public {
 		reverse_proxy loyalty-svc:8091
 	}
-	handle /representative* {
+	@representative_public {
+		method POST
+		path /representative/messages
+	}
+	handle @representative_public {
 		reverse_proxy loyalty-svc:8091
 	}
 	# Webhook entrant Twilio (réponses WhatsApp) — public comme /webhooks/*
 	# ci-dessus, pas de secret dans l'URL (Twilio n'envoie pas d'en-tête
 	# d'auth applicative standard sur ce type de webhook).
-	handle /whatsapp/* {
+	handle /whatsapp/incoming {
 		reverse_proxy loyalty-svc:8091
 	}
+	# Le reste (/coupons DELETE, /representative* GET liste/dashboard,
+	# /representative/messages GET liste, /whatsapp/logs, /whatsapp/test,
+	# /whatsapp/resend/*) reste joignable uniquement par admin-svc en
+	# interne — jamais via ce Caddyfile public.
 
 	handle {
 		respond 404 {
