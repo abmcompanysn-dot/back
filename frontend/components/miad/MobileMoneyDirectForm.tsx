@@ -221,9 +221,15 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
 
   type MergedProvider = { code: string; authType: string; effectiveAggregator: 'pawapay' | 'paydunya'; label: string }
   const mergedByLabel = new Map<string, MergedProvider>()
+  // countryDisabled : le pays sélectionné a été désactivé en bloc côté
+  // admin (payment_country_disabled — PUT /payments/country-enabled).
+  // routes est déjà filtré sur ce pays (?country_iso2=...), donc n'importe
+  // quelle ligne suffit à lire ce drapeau — routes[0] si présent.
+  const countryDisabled = routes.length > 0 && routes[0].country_enabled === false
   for (const p of pawapayList) {
     const info = providerInfo(p.code)
     const route = routeFor(info.label)
+    if (countryDisabled) continue
     if (route && route.operator_enabled === false) continue
     mergedByLabel.set(normalizeLabel(info.label), {
       code: p.code,
@@ -236,6 +242,7 @@ export function MobileMoneyDirectForm({ aggregator, orderId, countryISO2, phoneH
     const key = normalizeLabel(p.label)
     if (mergedByLabel.has(key)) continue // déjà couvert côté PawaPay
     const route = routeFor(p.label)
+    if (countryDisabled) continue
     if (route && route.operator_enabled === false) continue
     mergedByLabel.set(key, {
       code: p.code,
