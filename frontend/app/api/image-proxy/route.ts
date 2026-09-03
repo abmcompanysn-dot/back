@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server'
 
 export const runtime = 'edge'
-export const dynamic = 'force-dynamic'
+// PAS de `dynamic = 'force-dynamic'` ici : cette route ne sert que des
+// images qui changent rarement (logos/bannières vendeur) — force-dynamic
+// annulait le Cache-Control ci-dessous (cf-cache-status restait DYNAMIC
+// malgré l'en-tête correct), donc CHAQUE visiteur repayait le lent
+// aller-retour vers l'origine WordPress (~2.3s mesurés le 2026-09-03,
+// signalé par le fondateur) au lieu de profiter du cache Cloudflare Edge.
 
 // Seul hôte autorisé — évite qu'un tiers utilise ce proxy pour relayer
 // n'importe quelle URL arbitraire (SSRF).
