@@ -169,6 +169,7 @@ var seedTemplates = []EmailTemplate{
 	{Name: "vendor_enabled", Label: "Boutique réactivée", Subject: "Votre boutique a été réactivée", BodyHTML: vendorEnabledHTML},
 	{Name: "address_updated", Label: "Adresse modifiée", Subject: "Votre adresse a été mise à jour", BodyHTML: addressUpdatedHTML},
 	{Name: "broadcast", Label: "Message diffusé (admin)", Subject: "Message MIAD Market", BodyHTML: broadcastHTML},
+	{Name: "security_alert", Label: "Alerte sécurité (interne)", Subject: "⚠️ Alerte sécurité — {{.rule}}", BodyHTML: securityAlertHTML},
 }
 
 // getSettings/putSettings — Configuration Système (page admin).
@@ -278,6 +279,7 @@ func main() {
 		mux.HandleFunc("GET /emails/stats", s.stats)
 		mux.HandleFunc("POST /emails/send", s.sendEmail)
 		mux.HandleFunc("POST /emails/broadcast", s.broadcastEmail)
+		mux.HandleFunc("POST /emails/security-alert", s.securityAlertEmail)
 		mux.HandleFunc("GET /email-templates", s.listTemplates)
 		mux.HandleFunc("GET /email-templates/{name}", s.getTemplate)
 		mux.HandleFunc("PUT /email-templates/{name}", s.updateTemplate)
@@ -1377,6 +1379,83 @@ func (s *server) sendEmail(w http.ResponseWriter, r *http.Request) {
 		"status":  "queued",
 		"message": "email mis en file",
 	})
+}
+
+// securityAlertEmail — POST /emails/security-alert. Appelé UNIQUEMENT
+// par admin-svc (guard) sur le réseau interne k8s, protégé par le
+// secret interne partagé. Envoie l'alerte à tous les admins actifs
+// (même résolution que queueAdminNewOrder). Le corps est un JSON
+// d'Event (kit.Event, sérialisé côté admin-svc en clés snake_case).
+func (s *server) securityAlertEmail(w http.ResponseWriter, r *http.Request) {
+	if s.internalAPISecret == "" || r.Header.Get("X-Internal-Secret") != s.internalAPISecret {
+		kit.Fail(w, 401, "unauthorized", "secret interne requis")
+		return
+	}
+	var ev struct {
+		Svc       string `json:"svc"`
+		Rule      string `json:"rule"`
+		Severity  string `json:"severity"`
+		Action    string `json:"action"`
+		IP        string `json:"ip"`
+		Subject   string `json:"subject"`
+		Method    string `json:"method"`
+		Path      string `json:"path"`
+		Count     int    `json:"count"`
+		WindowSec int    `json:"window_sec"`
+		Detail    string `json:"detail"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if ev.Rule == "" {
+		kit.Fail(w, 400, "missing_rule", "champ 'rule' obligatoire")
+		return
+	}
+
+	sevLabel := map[string]string{"info": "information", "warn": "à surveiller", "critical": "CRITIQUE"}[ev.Severity]
+	if sevLabel == "" {
+		sevLabel = ev.Severity
+	}
+	actLabel := map[string]string{
+		"alert": "Alerte seule (aucun blocage)", "throttle": "Ralentissement (429) de la requête",
+		"block": "IP bloquée temporairement",
+	}[ev.Action]
+	if actLabel == "" {
+		actLabel = ev.Action
+	}
+
+	payload := map[string]any{
+		"svc": ev.Svc, "rule": ev.Rule, "severity": ev.Severity,
+		"severity_label": sevLabel, "action": ev.Action, "action_label": actLabel,
+		"ip": ev.IP, "subject": ev.Subject, "method": ev.Method, "path": ev.Path,
+		"count": ev.Count, "window_sec": ev.WindowSec, "detail": ev.Detail,
+		"at": time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
+	}
+
+	headers := map[string]string{}
+	if s.internalAPISecret != "" {
+		headers["X-Internal-Secret"] = s.internalAPISecret
+	}
+	var resp struct {
+		Items []struct {
+			Email string `json:"email"`
+		} `json:"items"`
+	}
+	if err := fetchJSONWithHeaders(r.Context(), s.authURL+"/internal/admin-emails", headers, &resp); err != nil {
+		kit.Fail(w, 502, "admins_unreachable", "liste des admins introuvable: "+err.Error())
+		return
+	}
+	subject := fmt.Sprintf("⚠️ Alerte sécurité [%s] — %s", sevLabel, ev.Rule)
+	queued := 0
+	for _, a := range resp.Items {
+		if a.Email == "" {
+			continue
+		}
+		s.queueEmail(r.Context(), kit.Logger("email-svc"), a.Email, "security_alert", subject, payload)
+		queued++
+	}
+	kit.JSON(w, 202, map[string]any{"ok": true, "queued": queued})
 }
 
 // broadcastEmail — POST /emails/broadcast {audience, subject, body}, calqué
@@ -3126,6 +3205,59 @@ const broadcastHTML = `
           <tr>
             <td style="background-color:#005826;color:rgba(255,255,255,0.75);padding:20px 28px;text-align:center;font-size:0.7rem;border-top:3px solid #F5A623;">
               <p style="margin:0;"><strong style="color:#ffffff;">MIAD Market</strong> — L'excellence africaine partagée avec le monde.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
+
+// securityAlertHTML — email interne d'alerte de sécurité (guard). Non
+// destiné aux clients : envoyé aux admins quand une règle de détection
+// se déclenche (audit 2026-09-03). Volontairement sobre, sans logo
+// tape-à-l'œil, l'important est l'information.
+const securityAlertHTML = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alerte sécurité MIAD Market</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f4f4f4;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" style="width:560px;max-width:100%;border-collapse:collapse;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e2e2e2;">
+          <tr>
+            <td style="background:#8a1f11;padding:16px 28px;color:#ffffff;font-size:15px;font-weight:600;">
+              ⚠️ Alerte sécurité — {{.severity_label}}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px;font-size:14px;color:#333;line-height:1.7;">
+              <p style="margin:0 0 14px;">{{.detail}}</p>
+              <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;">
+                <tr><td style="padding:4px 0;color:#777;width:130px;">Règle</td><td style="padding:4px 0;"><code>{{.rule}}</code></td></tr>
+                <tr><td style="padding:4px 0;color:#777;">Action prise</td><td style="padding:4px 0;">{{.action_label}}</td></tr>
+                <tr><td style="padding:4px 0;color:#777;">Service</td><td style="padding:4px 0;">{{.svc}}</td></tr>
+                <tr><td style="padding:4px 0;color:#777;">Adresse IP</td><td style="padding:4px 0;"><code>{{.ip}}</code></td></tr>
+                {{if .subject}}<tr><td style="padding:4px 0;color:#777;">Concerné</td><td style="padding:4px 0;">{{.subject}}</td></tr>{{end}}
+                {{if .path}}<tr><td style="padding:4px 0;color:#777;">Chemin</td><td style="padding:4px 0;"><code>{{.method}} {{.path}}</code></td></tr>{{end}}
+                <tr><td style="padding:4px 0;color:#777;">Occurrences</td><td style="padding:4px 0;">{{.count}} en {{.window_sec}} s</td></tr>
+                <tr><td style="padding:4px 0;color:#777;">Horodatage</td><td style="padding:4px 0;">{{.at}}</td></tr>
+              </table>
+              <p style="margin:18px 0 0;font-size:13px;">
+                <a href="{{.frontend_url}}/admin/security" style="color:#005826;">Ouvrir le journal de sécurité →</a>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f4f4f4;color:#999;padding:14px 28px;text-align:center;font-size:11px;border-top:1px solid #e2e2e2;">
+              Message automatique — surveillance de sécurité MIAD Market. Ne pas répondre.
             </td>
           </tr>
         </table>

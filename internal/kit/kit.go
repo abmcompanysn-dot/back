@@ -467,9 +467,11 @@ func Run(service, port string, log *slog.Logger, h *Health, register func(mux *h
 	})
 	mux.HandleFunc("GET /system-check", h.Handler(service))
 
+	// Chaîne : recover (attrape les panics) → guard (détection/blocage
+	// des abus, no-op si UseGuard n'a pas été appelé) → log → mux.
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           withRecover(withLog(log, mux)),
+		Handler:           withRecover(guardMiddleware(withLog(log, mux))),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

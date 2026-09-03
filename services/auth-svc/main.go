@@ -206,6 +206,28 @@ func main() {
 		return nil
 	})
 
+	// Guard — bourrage d'identifiants (login) et énumération OTP.
+	// auth-svc n'a pas de table security_events : son guard délègue à
+	// admin-svc (journal + liste noire centralisés). Les règles HTTP
+	// par défaut (scan /orders, scrape /products…) ne matchent aucun
+	// chemin d'auth-svc, elles sont inertes ici — on garde le jeu
+	// complet pour cohérence, seules login_bruteforce / otp_enumeration
+	// se déclencheront (via Note/NoteFail dans les handlers).
+	{
+		adminURL := kit.Env("ADMIN_SVC_URL", "http://admin-svc:8088")
+		sink, blocklist, blockPush := kit.RemoteGuardHooks(adminURL, s.internalAPISecretStr)
+		g := kit.NewGuard(kit.GuardConfig{
+			Svc:        "auth-svc",
+			Log:        log,
+			Rules:      kit.DefaultRules(),
+			TrustProxy: kit.Env("GUARD_TRUST_PROXY", "1") == "1",
+			Sink:       sink,
+			Blocklist:  blocklist,
+			BlockPush:  blockPush,
+		})
+		kit.UseGuard(g)
+	}
+
 	kit.Run("auth-svc", kit.Env("PORT_AUTH", "8086"), log, health, func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /settings", s.getSettings)
 		mux.HandleFunc("PUT /settings", s.putSettings)
@@ -975,6 +997,13 @@ func (s *server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(val, "|", 3)
 	if len(parts) != 3 || parts[2] != body.Code {
 		fmt.Printf("[auth-svc] otp/verify: code incorrect pour ref %q (reçu %q)\n", body.OtpRef, body.Code)
+		// guard : énumération OTP. Clé = identifiant visé (parts[0] =
+		// email/msisdn) quand il est disponible, sinon la ref.
+		otpSubject := body.OtpRef
+		if len(parts) >= 1 && parts[0] != "" {
+			otpSubject = parts[0]
+		}
+		kit.NoteFail(r, "otp_enumeration", otpSubject)
 		kit.Fail(w, 401, "invalid_code", "code OTP incorrect")
 		return
 	}
@@ -1103,6 +1132,15 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 	err := s.db.QueryRow(r.Context(),
 		"SELECT id, password_hash, salt, must_reset_password FROM customers WHERE lower(email) = lower($1)", body.Email,
 	).Scan(&id, &hash, &salt, &mustReset)
+	// guard : bourrage d'identifiants. On compte l'échec sur DEUX axes
+	// (email visé ET IP source) pour attraper aussi bien "un compte,
+	// mille mots de passe" que "mille comptes depuis une IP". Un login
+	// réussi ne compte pas (FailOnly).
+	noteLoginFail := func() {
+		kit.NoteFail(r, "login_bruteforce", strings.ToLower(strings.TrimSpace(body.Email)))
+		kit.NoteFail(r, "login_bruteforce", "") // "" => clé = IP côté guard
+	}
+
 	if err == pgx.ErrNoRows || hash == "" {
 		// Compte importé (must_reset_password) : message dédié plutôt que
 		// le "email ou mot de passe incorrect" générique, pour orienter
@@ -1111,6 +1149,7 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 			kit.Fail(w, 403, "password_reset_required", "compte importé — veuillez définir un mot de passe via « mot de passe oublié »")
 			return
 		}
+		noteLoginFail()
 		kit.Fail(w, 401, "invalid_credentials", "email ou mot de passe incorrect")
 		return
 	} else if err != nil {
@@ -1118,6 +1157,7 @@ func (s *server) loginCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if hashPassword(salt, body.Password) != hash {
+		noteLoginFail()
 		kit.Fail(w, 401, "invalid_credentials", "email ou mot de passe incorrect")
 		return
 	}

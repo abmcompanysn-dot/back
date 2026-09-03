@@ -1,13 +1,48 @@
 import { useState } from 'react'
 import QRCode from 'qrcode'
 import { ApiError, api } from '../lib/api'
+import { SecurityMonitor } from './SecurityMonitor'
 
 interface Setup2FAResponse {
   secret: string
   otpauth_url: string
 }
 
+// Security — page à deux onglets : "Surveillance" (journal du guard,
+// détection/blocage automatique des abus — audit 2026-09-03) et
+// "Double authentification" (2FA du compte admin, historique).
 export function Security() {
+  const [tab, setTab] = useState<'monitor' | '2fa'>('monitor')
+  return (
+    <div>
+      <div className="subnav" style={{ marginBottom: 16 }}>
+        <a
+          className={tab === 'monitor' ? 'active' : ''}
+          href="#"
+          onClick={(e) => {
+            e.preventDefault()
+            setTab('monitor')
+          }}
+        >
+          Surveillance
+        </a>
+        <a
+          className={tab === '2fa' ? 'active' : ''}
+          href="#"
+          onClick={(e) => {
+            e.preventDefault()
+            setTab('2fa')
+          }}
+        >
+          Double authentification
+        </a>
+      </div>
+      {tab === 'monitor' ? <SecurityMonitor /> : <TwoFactorSetup />}
+    </div>
+  )
+}
+
+function TwoFactorSetup() {
   const [setupResult, setSetupResult] = useState<Setup2FAResponse | null>(null)
   const [qrDataURL, setQrDataURL] = useState('')
   const [verifyCode, setVerifyCode] = useState('')

@@ -367,6 +367,26 @@ func main() {
 
 	go s.consumeOrders(log)
 
+	// Guard — test de cartes volées (POST /payments/init en rafale,
+	// règle HTTP automatique) + pic d'approbations de virements
+	// (payout_burst, Note métier dans approvePayout/executePayoutViaPawapay).
+	// Journal + liste noire centralisés dans admin-svc.
+	{
+		adminURL := kit.Env("ADMIN_SVC_URL", "http://admin-svc:8088")
+		secret := kit.Env("INTERNAL_API_SECRET", "")
+		sink, blocklist, blockPush := kit.RemoteGuardHooks(adminURL, secret)
+		g := kit.NewGuard(kit.GuardConfig{
+			Svc:        "payment-svc",
+			Log:        log,
+			Rules:      kit.DefaultRules(),
+			TrustProxy: kit.Env("GUARD_TRUST_PROXY", "1") == "1",
+			Sink:       sink,
+			Blocklist:  blocklist,
+			BlockPush:  blockPush,
+		})
+		kit.UseGuard(g)
+	}
+
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
 	health.Add("stripe_key", func(ctx context.Context) error {

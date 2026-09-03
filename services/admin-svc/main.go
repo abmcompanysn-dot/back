@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,6 +63,18 @@ CREATE TABLE IF NOT EXISTS media_files (
 );
 CREATE INDEX IF NOT EXISTS idx_media_folder ON media_files (folder);
 CREATE INDEX IF NOT EXISTS idx_media_created ON media_files (created_at DESC);
+
+-- Guard : IP déjà vues pour un compte admin donné. Sert à la règle
+-- "admin_new_ip" (alerte quand un JWT admin arrive depuis une IP
+-- jamais enregistrée pour ce compte). Une ligne par (compte, IP) ;
+-- last_seen mis à jour à chaque requête admin authentifiée.
+CREATE TABLE IF NOT EXISTS admin_ip_seen (
+  account_id  TEXT        NOT NULL,
+  ip          TEXT        NOT NULL,
+  first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, ip)
+);
 `
 
 //go:embed webui/dist
@@ -87,6 +100,7 @@ type server struct {
 	fulfillmentURL  string
 	loyaltyURL      string
 	media           *kit.Media
+	guard           *kit.Guard
 
 	settings *kit.SettingsStore
 	// jwtSecretStr : voir jwtSec ci-dessus — ATTENTION partagé avec
@@ -135,7 +149,7 @@ func main() {
 		log.Error("démarrage impossible sans Postgres", "err", err)
 		return
 	}
-	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)); err != nil {
+	if err := kit.Migrate(ctx, db, schema+kit.SettingsStoreSchema(settingsTable)+kit.GuardSchema); err != nil {
 		log.Error("migration du schéma impossible", "err", err)
 		return
 	}
@@ -183,6 +197,22 @@ func main() {
 		u := url
 		health.Add(name, func(ctx context.Context) error { return ping(ctx, u+"/healthz") })
 	}
+
+	// Guard — détection + blocage automatique des comportements suspects
+	// (audit sécurité 2026-09-03). admin-svc héberge le journal partagé
+	// (table security_events dans miad_admin) et route les alertes vers
+	// email-svc + loyalty-svc/WhatsApp selon la gravité. Les autres
+	// services ont leur PROPRE guard sur LEUR base ; la console lit tous
+	// les journaux via le fan-out /admin/api/security/events.
+	s.guard = kit.NewGuard(kit.GuardConfig{
+		Svc:        "admin-svc",
+		DB:         db,
+		Log:        log,
+		Rules:      kit.DefaultRules(),
+		TrustProxy: kit.Env("GUARD_TRUST_PROXY", "1") == "1",
+		Alert:      s.dispatchSecurityAlert,
+	})
+	kit.UseGuard(s.guard)
 
 	kit.Run("admin-svc", kit.Env("PORT_ADMIN", "8088"), log, health, func(mux *http.ServeMux) {
 		// Configuration Système (page admin) : ses propres réglages, plus
@@ -392,6 +422,12 @@ func main() {
 		})))
 		mux.HandleFunc("GET /admin/api/payout-requests", s.requireAdmin(s.proxy(func() string { return s.paymentURL + "/payout-requests" })))
 		mux.HandleFunc("POST /admin/api/payout-requests/{id}/approve", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+			// guard : pic d'approbations de virement par un même admin
+			// (compte de la compromission d'un compte admin). Clé =
+			// identifiant de l'admin issu du JWT.
+			if claims, err := s.verifyJWT(r); err == nil {
+				kit.Note(r, "payout_burst", fmt.Sprint(claims["sub"]))
+			}
 			forwardWithBody(w, r, http.MethodPost, s.paymentURL+"/payout-requests/"+r.PathValue("id")+"/approve")
 		}))
 		mux.HandleFunc("POST /admin/api/payout-requests/{id}/reject", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +543,26 @@ func main() {
 			forwardWithBody(w, r, http.MethodPost, s.loyaltyURL+"/whatsapp/resend/"+r.PathValue("order_id"))
 		}))
 		mux.HandleFunc("GET /admin/api/system", s.requireAdmin(s.systemCheck))
+
+		// Journal de sécurité (guard) — page /admin/security de la console.
+		// events : agrège le journal LOCAL d'admin-svc + un fan-out sur
+		// /internal/security-events de chaque autre service qui a un guard.
+		// blocks : idem pour les IP bloquées. unblock/block : déblocage /
+		// blocage manuel (n'agit que sur admin-svc ici — les autres
+		// services rechargent leur cache depuis LEUR base ; une IP bloquée
+		// dans plusieurs bases doit être débloquée dans chacune, listé
+		// tel quel dans l'UI).
+		mux.HandleFunc("GET /admin/api/security/events", s.requireAdmin(s.securityEvents))
+		mux.HandleFunc("GET /admin/api/security/blocks", s.requireAdmin(s.securityBlocks))
+		mux.HandleFunc("POST /admin/api/security/unblock", s.requireAdmin(s.securityUnblock))
+		mux.HandleFunc("POST /admin/api/security/block", s.requireAdmin(s.securityBlockManual))
+		// Endpoints internes (secret partagé) : les guards des AUTRES
+		// services y poussent leurs événements / blocages et y lisent la
+		// liste noire partagée. Jamais exposés via Caddy (/internal/* n'est
+		// routé nulle part dans deploy/Caddyfile).
+		mux.HandleFunc("POST /internal/security-events", s.internalSecurityEventWrite)
+		mux.HandleFunc("POST /internal/security-block", s.internalSecurityBlockWrite)
+		mux.HandleFunc("GET /internal/security-blocks", s.internalSecurityBlocksRead)
 		mux.HandleFunc("GET /admin/api/push/stats", s.requireAdmin(s.proxy(func() string { return s.notificationURL + "/push/stats" })))
 		mux.HandleFunc("POST /admin/api/push/broadcast", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 			forwardWithBody(w, r, http.MethodPost, s.notificationURL+"/push/broadcast")
@@ -1528,6 +1584,251 @@ func getJSON(ctx context.Context, url string) (map[string]any, error) {
 	return body, nil
 }
 
+// ---------- Guard : routage des alertes de sécurité ----------
+
+// dispatchSecurityAlert — AlertFn du guard. Le guard a déjà écrit la
+// ligne security_events et (si Action==block) rempli blocked_ips ;
+// cette fonction pousse la notification humaine :
+//   - email à tous les admins pour severity >= warn (via email-svc)
+//   - WhatsApp aux numéros admins pour severity == critical (via
+//     loyalty-svc, endpoint /whatsapp/test réutilisé — appel INTERNE
+//     k8s, jamais via Caddy)
+// Jamais bloquant : le guard l'appelle déjà dans une goroutine, mais
+// on borne quand même chaque appel réseau.
+func (s *server) dispatchSecurityAlert(ev kit.Event) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	secret := kit.Env("INTERNAL_API_SECRET", "")
+
+	payload := map[string]any{
+		"svc": ev.Svc, "rule": ev.Rule, "severity": string(ev.Severity),
+		"action": string(ev.Action), "ip": ev.IP, "subject": ev.Subject,
+		"method": ev.Method, "path": ev.Path, "count": ev.Count,
+		"window_sec": ev.WindowSec, "detail": ev.Detail,
+	}
+
+	if ev.Severity == kit.SevWarn || ev.Severity == kit.SevCritical {
+		if err := postJSONInternal(ctx, s.emailURL+"/emails/security-alert", secret, payload); err != nil {
+			kit.Logger("admin-svc").Error("guard: échec envoi email d'alerte", "err", err, "rule", ev.Rule)
+		}
+	}
+
+	if ev.Severity == kit.SevCritical {
+		nums := splitCSV(kit.Env("SECURITY_ALERT_WHATSAPP", ""))
+		msg := fmt.Sprintf("⚠️ MIAD sécurité [CRITIQUE] — %s\n%s\nIP %s · %d occ./%ds · %s %s",
+			ev.Rule, ev.Detail, ev.IP, ev.Count, ev.WindowSec, ev.Method, ev.Path)
+		for _, n := range nums {
+			wa := map[string]any{"to": n, "body": msg}
+			if err := postJSONInternal(ctx, s.loyaltyURL+"/whatsapp/test", secret, wa); err != nil {
+				kit.Logger("admin-svc").Error("guard: échec envoi WhatsApp d'alerte", "err", err, "to", n)
+			}
+		}
+	}
+}
+
+// ---------- Guard : journal de sécurité (console + endpoints internes) ----------
+
+// securityEvents — GET /admin/api/security/events?limit=100. Journal
+// centralisé (miad_admin), tous services confondus.
+func (s *server) securityEvents(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	rows, err := s.guard.RecentEvents(r.Context(), limit)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"items": rows})
+}
+
+// securityBlocks — GET /admin/api/security/blocks. IP bloquées
+// (actives + expirées < 24 h).
+func (s *server) securityBlocks(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.guard.ListBlocked(r.Context())
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"items": rows})
+}
+
+// securityUnblock — POST /admin/api/security/unblock {ip}. Déblocage
+// manuel depuis la console.
+func (s *server) securityUnblock(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IP string `json:"ip"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.IP) == "" {
+		kit.Fail(w, 400, "invalid_body", "champ 'ip' obligatoire")
+		return
+	}
+	if err := s.guard.Unblock(r.Context(), strings.TrimSpace(body.IP)); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+// securityBlockManual — POST /admin/api/security/block {ip, minutes, reason}.
+// Blocage manuel depuis la console.
+func (s *server) securityBlockManual(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IP      string `json:"ip"`
+		Minutes int    `json:"minutes"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.IP) == "" {
+		kit.Fail(w, 400, "invalid_body", "champ 'ip' obligatoire")
+		return
+	}
+	if body.Minutes <= 0 || body.Minutes > 7*24*60 {
+		body.Minutes = 60
+	}
+	if err := s.guard.BlockManual(r.Context(), strings.TrimSpace(body.IP),
+		body.Reason, time.Duration(body.Minutes)*time.Minute); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+// requireInternal — garde commune des endpoints /internal/* du guard.
+func (s *server) requireInternal(r *http.Request) bool {
+	secret := kit.Env("INTERNAL_API_SECRET", "")
+	return secret != "" && r.Header.Get("X-Internal-Secret") == secret
+}
+
+// internalSecurityEventWrite — POST /internal/security-events. Un guard
+// d'un autre service y pousse un Event (SinkFn). Insère dans la table
+// centrale, PUIS route l'alerte humaine (email/WhatsApp) exactement
+// comme si l'événement venait d'admin-svc lui-même.
+func (s *server) internalSecurityEventWrite(w http.ResponseWriter, r *http.Request) {
+	if !s.requireInternal(r) {
+		kit.Fail(w, 401, "unauthorized", "secret interne requis")
+		return
+	}
+	var ev kit.Event
+	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if ev.Rule == "" {
+		kit.Fail(w, 400, "missing_rule", "champ 'rule' obligatoire")
+		return
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO security_events
+		  (svc, rule, severity, action, ip, subject, method, path, count, window_sec, detail)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		ev.Svc, ev.Rule, string(ev.Severity), string(ev.Action),
+		ev.IP, ev.Subject, ev.Method, ev.Path, ev.Count, ev.WindowSec, ev.Detail,
+	); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	go s.dispatchSecurityAlert(ev)
+	kit.JSON(w, 202, map[string]any{"ok": true})
+}
+
+// internalSecurityBlockWrite — POST /internal/security-block
+// {ip, rule, reason, until}. Un guard d'un autre service y pousse un
+// blocage décidé localement (BlockPushFn).
+func (s *server) internalSecurityBlockWrite(w http.ResponseWriter, r *http.Request) {
+	if !s.requireInternal(r) {
+		kit.Fail(w, 401, "unauthorized", "secret interne requis")
+		return
+	}
+	var body struct {
+		IP     string    `json:"ip"`
+		Rule   string    `json:"rule"`
+		Reason string    `json:"reason"`
+		Until  time.Time `json:"until"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IP == "" {
+		kit.Fail(w, 400, "invalid_body", "champ 'ip' obligatoire")
+		return
+	}
+	if body.Until.IsZero() {
+		body.Until = time.Now().Add(15 * time.Minute)
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO blocked_ips (ip, expires_at, rule, reason)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (ip) DO UPDATE SET
+		  expires_at = GREATEST(blocked_ips.expires_at, EXCLUDED.expires_at),
+		  rule = EXCLUDED.rule, reason = EXCLUDED.reason`,
+		body.IP, body.Until, body.Rule, body.Reason,
+	); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	kit.JSON(w, 202, map[string]any{"ok": true})
+}
+
+// internalSecurityBlocksRead — GET /internal/security-blocks. Les
+// guards des autres services lisent ici la liste noire partagée
+// (BlocklistFn), renvoyée comme { "ip": "RFC3339 expiration", ... }.
+func (s *server) internalSecurityBlocksRead(w http.ResponseWriter, r *http.Request) {
+	if !s.requireInternal(r) {
+		kit.Fail(w, 401, "unauthorized", "secret interne requis")
+		return
+	}
+	rows, err := s.db.Query(r.Context(),
+		`SELECT ip, expires_at FROM blocked_ips WHERE expires_at > now()`)
+	if err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var ip string
+		var exp time.Time
+		if err := rows.Scan(&ip, &exp); err == nil {
+			out[ip] = exp.UTC().Format(time.RFC3339)
+		}
+	}
+	kit.JSON(w, 200, out)
+}
+
+// postJSONInternal — POST JSON service-à-service sur le réseau k8s
+// interne, avec le secret partagé. Ne lit pas la réponse (fire-and-check).
+func postJSONInternal(ctx context.Context, url, secret string, body any) error {
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if secret != "" {
+		req.Header.Set("X-Internal-Secret", secret)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		out, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(out))
+	}
+	return nil
+}
+
+func splitCSV(s string) []string {
+	out := []string{}
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func ping(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -1557,8 +1858,68 @@ func (s *server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			kit.Fail(w, 403, "admin_required", msg)
 			return
 		}
+		s.trackAdminIP(r, fmt.Sprint(claims["sub"]))
 		next(w, r)
 	}
+}
+
+// trackAdminIP — enregistre l'IP pour ce compte admin ; si c'est une
+// IP jamais vue, déclenche la règle guard "admin_new_ip" (alerte, pas
+// de blocage). Non bloquant, best-effort.
+func (s *server) trackAdminIP(r *http.Request, accountID string) {
+	if s.guard == nil || accountID == "" || accountID == "<nil>" {
+		return
+	}
+	ip := clientIPFromRequest(r)
+	if ip == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		tag, err := s.db.Exec(ctx, `
+			INSERT INTO admin_ip_seen (account_id, ip) VALUES ($1,$2)
+			ON CONFLICT (account_id, ip) DO UPDATE SET last_seen = now()`,
+			accountID, ip)
+		if err != nil {
+			kit.Logger("admin-svc").Error("trackAdminIP: échec upsert", "err", err)
+			return
+		}
+		// RowsAffected == 1 sur un vrai INSERT (nouvelle paire) ; sur
+		// un UPDATE (paire connue) pgx renvoie aussi 1 — on distingue
+		// via xmax : plus simple ici, on refait un SELECT du first_seen.
+		var firstSeen, lastSeen time.Time
+		if err := s.db.QueryRow(ctx,
+			`SELECT first_seen, last_seen FROM admin_ip_seen WHERE account_id=$1 AND ip=$2`,
+			accountID, ip).Scan(&firstSeen, &lastSeen); err != nil {
+			return
+		}
+		_ = tag
+		// Nouvelle IP = first_seen très récent (< 10 s) ET c'est la
+		// première fois qu'on la voit (first_seen ≈ last_seen).
+		if time.Since(firstSeen) < 10*time.Second && lastSeen.Sub(firstSeen) < 2*time.Second {
+			kit.Note(r, "admin_new_ip", accountID)
+		}
+	}()
+}
+
+// clientIPFromRequest — même logique que le guard (CF-Connecting-IP en
+// prod, derrière Cloudflare + Caddy).
+func clientIPFromRequest(r *http.Request) string {
+	if cf := r.Header.Get("CF-Connecting-IP"); cf != "" {
+		return strings.TrimSpace(cf)
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // requireAdminOrVendor — pour les routes qu'un vendeur authentifié peut
