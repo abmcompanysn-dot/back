@@ -409,6 +409,53 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
     }
   }, [searchParams])
 
+  // "Se connecter en tant que ce vendeur" (bouton admin, AllVendors.tsx →
+  // POST /admin/api/vendors/{id}/impersonate) ouvre miadmarket.ca/?impersonate_jwt=…
+  // — un vrai JWT customer signé par auth-svc (role:"customer" + vendor_id,
+  // voir isVendor() dans lib/miad-server-auth.ts), jamais lu côté client
+  // avant le 2026-09-03 : ce paramètre n'était traité nulle part, donc le
+  // clic ouvrait juste l'accueil normal, déconnecté. On installe ce JWT
+  // exactement comme le fait LoginPage après une connexion classique, puis
+  // on redirige vers le dashboard vendeur — sans jamais renvoyer ce token
+  // vers l'origine (il est déjà dans l'URL, donc potentiellement dans les
+  // logs serveur/historique : on le retire de la barre d'adresse
+  // immédiatement après l'avoir consommé).
+  useEffect(() => {
+    const impersonateJwt = searchParams.get('impersonate_jwt')
+    if (!impersonateJwt) return
+
+    // Nettoie l'URL tout de suite (avant même la résolution du profil) pour
+    // ne jamais laisser ce token trainer dans l'historique/un rafraîchissement.
+    const url = new URL(window.location.href)
+    url.searchParams.delete('impersonate_jwt')
+    window.history.replaceState({}, '', url.toString())
+
+    ;(async () => {
+      try {
+        const res = await fetch('/api/customer', { headers: { Authorization: `Bearer ${impersonateJwt}` } })
+        const data = await res.json()
+        if (!res.ok || !data?.success) {
+          toast.error("Ce lien de connexion vendeur n'est plus valide.")
+          return
+        }
+        const profile = data.data
+        localStorage.removeItem('miad_token'); localStorage.removeItem('miad_user'); localStorage.removeItem('miad_role')
+        localStorage.setItem('miad_token', impersonateJwt)
+        localStorage.setItem('miad_user', JSON.stringify({
+          display_name: profile.name, user_email: profile.email, user_nicename: profile.email, id: profile.id, avatar: profile.avatar,
+        }))
+        localStorage.setItem('miad_role', 'vendor')
+        setIsLoggedIn(true)
+        setUserType('vendor')
+        setUserName(profile.name || 'Vendeur')
+        navigateTo('vendorDashboard')
+      } catch {
+        toast.error('Connexion en tant que vendeur impossible (réseau).')
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Mémorise qu'on a affiché l'accueil au moins une fois dans ce montage :
   // un retour arrière ultérieur vers 'home' n'aura alors plus besoin d'un
   // router.refresh() (plus de flash skeleton du bas de page). Voir
