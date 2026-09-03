@@ -6,9 +6,13 @@
 package kit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,6 +26,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/disintegration/imaging"
 	sentry "github.com/getsentry/sentry-go"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
@@ -384,6 +389,166 @@ func (m *Media) Upload(ctx context.Context, prefix, filename string, r io.Reader
 		return "", fmt.Errorf("upload minio: %w", err)
 	}
 	return m.baseURL + "/" + key, nil
+}
+
+// thumbnailSizes — mêmes tailles que l'ancienne convention WordPress
+// (voir frontend/lib/image-utils.ts getThumbnailUrl), pour que le frontend
+// existant les trouve sans modification : "<nom>-300x300.<ext>" etc.
+var thumbnailSizes = []int{300, 150}
+
+// UploadWithThumbnails fait comme Upload (l'original en pleine résolution
+// reste servi tel quel, jamais dégradé) mais génère EN PLUS des variantes
+// redimensionnées 300x300/150x150 uploadées à côté, sous le même nom que
+// getThumbnailUrl() sait déjà reconstruire côté frontend. Ajouté le
+// 2026-09-03 : avant ça, aucune miniature n'était jamais créée pour les
+// images uploadées depuis ce back-office (contrairement à l'ancien WordPress),
+// donc chaque carte produit chargeait l'image complète (souvent 100-500 Ko)
+// au lieu de quelques Ko — gros ralentissement pour les visiteurs loin du
+// VPS. best-effort : si le fichier n'est pas une image décodable (jpeg/png)
+// ou que la génération échoue, on log et on continue — l'upload de
+// l'original ne doit jamais échouer à cause d'un problème de miniature.
+func (m *Media) UploadWithThumbnails(ctx context.Context, prefix, filename string, r io.Reader, size int64, contentType string, log *slog.Logger) (string, error) {
+	// On doit lire tout le fichier en mémoire pour pouvoir à la fois
+	// l'uploader tel quel ET le décoder pour générer les miniatures —
+	// r ne peut être consommé qu'une fois (multipart.File n'est pas
+	// forcément ré-avançable selon l'implémentation).
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("lecture fichier: %w", err)
+	}
+
+	url, err := m.Upload(ctx, prefix, filename, bytes.NewReader(data), size, contentType)
+	if err != nil {
+		return "", err
+	}
+
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		// Pas une image décodable (svg, webp non supporté par la stdlib, etc.)
+		// — pas grave, LazyImage retente automatiquement l'original en cas
+		// de 404 sur la miniature (voir frontend/components/miad/LazyImage.tsx).
+		if log != nil {
+			log.Info("miniature non générée (format non décodable)", "filename", filename, "err", err.Error())
+		}
+		return url, nil
+	}
+
+	lastDot := strings.LastIndex(filename, ".")
+	if lastDot <= 0 {
+		return url, nil
+	}
+	base, ext := filename[:lastDot], filename[lastDot:]
+
+	for _, sizePx := range thumbnailSizes {
+		thumb := imaging.Fill(img, sizePx, sizePx, imaging.Center, imaging.Lanczos)
+		var buf bytes.Buffer
+		var thumbContentType string
+		switch format {
+		case "png":
+			err = png.Encode(&buf, thumb)
+			thumbContentType = "image/png"
+		default: // jpeg et tout le reste réencodés en jpeg (format le plus léger)
+			err = jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: 82})
+			thumbContentType = "image/jpeg"
+		}
+		if err != nil {
+			if log != nil {
+				log.Warn("encodage miniature échoué", "filename", filename, "size", sizePx, "err", err.Error())
+			}
+			continue
+		}
+		thumbName := fmt.Sprintf("%s-%dx%d%s", base, sizePx, sizePx, ext)
+		if _, thumbErr := m.Upload(ctx, prefix, thumbName, &buf, int64(buf.Len()), thumbContentType); thumbErr != nil && log != nil {
+			log.Warn("upload miniature échoué", "filename", thumbName, "err", thumbErr.Error())
+		}
+	}
+
+	return url, nil
+}
+
+// Download récupère le contenu brut d'un objet MinIO à partir de sa clé
+// (chemin relatif au bucket, ex: "products/xxx.jpg" — pas l'URL publique
+// complète). Utilisé par les outils de rattrapage (cmd/generate-thumbnails)
+// pour regénérer des miniatures sur des images déjà en ligne.
+func (m *Media) Download(ctx context.Context, key string) ([]byte, error) {
+	obj, err := m.client.GetObject(ctx, m.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get object minio: %w", err)
+	}
+	defer obj.Close()
+	return io.ReadAll(obj)
+}
+
+// ListKeys énumère toutes les clés d'objet sous un préfixe donné (ex:
+// "products/") — pagination gérée en interne par le SDK MinIO (canal).
+func (m *Media) ListKeys(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return keys, fmt.Errorf("list objects minio: %w", obj.Err)
+		}
+		keys = append(keys, obj.Key)
+	}
+	return keys, nil
+}
+
+// GenerateThumbnailsFor régénère les miniatures 300x300/150x150 d'un objet
+// déjà en ligne (identifié par sa clé MinIO), sans re-uploader l'original —
+// utilisé pour le rattrapage des images uploadées avant l'introduction de
+// UploadWithThumbnails (2026-09-03). Ignore silencieusement (retourne nil)
+// les clés qui sont déjà des miniatures (suffixe "-300x300"/"-150x150") ou
+// dont le format n'est pas décodable.
+func (m *Media) GenerateThumbnailsFor(ctx context.Context, key string, log *slog.Logger) error {
+	for _, sizePx := range thumbnailSizes {
+		if strings.Contains(key, fmt.Sprintf("-%dx%d.", sizePx, sizePx)) {
+			return nil // déjà une miniature, rien à faire
+		}
+	}
+	data, err := m.Download(ctx, key)
+	if err != nil {
+		return err
+	}
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil // format non décodable — pas une erreur bloquante, voir UploadWithThumbnails
+	}
+
+	dir, filename := path.Split(key)
+	lastDot := strings.LastIndex(filename, ".")
+	if lastDot <= 0 {
+		return nil
+	}
+	base, ext := filename[:lastDot], filename[lastDot:]
+	prefix := strings.TrimSuffix(dir, "/")
+
+	for _, sizePx := range thumbnailSizes {
+		thumbName := fmt.Sprintf("%s-%dx%d%s", base, sizePx, sizePx, ext)
+		// Déjà générée (ex: relance après une exécution partielle) — on ne
+		// re-télécharge/regénère pas pour rien.
+		if _, statErr := m.client.StatObject(ctx, m.bucket, path.Join(prefix, thumbName), minio.StatObjectOptions{}); statErr == nil {
+			continue
+		}
+		thumb := imaging.Fill(img, sizePx, sizePx, imaging.Center, imaging.Lanczos)
+		var buf bytes.Buffer
+		var thumbContentType string
+		if format == "png" {
+			err = png.Encode(&buf, thumb)
+			thumbContentType = "image/png"
+		} else {
+			err = jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: 82})
+			thumbContentType = "image/jpeg"
+		}
+		if err != nil {
+			if log != nil {
+				log.Warn("encodage miniature échoué", "key", key, "size", sizePx, "err", err.Error())
+			}
+			continue
+		}
+		if _, err := m.Upload(ctx, prefix, thumbName, &buf, int64(buf.Len()), thumbContentType); err != nil {
+			return fmt.Errorf("upload miniature %s: %w", thumbName, err)
+		}
+	}
+	return nil
 }
 
 // Delete retire un objet MinIO à partir de son URL publique HTTPS (celle

@@ -1239,7 +1239,7 @@ func (s *server) uploadMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	filename := fmt.Sprintf("%d-%s", time.Now().UnixNano(), sanitizeFilename(header.Filename))
 
-	url, err := s.media.Upload(r.Context(), prefix, filename, file, header.Size, contentType)
+	url, err := s.media.UploadWithThumbnails(r.Context(), prefix, filename, file, header.Size, contentType, kit.Logger("admin-svc"))
 	if err != nil {
 		kit.Fail(w, 502, "upload_failed", err.Error())
 		return
