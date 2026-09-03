@@ -24,20 +24,32 @@ export async function GET(req: Request) {
     }
 
     const data = await response.json()
-    let items: any[] = data.items || []
-    if (parentId) items = items.filter((c: any) => String(c.parent_id) === parentId)
+    // catalog-svc renvoie { categories: [...] } (pas { items: [...] }),
+    // avec les champs count/productCount et parent/parent_id — on accepte
+    // les deux formes pour rester robuste si le contrat évolue. Bug
+    // constaté le 2026-09-03 : la page d'accueil n'affichait AUCUNE
+    // catégorie (data.items toujours vide).
+    let items: any[] = data.categories || data.items || []
+    if (parentId) {
+      items = items.filter(
+        (c: any) => String(c.parent_id ?? c.parent ?? 0) === parentId
+      )
+    }
 
-    const transformedCategories: WooCategory[] = items.map((c: any) => ({
-      id: c.id.toString(),
-      name: decodeHtmlEntities(c.name || ''),
-      slug: c.slug,
-      image: c.image_url || '/category-placeholder.png',
-      productCount: c.product_count || 0,
-      parent: (c.parent_id || 0).toString(),
-      isRoot: !c.parent_id || c.parent_id === 0,
-      description: '',
-      lang: lang as 'fr' | 'en',
-    }))
+    const transformedCategories: WooCategory[] = items.map((c: any) => {
+      const cParent = c.parent_id ?? c.parent ?? 0
+      return {
+        id: c.id.toString(),
+        name: decodeHtmlEntities(c.name || ''),
+        slug: c.slug,
+        image: c.image_url || c.image?.src || '/category-placeholder.png',
+        productCount: c.productCount ?? c.product_count ?? c.count ?? 0,
+        parent: cParent.toString(),
+        isRoot: !cParent || cParent === 0,
+        description: '',
+        lang: lang as 'fr' | 'en',
+      }
+    })
 
     // Tri : On met les catégories les plus populaires (avec le plus de produits) en premier
     const sortedCategories = transformedCategories.sort((a, b) => b.productCount - a.productCount)
