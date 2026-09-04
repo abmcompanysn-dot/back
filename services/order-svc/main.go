@@ -225,6 +225,7 @@ func main() {
 
 	// Reaper : le cas d'échec partiel est géré, pas tu.
 	go s.expireUnpaidLoop(log)
+	go s.reverifyStuckPaymentsLoop(log)
 
 	health := kit.NewHealth()
 	health.Add("postgres", db.Ping)
@@ -1584,6 +1585,60 @@ func (s *server) expireUnpaidLoop(log interface{ Info(string, ...any) }) {
 					"status": "payment_expired", "expired_count": res.RowsAffected(),
 				})
 			}
+		}
+		cancel()
+	}
+}
+
+// reverifyStuckPaymentsLoop — re-vérifie activement les paiements PawaPay
+// bloqués en "pending_payment" AVANT le filet de sécurité de 30 min
+// (expireUnpaidLoop, réglage PAYMENT_TIMEOUT_MINUTES), au lieu d'attendre
+// passivement un second webhook qui peut ne jamais arriver.
+//
+// Cas réel découvert le 2026-09-04 (test du fondateur, commande #498) :
+// PawaPay a affiché "Paiement Échoué" au client sur SA PROPRE page en
+// quelques secondes, mais leur API interrogée en re-vérification
+// répondait encore "PROCESSING" plusieurs minutes après, et aucun second
+// webhook n'est jamais arrivé — la commande serait restée bloquée
+// "en attente" jusqu'à l'expiration à 30 min sans ce correctif.
+//
+// Fenêtre progressive plutôt qu'un seul délai, à la manière des grands
+// sites e-commerce (retry rapproché d'abord, espacé ensuite) — cohérent
+// avec le pattern déjà utilisé côté frontend pour la page de retour de
+// paiement (order-received/page.tsx, backoff 2s/4s/8s/16s/32s) : un
+// paiement normal se termine en général en quelques dizaines de secondes
+// à 1-2 minutes (le temps que le client compose son code sur son
+// téléphone), donc on ne cible que les commandes âgées d'AU MOINS 2 min
+// pour ne jamais interrompre un paiement légitimement encore en cours.
+// reverifyBeforeExpire (payment-svc /payments/order/{id}/reverify) est
+// idempotent — rappeler plusieurs fois sur la même commande tant qu'elle
+// reste 'pending_payment' est sans danger, aucun état supplémentaire à
+// suivre ici.
+func (s *server) reverifyStuckPaymentsLoop(log interface{ Info(string, ...any) }) {
+	tick := time.NewTicker(time.Minute)
+	for range tick.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		rows, err := s.db.Query(ctx, `
+			SELECT id FROM orders
+			WHERE status = 'pending_payment'
+			  AND created_at < now() - interval '2 minutes'
+			  AND created_at > now() - $1::interval`,
+			fmt.Sprintf("%d minutes", int(s.timeout.Minutes())))
+		if err != nil {
+			log.Info("reverifyStuckPayments: erreur lecture candidats", "err", err.Error())
+			cancel()
+			continue
+		}
+		var candidates []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err == nil {
+				candidates = append(candidates, id)
+			}
+		}
+		rows.Close()
+		for _, id := range candidates {
+			s.reverifyBeforeExpire(ctx, id, log)
 		}
 		cancel()
 	}
