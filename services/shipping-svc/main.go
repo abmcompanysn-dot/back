@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS zone_countries (
   zone    TEXT NOT NULL
 );
 
+-- Mapping pays -> zone CONTINENTALE (AF/EU/NA/SA/AS/OC), distinct de
+-- zone_countries (3 zones internes local/continent/international,
+-- utilisées par l'ancien calcul de /shipping-rates/quote basé UNIQUEMENT
+-- sur le pays du CLIENT). Copie exacte de COUNTRY_TO_ZONE
+-- (frontend/lib/shipping-utils.ts) — voir commentaire sur quote() pour le
+-- bug que cette table corrige (2026-09-04).
+CREATE TABLE IF NOT EXISTS country_zone (
+  country TEXT PRIMARY KEY,               -- ISO 3166-1 alpha-2 (majuscules)
+  zone    TEXT NOT NULL                   -- AF | EU | NA | SA | AS | OC
+);
+
 -- Tarif EXPRESS par zone (le standard reste base_rate_usd de shipping_zones).
 ALTER TABLE shipping_zones ADD COLUMN IF NOT EXISTS express_rate_usd DOUBLE PRECISION;
 
@@ -134,6 +145,41 @@ var frontendZoneOf = map[string]string{
 	"AF": "continent",
 	"EU": "international", "NA": "international", "SA": "international",
 	"AS": "international", "OC": "international",
+}
+
+// countryToContinentZone — copie EXACTE de COUNTRY_TO_ZONE
+// (frontend/lib/shipping-utils.ts), seedée dans country_zone. Nécessaire
+// pour que quote() puisse résoudre la zone du VENDEUR (pas seulement
+// celle du client) — voir commentaire sur quote().
+var countryToContinentZone = map[string]string{
+	// Afrique
+	"SN": "AF", "BJ": "AF", "CI": "AF", "TG": "AF", "CM": "AF", "NG": "AF", "GA": "AF", "CG": "AF", "CD": "AF",
+	"ML": "AF", "NE": "AF", "BF": "AF", "GN": "AF", "GW": "AF", "MR": "AF", "GM": "AF", "SL": "AF", "LR": "AF",
+	"CV": "AF", "ST": "AF", "GQ": "AF", "TD": "AF", "CF": "AF", "DZ": "AF", "MA": "AF", "TN": "AF", "LY": "AF",
+	"EG": "AF", "SD": "AF", "KE": "AF", "TZ": "AF", "UG": "AF", "RW": "AF", "BI": "AF", "ET": "AF", "DJ": "AF",
+	"SO": "AF", "MG": "AF", "SC": "AF", "MU": "AF", "KM": "AF", "ZA": "AF", "AO": "AF", "MZ": "AF", "ZM": "AF",
+	"ZW": "AF", "NA": "AF", "BW": "AF", "LS": "AF", "SZ": "AF", "MW": "AF", "SS": "AF", "ER": "AF", "YT": "AF", "RE": "AF",
+	// Europe
+	"FR": "EU", "BE": "EU", "DE": "EU", "NL": "EU", "IT": "EU", "ES": "EU", "GB": "EU", "PT": "EU", "CH": "EU",
+	"AT": "EU", "IE": "EU", "DK": "EU", "SE": "EU", "NO": "EU", "FI": "EU", "GR": "EU", "PL": "EU", "CZ": "EU",
+	"HU": "EU", "RO": "EU", "BG": "EU", "TR": "EU", "RU": "EU", "UA": "EU", "MC": "EU", "AD": "EU", "SM": "EU",
+	"VA": "EU", "LU": "EU", "EE": "EU", "LV": "EU", "LT": "EU", "SK": "EU", "SI": "EU", "CY": "EU", "MT": "EU",
+	"IS": "EU", "LI": "EU", "HR": "EU", "BA": "EU", "ME": "EU", "MK": "EU", "AL": "EU", "RS": "EU", "BY": "EU", "MD": "EU",
+	// Amérique du Nord
+	"CA": "NA", "US": "NA", "MX": "NA", "GT": "NA", "CR": "NA", "CU": "NA", "PR": "NA", "PA": "NA", "NI": "NA",
+	"HN": "NA", "SV": "NA", "BZ": "NA", "BS": "NA", "JM": "NA", "HT": "NA", "DO": "NA", "KN": "NA", "AG": "NA",
+	"DM": "NA", "LC": "NA", "VC": "NA", "GD": "NA", "BB": "NA", "TT": "NA",
+	// Amérique du Sud
+	"BR": "SA", "AR": "SA", "CL": "SA", "CO": "SA", "PE": "SA", "VE": "SA", "EC": "SA", "BO": "SA", "PY": "SA",
+	"UY": "SA", "GY": "SA", "SR": "SA", "FK": "SA",
+	// Asie & Moyen-Orient
+	"CN": "AS", "JP": "AS", "IN": "AS", "KR": "AS", "AE": "AS", "SA": "AS", "ID": "AS", "MY": "AS", "TH": "AS",
+	"VN": "AS", "PH": "AS", "IL": "AS", "PK": "AS", "BD": "AS", "HK": "AS", "TW": "AS", "SG": "AS", "KZ": "AS",
+	"UZ": "AS", "TM": "AS", "KG": "AS", "TJ": "AS", "AF": "AS", "IR": "AS", "IQ": "AS", "SY": "AS", "JO": "AS",
+	"LB": "AS", "PS": "AS", "YE": "AS", "OM": "AS", "QA": "AS", "KW": "AS", "BH": "AS", "GE": "AS", "AM": "AS", "AZ": "AS",
+	// Océanie
+	"AU": "OC", "NZ": "OC", "FJ": "OC", "PG": "OC", "SB": "OC", "VU": "OC", "WS": "OC", "TO": "OC", "KI": "OC",
+	"TV": "OC", "NR": "OC", "MH": "OC", "FM": "OC", "PW": "OC",
 }
 
 // defaultShippingConfig — valeurs initiales, EXACTEMENT celles qui étaient
@@ -236,6 +282,10 @@ func main() {
 		log.Error("seed des zones impossible", "err", err)
 		return
 	}
+	if err := s.seedCountryZones(ctx); err != nil {
+		log.Error("seed du mapping pays->zone continentale impossible", "err", err)
+		return
+	}
 	if err := s.seedExchangeRates(ctx); err != nil {
 		log.Error("seed des taux de change impossible", "err", err)
 		return
@@ -297,6 +347,23 @@ func (s *server) seed(ctx context.Context) error {
 				ON CONFLICT (country) DO UPDATE SET zone = EXCLUDED.zone`, c, z.Zone); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// seedCountryZones — remplit country_zone depuis countryToContinentZone.
+// DO UPDATE (pas DO NOTHING comme seed()) : ce mapping n'est éditable
+// nulle part en back-office, contrairement à zone_countries — la seule
+// façon de le corriger est de modifier countryToContinentZone dans le
+// code puis redéployer, donc chaque redémarrage doit repropager la
+// dernière version plutôt que rester figé sur le premier seed.
+func (s *server) seedCountryZones(ctx context.Context) error {
+	for country, zone := range countryToContinentZone {
+		if _, err := s.db.Exec(ctx, `
+			INSERT INTO country_zone (country, zone) VALUES ($1,$2)
+			ON CONFLICT (country) DO UPDATE SET zone = EXCLUDED.zone`, country, zone); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -526,13 +593,49 @@ func (s *server) listRates(w http.ResponseWriter, r *http.Request) {
 
 // quote — calcul EXPLICITE et détaillé : base + n × per_item.
 // Pays inconnu → erreur claire (pas de tarif par défaut silencieux).
+// quote — GET /shipping-rates/quote?country=X&items=N[&vendor_country=Y&method=standard|express].
+//
+// BUG CORRIGÉ le 2026-09-04 (test réel du fondateur, commande #498,
+// vendeur "attiale" en Côte d'Ivoire, client au Sénégal) : cette route ne
+// regardait QUE `country` (la destination CLIENT), jamais le pays du
+// VENDEUR — un calcul basé sur seulement 3 zones agrégées internes
+// (local/continent/international, table shipping_zones/zone_countries),
+// une version substituée par la suite par le système à 6 zones
+// (AF/EU/NA/SA/AS/OC, table shipping_zone_rates/shipping_config) mais
+// jamais branchée ici. Résultat concret : un vendeur ivoirien livrant un
+// client sénégalais facturait le tarif "local" (le pays destination SN
+// est zone_countries.local) au lieu du vrai tarif international/Afrique
+// — le panier (frontend, calcShipping()) affichait le bon prix (13 592
+// XOF) mais la commande réellement créée facturait 2 832 XOF. Le
+// fondateur perdait la différence sur chaque commande vendeur↔client de
+// pays différents.
+//
+// Avec vendor_country fourni : reproduit EXACTEMENT calcShipping()
+// (frontend/lib/shipping-utils.ts) au lieu de recalculer une logique
+// différente — même pays vendeur/client → tarif local ; vendeur ET
+// client en Afrique (zones AF/AF) → tarif zone_africa ; sinon → tarif de
+// la zone CLIENT (standard ou express selon &method=). Sans
+// vendor_country : comportement historique inchangé (3 zones agrégées,
+// destination seule) — aucun appelant existant cassé par ce changement.
 func (s *server) quote(w http.ResponseWriter, r *http.Request) {
 	country := strings.ToUpper(r.URL.Query().Get("country"))
+	vendorCountry := strings.ToUpper(r.URL.Query().Get("vendor_country"))
 	items := r.URL.Query().Get("items")
 	if country == "" {
 		kit.Fail(w, 400, "missing_country", "paramètre country obligatoire (ISO alpha-2)")
 		return
 	}
+	n := int64(1)
+	fmt.Sscanf(items, "%d", &n)
+	if n < 1 {
+		n = 1
+	}
+
+	if vendorCountry != "" {
+		s.quoteByVendorZone(w, r, country, vendorCountry, n)
+		return
+	}
+
 	var zone string
 	err := s.db.QueryRow(r.Context(), `SELECT zone FROM zone_countries WHERE country = $1`, country).Scan(&zone)
 	if err != nil {
@@ -546,16 +649,96 @@ func (s *server) quote(w http.ResponseWriter, r *http.Request) {
 		SELECT base_rate_usd, per_item_usd, min_days, max_days FROM shipping_zones WHERE zone = $1`, zone,
 	).Scan(&base, &perItem, &minD, &maxD)
 
-	n := int64(1)
-	fmt.Sscanf(items, "%d", &n)
-	if n < 1 {
-		n = 1
-	}
 	total := base + float64(n)*perItem
 	kit.JSON(w, 200, map[string]any{
 		"zone": zone, "total_usd": total, "min_days": minD, "max_days": maxD,
 		"breakdown": fmt.Sprintf("base %.2f $ + %d article(s) × %.2f $", base, n, perItem),
 	})
+}
+
+// quoteByVendorZone — reproduit calcShipping() (frontend) : résout la
+// zone continentale (AF/EU/NA/SA/AS/OC) du vendeur ET du client via
+// country_zone, applique local/zone_africa/zone-du-client dans cet
+// ordre, multiplie par la quantité d'articles (comme le frontend fait
+// `calcShipping(...) * item.quantity` par ligne de panier — ici un seul
+// vendeur donc un seul tarif × la quantité totale de ses articles).
+func (s *server) quoteByVendorZone(w http.ResponseWriter, r *http.Request, clientCountry, vendorCountry string, n int64) {
+	ctx := r.Context()
+
+	// Même pays vendeur/client → tarif local (shipping_config.local_rate_usd).
+	if vendorCountry == clientCountry {
+		local := s.getShippingConfigValue(ctx, "local_rate_usd", defaultShippingConfig["local_rate_usd"])
+		total := local * float64(n)
+		kit.JSON(w, 200, map[string]any{
+			"zone": "local", "total_usd": total,
+			"breakdown": fmt.Sprintf("local %.2f $ × %d article(s)", local, n),
+		})
+		return
+	}
+
+	vendorZone := s.lookupContinentZone(ctx, vendorCountry)
+	clientZone := s.lookupContinentZone(ctx, clientCountry)
+
+	// Vendeur ET client en Afrique (mais pays différents, sinon déjà
+	// tranché par le cas "local" ci-dessus) → tarif zone_africa.
+	if vendorZone == "AF" && clientZone == "AF" {
+		africa := s.getShippingConfigValue(ctx, "zone_africa_rate_usd", defaultShippingConfig["zone_africa_rate_usd"])
+		total := africa * float64(n)
+		kit.JSON(w, 200, map[string]any{
+			"zone": "AF", "total_usd": total,
+			"breakdown": fmt.Sprintf("zone Afrique %.2f $ × %d article(s)", africa, n),
+		})
+		return
+	}
+
+	// Sinon : tarif standard de la zone du CLIENT (jamais celle du
+	// vendeur — cohérent avec calcShipping(), c'est la distance jusqu'au
+	// client qui détermine le tarif une fois hors zone Afrique↔Afrique).
+	method := r.URL.Query().Get("method")
+	std, exp := defaultStandardRates[clientZone], defaultExpressRates[clientZone]
+	if std == 0 && exp == 0 {
+		// Zone client inconnue de la grille (pays absent de country_zone)
+		// — zone AF en repli plutôt qu'un échec, cohérent avec le && AF
+		// ci-dessus qui reste le cas le plus fréquent pour MIAD Market.
+		std, exp = defaultStandardRates["AF"], defaultExpressRates["AF"]
+		clientZone = "AF"
+	}
+	var std2, exp2 float64
+	if err := s.db.QueryRow(ctx,
+		`SELECT standard_usd, express_usd FROM shipping_zone_rates WHERE zone = $1`, clientZone,
+	).Scan(&std2, &exp2); err == nil {
+		std, exp = std2, exp2
+	}
+	rate := std
+	if method == "express" {
+		rate = exp
+	}
+	total := rate * float64(n)
+	kit.JSON(w, 200, map[string]any{
+		"zone": clientZone, "total_usd": total,
+		"breakdown": fmt.Sprintf("zone %s (%s) %.2f $ × %d article(s)", clientZone, method, rate, n),
+	})
+}
+
+// lookupContinentZone — résout la zone continentale d'un pays via
+// country_zone, repli "AF" (zone la plus fréquente pour MIAD Market) si
+// le pays est absent — jamais un échec bloquant sur un pays non couvert.
+func (s *server) lookupContinentZone(ctx context.Context, country string) string {
+	var zone string
+	if err := s.db.QueryRow(ctx, `SELECT zone FROM country_zone WHERE country = $1`, country).Scan(&zone); err != nil {
+		return "AF"
+	}
+	return zone
+}
+
+// getShippingConfigValue — lit une clé scalaire de shipping_config, repli
+// sur la valeur passée (defaultShippingConfig) si absente.
+func (s *server) getShippingConfigValue(ctx context.Context, key string, fallback float64) float64 {
+	var v float64
+	if err := s.db.QueryRow(ctx, `SELECT value FROM shipping_config WHERE key = $1`, key).Scan(&v); err != nil {
+		return fallback
+	}
+	return v
 }
 
 // ---------- Taux de change (source unique) ----------

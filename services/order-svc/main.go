@@ -325,6 +325,12 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 		// Commission figée au moment de la vente (voir doc-comment de line) —
 		// un seul appel vendor-svc par boutique, pas par ligne.
 		rate := s.resolveCommissionRate(ctx, vendorID)
+		// Pays du vendeur — nécessaire pour facturer le VRAI tarif de
+		// livraison (zone vendeur↔client), pas seulement celui basé sur
+		// la destination client (bug corrigé le 2026-09-04, voir
+		// quoteShippingUSD). Même pattern d'appel que resolveCommissionRate
+		// ci-dessus (un appel vendor-svc par boutique).
+		vendorCountry := s.resolveVendorCountry(ctx, vendorID)
 		var subtotal, commissionTotal float64
 		itemCount := 0
 		for i := range lines {
@@ -336,7 +342,7 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 			lines[i].NetUSD = round2(lineTotal - lines[i].CommissionUSD)
 			commissionTotal += lines[i].CommissionUSD
 		}
-		shippingUSD := s.quoteShippingUSD(ctx, destCountry, itemCount)
+		shippingUSD := s.quoteShippingUSD(ctx, destCountry, vendorCountry, itemCount)
 		total := subtotal + shippingUSD
 
 		linesJSON, _ := json.Marshal(lines)
@@ -929,11 +935,20 @@ func destCountryFrom(shippingAddress json.RawMessage) string {
 // pays est inconnu ou shipping-svc injoignable, renvoie 0 plutôt que de
 // faire échouer toute la commande — les frais restent ajustables après
 // coup (contrairement à un prix produit, qui ne doit jamais dériver).
-func (s *server) quoteShippingUSD(ctx context.Context, country string, itemCount int) float64 {
+// quoteShippingUSD — country = destination CLIENT, vendorCountry = pays
+// du vendeur de cette ligne de commande (résolu par resolveVendorCountry
+// juste avant l'appel). vendor_country transmis en query seulement s'il
+// est connu — shipping-svc retombe alors sur son ancien comportement
+// (destination seule) si vendorCountry est vide, cohérent avant/après ce
+// correctif pour un vendeur sans pays renseigné.
+func (s *server) quoteShippingUSD(ctx context.Context, country, vendorCountry string, itemCount int) float64 {
 	if country == "" {
 		return 0
 	}
 	url := fmt.Sprintf("%s/shipping-rates/quote?country=%s&items=%d", s.shippingURL, country, itemCount)
+	if vendorCountry != "" {
+		url += "&vendor_country=" + vendorCountry
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0
@@ -1254,6 +1269,36 @@ func (s *server) resolveCommissionRate(ctx context.Context, vendorID int64) floa
 		return fallback
 	}
 	return *vendor.CommissionRate
+}
+
+// resolveVendorCountry — GET /vendor/{id} (vendor-svc), lit
+// address.country (vendorToDokanShape). Chaîne vide en repli (jamais
+// d'erreur bloquante) — quoteShippingUSD retombe alors sur l'ancien
+// calcul basé uniquement sur la destination client, comportement
+// identique à avant le correctif du 2026-09-04 si le vendeur n'a pas de
+// pays renseigné ou si vendor-svc est injoignable.
+func (s *server) resolveVendorCountry(ctx context.Context, vendorID int64) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendor/%d", s.vendorURL, vendorID), nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var vendor struct {
+		Address struct {
+			Country string `json:"country"`
+		} `json:"address"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&vendor); err != nil {
+		return ""
+	}
+	return vendor.Address.Country
 }
 
 func (s *server) defaultCommissionRate() float64 {
