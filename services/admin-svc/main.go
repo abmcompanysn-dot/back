@@ -1698,14 +1698,31 @@ func (s *server) securityBlocks(w http.ResponseWriter, r *http.Request) {
 	kit.JSON(w, 200, map[string]any{"items": rows})
 }
 
-// securityUnblock — POST /admin/api/security/unblock {ip}. Déblocage
-// manuel depuis la console.
+// securityUnblock — POST /admin/api/security/unblock {ip, totp_code}.
+// Déblocage manuel depuis la console. Exige désormais le code 2FA de
+// l'admin (celui déjà utilisé pour se connecter) — ajouté le 2026-09-04,
+// demande explicite du fondateur : avant ce correctif, un simple
+// window.confirm() navigateur suffisait, donc un JWT admin volé/laissé
+// ouvert (session déjà connectée) permettait de rouvrir l'accès à une IP
+// bloquée par le guard anti-fraude sans aucune re-vérification
+// d'identité. Le code est vérifié via auth-svc (source de vérité du
+// secret TOTP, jamais dupliqué ici) — reverify2FA n'émet pas de nouveau
+// JWT ni ne modifie totp_enabled, juste un oui/non.
 func (s *server) securityUnblock(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		IP string `json:"ip"`
+		IP       string `json:"ip"`
+		TOTPCode string `json:"totp_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.IP) == "" {
 		kit.Fail(w, 400, "invalid_body", "champ 'ip' obligatoire")
+		return
+	}
+	if strings.TrimSpace(body.TOTPCode) == "" {
+		kit.Fail(w, 400, "totp_code_required", "code de vérification (2FA) requis pour débloquer une IP")
+		return
+	}
+	if err := s.verifyAdminTOTP(r, body.TOTPCode); err != nil {
+		kit.Fail(w, 401, "invalid_totp_code", err.Error())
 		return
 	}
 	if err := s.guard.Unblock(r.Context(), strings.TrimSpace(body.IP)); err != nil {
@@ -1713,6 +1730,42 @@ func (s *server) securityUnblock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kit.JSON(w, 200, map[string]any{"ok": true})
+}
+
+// verifyAdminTOTP — relaie le code 2FA de l'admin connecté (JWT propagé
+// via le header Authorization déjà présent sur la requête entrante) vers
+// auth-svc POST /auth/admin/2fa/reverify. N'émet aucune session, ne
+// modifie aucun état — juste une confirmation d'identité avant une
+// action sensible (voir securityUnblock).
+func (s *server) verifyAdminTOTP(r *http.Request, code string) error {
+	payload, _ := json.Marshal(map[string]string{"code": code})
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, s.authURL+"/auth/admin/2fa/reverify", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("auth-svc injoignable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var errBody struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		_ = json.Unmarshal(raw, &errBody)
+		if errBody.Error.Message != "" {
+			return fmt.Errorf("%s", errBody.Error.Message)
+		}
+		return fmt.Errorf("code incorrect")
+	}
+	return nil
 }
 
 // securityBlockManual — POST /admin/api/security/block {ip, minutes, reason}.

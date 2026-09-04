@@ -89,11 +89,22 @@ export function SecurityMonitor() {
     return () => clearInterval(t)
   }, [load])
 
+  // Débloquer une IP exige désormais le code 2FA de l'admin (celui déjà
+  // utilisé pour se connecter, voir Google Authenticator/Authy) — ajouté
+  // le 2026-09-04, demande explicite du fondateur : un simple
+  // window.confirm() ne re-vérifiait pas l'identité de la personne
+  // derrière le clavier, un JWT admin volé ou une session laissée
+  // ouverte suffisait à rouvrir l'accès à une IP bloquée par le guard
+  // anti-fraude. window.prompt() plutôt qu'une modale dédiée — cohérent
+  // avec le style déjà en place ici (window.confirm), pas de nouveau
+  // composant pour une action ponctuelle.
   async function unblock(ip: string) {
     if (!window.confirm(`Débloquer ${ip} ? Ses requêtes seront de nouveau acceptées immédiatement.`)) return
+    const code = window.prompt('Confirmez avec votre code de vérification (2FA) à 6 chiffres :')
+    if (!code || !code.trim()) return
     setBusyIP(ip)
     try {
-      await api.post('/admin/api/security/unblock', { ip })
+      await api.post('/admin/api/security/unblock', { ip, totp_code: code.trim() })
       await load()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'échec du déblocage')

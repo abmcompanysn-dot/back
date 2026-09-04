@@ -244,6 +244,7 @@ func main() {
 		mux.HandleFunc("POST /auth/admin/2fa/setup", s.setup2FA) // exige un JWT role=admin déjà valide (post-login sans 2FA, ou 2FA déjà active pour la remplacer)
 		mux.HandleFunc("POST /auth/admin/2fa/verify", s.verify2FASetup)
 		mux.HandleFunc("POST /auth/admin/2fa/disable", s.disable2FA)
+		mux.HandleFunc("POST /auth/admin/2fa/reverify", s.reverify2FA)
 		mux.HandleFunc("GET /customers", s.listCustomers)                                // role admin exigé
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)                              // role admin exigé
 		mux.HandleFunc("PATCH /customer/{id}/address", s.updateCustomerAddress)          // secret interne exigé
@@ -690,6 +691,50 @@ func (s *server) disable2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kit.JSON(w, 200, map[string]any{"totp_enabled": false})
+}
+
+// reverify2FA — POST /auth/admin/2fa/reverify {code}. Re-confirme
+// l'identité de l'admin déjà connecté (JWT valide) via son code 2FA,
+// SANS toucher à totp_enabled/totp_secret ni émettre de nouveau JWT —
+// juste un oui/non pour qu'un service appelant (ex. admin-svc avant un
+// déblocage IP) sache que la bonne personne a bien retapé son code
+// avant une action sensible. Ajouté le 2026-09-04 : le déblocage d'IP
+// (services/admin-svc, POST /admin/api/security/unblock) ne demandait
+// qu'une simple confirmation navigateur (window.confirm) — un JWT admin
+// volé/laissé ouvert suffisait à rouvrir l'accès à une IP bloquée par
+// le guard anti-fraude, sans aucune re-vérification d'identité.
+func (s *server) reverify2FA(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil || claims["role"] != "admin" {
+		kit.Fail(w, 403, "admin_required", "JWT admin valide requis")
+		return
+	}
+	email, _ := claims["email"].(string)
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	var secret string
+	var enabled bool
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT totp_secret, totp_enabled FROM admins WHERE lower(email) = lower($1)", email,
+	).Scan(&secret, &enabled); err != nil {
+		kit.Fail(w, 500, "db_error", err.Error())
+		return
+	}
+	if !enabled {
+		kit.Fail(w, 409, "totp_not_enabled", "la 2FA n'est pas active sur ce compte")
+		return
+	}
+	if !verifyTOTP(secret, body.Code) {
+		kit.NoteFail(r, "totp_reverify_failed", email)
+		kit.Fail(w, 401, "invalid_totp_code", "code incorrect")
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"verified": true})
 }
 
 // randomBase32Secret — secret TOTP aléatoire encodé en base32 sans
