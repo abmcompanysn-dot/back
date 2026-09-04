@@ -86,7 +86,25 @@ done
 docker builder prune -f >/dev/null 2>&1 || true
 docker image prune -f >/dev/null 2>&1 || true
 
-# ---------- 7. Attente + vérification EXPLICITE ----------
+# ---------- 7. Redémarrage explicite + vérification ----------
+# BUG CORRIGÉ le 2026-09-04 : imagePullPolicy: Never + tag :latest
+# immuable (voir deploy/k8s/20-services.yaml) fait que kubectl ne détecte
+# JAMAIS de changement de spec après un simple `docker save | ctr import`
+# — sans `rollout restart` explicite, chaque pod continue de tourner sur
+# l'ANCIENNE image en mémoire, même si l'étape 6 ci-dessus vient d'en
+# importer une toute nouvelle dans containerd. `rollout status` réussit
+# quand même ("successfully rolled out") puisqu'il n'attend qu'un état
+# stable — jamais un vrai changement — donc ce script donnait l'illusion
+# d'un déploiement réussi sans que le nouveau code tourne réellement.
+# Repéré après 3 exécutions silencieusement sans effet le même soir (le
+# fondateur avait poussé 3 correctifs backend, aucun n'était visible en
+# prod malgré des logs "réussis"). scripts/deploy-service.sh (déploiement
+# ciblé, un seul service) faisait déjà ce restart — jamais reporté ici.
+say "Redémarrage des déploiements (force la prise en compte des nouvelles images)…"
+for s in "${SERVICES[@]}"; do
+  kubectl -n miad rollout restart "deploy/$s"
+done
+
 say "Attente des rollouts…"
 for s in "${SERVICES[@]}"; do
   kubectl -n miad rollout status "deploy/$s" --timeout=180s
