@@ -39,13 +39,24 @@ interface PurchasedItem {
  * jour de façon fiable par le webhook/la vérification serveur-à-serveur — pas
  * besoin de revérifier nous-mêmes auprès de PayDunya/Stripe depuis le front.
  */
-type ConfirmState = 'loading' | 'completed' | 'pending' | 'failed'
+// 'timeout' — ajouté le 2026-09-03 : avant ce correctif, après les 5
+// tentatives de re-vérification (~1 min), une commande encore
+// 'pending_payment' côté order-svc (ex. webhook PawaPay/PayDunya jamais
+// arrivé) laissait le client bloqué indéfiniment sur l'écran "en attente"
+// — aucun bouton, aucune explication, la page ne ressortait jamais de ce
+// cycle pending→retry. Signalé par le fondateur : "il n'a que en attente
+// et succès, il n'a pas de vrai résultat". Distinct de 'failed' (qui
+// suppose un rejet confirmé) : ici on ne SAIT PAS si ça a échoué ou si la
+// confirmation est juste lente — le message et l'action doivent rester
+// honnêtes sur cette incertitude plutôt que d'annoncer un échec certain.
+type ConfirmState = 'loading' | 'completed' | 'pending' | 'failed' | 'timeout'
 type PaymentMethod = 'paydunya' | 'stripe' | 'pawapay'
 
 const BANNER: Record<Exclude<ConfirmState, 'loading'>, { bg: string; text: string }> = {
   completed: { bg: 'bg-green-600', text: "Paiement réussi ! Votre commande sera traitée sous 24h." },
   pending: { bg: 'bg-orange-500', text: 'Paiement en cours de validation.' },
   failed: { bg: 'bg-red-600', text: "Paiement non confirmé pour cette commande." },
+  timeout: { bg: 'bg-orange-600', text: "La confirmation prend plus de temps que prévu." },
 }
 
 function OrderReceivedContent() {
@@ -132,9 +143,18 @@ function OrderReceivedContent() {
               window.dispatchEvent(new Event('cart-updated'))
             }
           } else if (data?.status === 'pending') {
-            setState('pending')
             if (attempt < RETRY_DELAYS_MS.length) {
+              setState('pending')
               setTimeout(() => { if (!cancelled) check(attempt + 1) }, RETRY_DELAYS_MS[attempt])
+            } else {
+              // Dernière tentative épuisée (~1 min) toujours 'pending' —
+              // avant, la page restait figée ici indéfiniment (aucun
+              // setTimeout suivant programmé, mais aussi aucun changement
+              // d'état pour en sortir). 'timeout' informe honnêtement le
+              // client que la confirmation traîne, sans affirmer un échec
+              // qu'on ne peut pas confirmer.
+              trackEvent('payment_failed', { paymentFailureReason: 'confirm_timeout', metadata: { paymentMethod: method } })
+              setState('timeout')
             }
           } else {
             trackEvent('payment_failed', { paymentFailureReason: 'confirm_endpoint_rejected', metadata: { paymentMethod: method } })
@@ -165,6 +185,12 @@ function OrderReceivedContent() {
   const isCompleted = state === 'completed'
   const isPending = state === 'pending'
   const isFailed = state === 'failed'
+  const isTimeout = state === 'timeout'
+  // Pour l'icône/les boutons : timeout se comporte comme failed (le client
+  // doit pouvoir agir — réessayer ou contacter le support), seul le texte
+  // affiché diffère (voir plus bas) pour ne jamais annoncer un échec
+  // qu'on ne peut pas confirmer.
+  const needsAction = isFailed || isTimeout
   const banner = BANNER[state]
 
   return (
@@ -178,16 +204,17 @@ function OrderReceivedContent() {
 
         <div className="text-center mb-12">
           <div className="mb-8 relative inline-block">
-            <div className={`absolute inset-0 ${isCompleted ? 'bg-green-400' : isPending ? 'bg-orange-400' : 'bg-red-400'} rounded-full blur-3xl opacity-20 animate-pulse`}></div>
-            <div className={`w-24 h-24 ${isCompleted ? 'bg-green-500' : isPending ? 'bg-orange-500' : 'bg-red-500'} rounded-full flex items-center justify-center relative z-10 shadow-2xl scale-110`}>
-              {isCompleted ? <CheckCircle size={48} className="text-white" /> : isPending ? <Clock size={48} className="text-white" /> : <XCircle size={48} className="text-white" />}
+            <div className={`absolute inset-0 ${isCompleted ? 'bg-green-400' : isPending ? 'bg-orange-400' : isTimeout ? 'bg-orange-400' : 'bg-red-400'} rounded-full blur-3xl opacity-20 animate-pulse`}></div>
+            <div className={`w-24 h-24 ${isCompleted ? 'bg-green-500' : isPending ? 'bg-orange-500' : isTimeout ? 'bg-orange-500' : 'bg-red-500'} rounded-full flex items-center justify-center relative z-10 shadow-2xl scale-110`}>
+              {isCompleted ? <CheckCircle size={48} className="text-white" /> : (isPending || isTimeout) ? <Clock size={48} className="text-white" /> : <XCircle size={48} className="text-white" />}
             </div>
           </div>
           <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tighter">
-            {isCompleted ? 'Merci pour votre achat !' : isPending ? 'Paiement en attente' : 'Paiement non confirmé'}
+            {isCompleted ? 'Merci pour votre achat !' : isPending ? 'Paiement en attente' : isTimeout ? 'La confirmation prend du retard' : 'Paiement non confirmé'}
           </h1>
           <p className="text-muted-foreground text-lg md:text-xl max-w-2xl mx-auto leading-relaxed">
             {isCompleted && `Votre commande #${orderId} est confirmée. Nous préparons vos articles pour l'expédition.`}
+            {isTimeout && `La confirmation de votre commande #${orderId} prend plus de temps que prévu. Si le montant a été débité, votre commande sera automatiquement mise à jour dès réception — sinon, réessayez ou contactez le support.`}
             {isPending && (method === 'stripe'
               ? `Votre commande #${orderId} a été enregistrée. La vérification de votre carte est encore en cours — vous recevrez un email de confirmation sous peu.`
               : `Votre commande #${orderId} a été enregistrée. La transaction Mobile Money est en cours de finalisation — vous recevrez un email de confirmation sous peu.`)}
@@ -281,20 +308,33 @@ function OrderReceivedContent() {
         )}
 
         <div className="flex flex-col sm:flex-row gap-4 w-full max-w-md mb-16">
-          {isFailed ? (
+          {needsAction ? (
             <>
-              <Button
-                onClick={() => window.location.href = '/?v=cart'}
-                className="flex-1 h-16 rounded-2xl font-black bg-accent text-white gap-3 shadow-xl shadow-accent/20 hover:scale-[1.03] transition-all"
-              >
-                <RefreshCw size={20} /> Réessayer le paiement
-              </Button>
+              {isTimeout ? (
+                // "Mes Commandes" en premier pour un timeout — le paiement a
+                // peut-être réussi et juste pas encore confirmé ; pousser vers
+                // "Réessayer" en premier risquerait un double paiement. Le
+                // client peut toujours réessayer via le panier s'il le faut.
+                <Button
+                  onClick={() => window.location.href = '/?v=clientDashboard'}
+                  className="flex-1 h-16 rounded-2xl font-black bg-accent text-white gap-3 shadow-xl shadow-accent/20 hover:scale-[1.03] transition-all"
+                >
+                  Voir mes commandes <ChevronRight size={20} />
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => window.location.href = '/?v=cart'}
+                  className="flex-1 h-16 rounded-2xl font-black bg-accent text-white gap-3 shadow-xl shadow-accent/20 hover:scale-[1.03] transition-all"
+                >
+                  <RefreshCw size={20} /> Réessayer le paiement
+                </Button>
+              )}
               <Button
                 variant="outline"
-                onClick={() => window.location.href = '/?v=clientDashboard'}
+                onClick={() => window.location.href = isTimeout ? '/?v=cart' : '/?v=clientDashboard'}
                 className="flex-1 h-16 rounded-2xl font-black border-2 gap-3 hover:bg-muted group"
               >
-                Mes Commandes <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                {isTimeout ? <><RefreshCw size={20} /> Réessayer le paiement</> : <>Mes Commandes <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" /></>}
               </Button>
             </>
           ) : (
@@ -316,7 +356,7 @@ function OrderReceivedContent() {
           )}
         </div>
 
-        {!isFailed && <RecommendedProducts excludeIds={items.map((i) => i.productId)} />}
+        {!needsAction && <RecommendedProducts excludeIds={items.map((i) => i.productId)} />}
       </main>
 
       {/* Footer de réassurance / aide, style AliExpress */}
