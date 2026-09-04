@@ -355,28 +355,42 @@ export async function fetchProductsByCategorySlug(categorySlug: string, limit = 
 // (CategoryRow.tsx). Résout d'abord le slug en id de terme (catalog-svc
 // GET /products attend category_id, pas le slug — même piège que
 // app/api/products/route.ts, cf. CLAUDE.md frontend), puis pagine.
+//
+// categoryId optionnel — ajouté le 2026-09-04, signalé par le fondateur :
+// "Parcourir par catégorie" ralentissait l'accueil. Cause : le seul
+// appelant réel (CategorySections.tsx) connaît déjà l'id de chaque
+// catégorie (sorti de fetchInitialCategories() juste avant), mais
+// rappelait quand même GET /categories ici pour re-résoudre le même
+// slug — jusqu'à 8 requêtes réseau identiques et redondantes en
+// parallèle (une par catégorie de la rangée), pour un résultat qu'on
+// avait déjà. Avec categoryId fourni, la résolution slug->id est sautée
+// entièrement ; sans lui, comportement inchangé (repli par slug).
 export async function fetchCategoryRow(
   categorySlug: string,
   perPage = 6,
-  lang: 'fr' | 'en' = 'fr'
+  lang: 'fr' | 'en' = 'fr',
+  categoryId?: string | number
 ): Promise<{ products: any[]; totalPages: number }> {
   try {
-    // slug -> id
-    const catRes = await fetch(`${CATALOG_SVC_URL}/categories?lang=${lang}`, { next: { revalidate: 3600 } })
-    if (!catRes.ok) return { products: [], totalPages: 0 }
-    const catData = await catRes.json()
-    // Slugs en base suffixés par langue (`-fr`/`-en`) — cf. catalog-svc
-    // listCategories. Match tolérant : exact, slug+`-<lang>`, ou slug de base.
-    const wanted = categorySlug.replace(/-(fr|en)$/, '')
-    const cats = catData.items || catData.categories || []
-    const match =
-      cats.find((c: any) => c.slug === categorySlug) ||
-      cats.find((c: any) => c.slug === `${wanted}-${lang}`) ||
-      cats.find((c: any) => String(c.slug || '').replace(/-(fr|en)$/, '') === wanted)
-    if (!match?.id) return { products: [], totalPages: 0 }
+    let id = categoryId
+    if (!id) {
+      const catRes = await fetch(`${CATALOG_SVC_URL}/categories?lang=${lang}`, { next: { revalidate: 3600 } })
+      if (!catRes.ok) return { products: [], totalPages: 0 }
+      const catData = await catRes.json()
+      // Slugs en base suffixés par langue (`-fr`/`-en`) — cf. catalog-svc
+      // listCategories. Match tolérant : exact, slug+`-<lang>`, ou slug de base.
+      const wanted = categorySlug.replace(/-(fr|en)$/, '')
+      const cats = catData.items || catData.categories || []
+      const match =
+        cats.find((c: any) => c.slug === categorySlug) ||
+        cats.find((c: any) => c.slug === `${wanted}-${lang}`) ||
+        cats.find((c: any) => String(c.slug || '').replace(/-(fr|en)$/, '') === wanted)
+      if (!match?.id) return { products: [], totalPages: 0 }
+      id = match.id
+    }
 
     const res = await fetch(
-      `${CATALOG_SVC_URL}/products?category_id=${match.id}&page=1&page_size=${perPage}&lang=${lang}`,
+      `${CATALOG_SVC_URL}/products?category_id=${id}&page=1&page_size=${perPage}&lang=${lang}`,
       { next: { revalidate: 900, tags: ['products', `category-${categorySlug}`] } }
     )
     if (!res.ok) return { products: [], totalPages: 0 }

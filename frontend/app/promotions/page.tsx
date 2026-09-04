@@ -9,6 +9,7 @@ import { PromoHeroCarousel } from '@/components/miad/PromoHeroCarousel'
 import { PromoCountrySections } from '@/components/miad/server/PromoCountrySections'
 import { PromoBrandDayBanner } from '@/components/miad/server/PromoBrandDayBanner'
 import { CouponsSection } from '@/components/miad/CouponsSection'
+import { CategorySections } from '@/components/miad/server/CategorySections'
 
 export const runtime = 'edge'
 export const revalidate = 300
@@ -150,6 +151,15 @@ export default async function PromotionPage() {
           <PromoCountrySections />
         </Suspense>
       </div>
+
+      {/* "Parcourir par catégorie" — déplacée ici depuis l'accueil le
+          2026-09-04 (signalé par le fondateur : ralentissait l'accueil).
+          En dehors du conteneur max-w-6xl ci-dessus : ce composant gère
+          déjà sa propre largeur pleine page (container mx-auto), comme
+          sur l'accueil d'origine. */}
+      <Suspense fallback={null}>
+        <CategorySections />
+      </Suspense>
     </div>
   )
 }

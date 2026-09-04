@@ -35,7 +35,11 @@ export async function CategorySections({ lang = 'fr' }: { lang?: 'fr' | 'en' } =
 
   const rows = await Promise.all(
     main.map(async (c: any) => {
-      const { products, totalPages } = await fetchCategoryRow(c.slug, PER_PAGE, lang)
+      // c.id déjà connu (sorti de fetchInitialCategories() ci-dessus) —
+      // transmis directement pour éviter que fetchCategoryRow ne
+      // re-résolve le même slug via un appel GET /categories redondant
+      // (voir commentaire sur fetchCategoryRow, correctif du 2026-09-04).
+      const { products, totalPages } = await fetchCategoryRow(c.slug, PER_PAGE, lang, c.id)
       return { cat: c, products, totalPages }
     })
   )
