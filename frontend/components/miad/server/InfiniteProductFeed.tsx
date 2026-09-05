@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Loader2, PackageSearch } from 'lucide-react'
 import { type WooProduct } from '@/lib/woocommerce'
-import { LinkProductCard } from '../LinkProductCard'
+import { LinkProductCard, loadedImagesCache } from '../LinkProductCard'
+import { getThumbnailUrl } from '@/lib/image-utils'
 
 const PER_PAGE = 20
 
@@ -44,6 +45,53 @@ function declusterNewBatch(prevTail: WooProduct[], newBatch: WooProduct[]): WooP
     history.push(out[i])
   }
   return out
+}
+
+// currentColumnCount / preloadRow — ajoutés le 2026-09-05, demande du
+// fondateur : les cartes apparaissaient puis leurs images popaient une par
+// une au fur et à mesure du chargement ("un truc pas propre") — il veut
+// qu'une rangée entière (celle réellement visible à l'écran, pas juste un
+// lot arbitraire de 20) n'apparaisse d'un coup qu'une fois TOUTES ses
+// images prêtes.
+//
+// Seuils identiques à la grille CSS ci-dessous (grid-cols-2 sm:3 md:4
+// lg:6) — dupliqués ici volontairement : matchMedia doit interroger
+// exactement les mêmes breakpoints Tailwind pour que le découpage en
+// rangées corresponde à ce qui s'affiche réellement, sinon une rangée
+// pourrait apparaître visuellement incomplète (ex: 6 produits groupés
+// alors que l'écran n'affiche que 4 colonnes).
+function currentColumnCount(): number {
+  if (typeof window === 'undefined') return 6
+  if (window.matchMedia('(min-width: 1024px)').matches) return 6
+  if (window.matchMedia('(min-width: 768px)').matches) return 4
+  if (window.matchMedia('(min-width: 640px)').matches) return 3
+  return 2
+}
+
+// preloadRow — précharge les images d'une rangée de produits (même URL de
+// miniature exacte que celle que LinkProductCard affichera, via
+// getThumbnailUrl — sinon le préchargement téléchargerait une URL
+// différente de celle réellement utilisée, pour rien). Timeout de sécurité
+// PAR IMAGE (pas juste global) : une image cassée ou très lente ne doit
+// jamais bloquer indéfiniment toute la rangée suivante.
+const ROW_IMAGE_TIMEOUT_MS = 2500
+function preloadRow(row: WooProduct[]): Promise<void> {
+  const urls = row.map((p) => getThumbnailUrl(p.image)).filter((u): u is string => !!u)
+  if (urls.length === 0) return Promise.resolve()
+  return Promise.all(
+    urls.map(
+      (url) =>
+        new Promise<void>((resolve) => {
+          if (loadedImagesCache.has(url)) { resolve(); return }
+          const img = new window.Image()
+          const done = () => { loadedImagesCache.add(url); resolve() }
+          img.onload = done
+          img.onerror = done // image cassée : on n'attend pas dessus, LazyImage gère déjà son propre repli
+          img.src = url
+          setTimeout(done, ROW_IMAGE_TIMEOUT_MS)
+        })
+    )
+  ).then(() => undefined)
 }
 
 // Cache module par clé (survit au démontage/remontage du composant tant que
@@ -105,7 +153,20 @@ export function InfiniteProductFeed({ cacheKey = 'home', title, language = 'fr' 
       const res = await fetch(`/api/products?page=${nextPage}&per_page=${PER_PAGE}&lang=${language}`)
       const data = await res.json()
       const newProducts: WooProduct[] = data.products || []
-      setProducts((prev) => [...prev, ...declusterNewBatch(prev.slice(-MAX_CONSECUTIVE), newProducts)])
+      const declustered = declusterNewBatch(products.slice(-MAX_CONSECUTIVE), newProducts)
+
+      // Découpe en rangées (nombre de colonnes réel de l'écran courant) et
+      // affiche rangée par rangée, chacune n'apparaissant qu'une fois ses
+      // images préchargées — voir preloadRow ci-dessus. cols figé au début
+      // du lot (pas re-mesuré à chaque rangée) : un redimensionnement de
+      // fenêtre pendant le chargement ne doit pas faire varier la taille
+      // des rangées DANS un même lot, seulement affecter le lot suivant.
+      const cols = currentColumnCount()
+      for (let i = 0; i < declustered.length; i += cols) {
+        const row = declustered.slice(i, i + cols)
+        await preloadRow(row)
+        setProducts((prev) => [...prev, ...row])
+      }
       setPage(nextPage)
       // Ne pas se fier à data.pages : le cache Cloudflare de /api/products a
       // été observé servir un total/pages erroné (sous-compté) pour certaines
@@ -120,7 +181,10 @@ export function InfiniteProductFeed({ cacheKey = 'home', title, language = 'fr' 
       loadingRef.current = false
       setLoading(false)
     }
-  }, [page, hasMore])
+    // products ajouté aux deps : lu directement (products.slice(...)) pour
+    // le décluster, plus seulement via le setter fonctionnel comme avant —
+    // nécessaire pour éviter une closure périmée sur l'état déjà affiché.
+  }, [page, hasMore, products])
 
   useEffect(() => {
     const el = sentinelRef.current

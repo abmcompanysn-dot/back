@@ -19,7 +19,10 @@ import { useStreamedNavClick } from '@/contexts/StreamedNavClickContext'
 // soit retrouvé dans le state chargé côté client — voir LinkStoreCard.tsx
 // pour le détail de l'incident. "Ajouter au panier" écrit toujours
 // directement dans le panier partagé (lib/cart-store.ts).
-const loadedImagesCache = new Set<string>()
+// Exporté — InfiniteProductFeed.tsx précharge les images d'un lot AVANT de
+// l'afficher (2026-09-05) et alimente ce même cache, pour qu'une carte déjà
+// préchargée n'affiche jamais son skeleton au montage.
+export const loadedImagesCache = new Set<string>()
 
 interface LinkProductCardProps {
   product: WooProduct

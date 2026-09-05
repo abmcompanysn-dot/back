@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { FoodServer } from './FoodServer'
+import { CategorySections } from './CategorySections'
 import { InfiniteProductFeed } from './InfiniteProductFeed'
 
 function SectionSkeleton() {
@@ -39,13 +40,18 @@ export function HomeSections({ lang = 'fr' }: { lang?: 'fr' | 'en' } = {}) {
           (app/promotions/page.tsx). Boutiques sponsorisées supprimé
           (demandé le 2026-08-26 — cette section n'a jamais eu de contenu
           réel, voir SponsoredStoresCarousel.tsx). Rangées "par catégorie"
-          (CategorySections, ajoutées le 2026-08-28) déplacées vers
-          /promotions le 2026-09-04 — le fondateur avait remarqué qu'elles
-          ralentissaient l'accueil (voir aussi le correctif de
-          fetchCategoryRow côté woo-server.ts, categoryId maintenant
-          transmis directement pour éviter 8 requêtes /categories
-          redondantes). Ne reste que l'alimentation et le flux produits
-          infini. */}
+          (CategorySections, ajoutées le 2026-08-28) : déplacées vers
+          /promotions le 2026-09-04 (ralentissaient l'accueil), puis
+          remises sur l'accueil le même soir sur demande du fondateur —
+          gardées EN HAUT cette fois (avant l'alimentation), et gardent
+          aussi présentes sur /promotions (le fondateur n'a pas demandé
+          de les en retirer). Le vrai ralentissement d'origine était le
+          correctif appliqué le même jour : fetchCategoryRow reçoit
+          désormais categoryId directement (woo-server.ts), plus de 8
+          requêtes /categories redondantes. */}
+      <Suspense fallback={<SectionSkeleton />}>
+        <CategorySections lang={lang} />
+      </Suspense>
       <Suspense fallback={<SectionSkeleton />}>
         <FoodServer lang={lang} />
       </Suspense>
