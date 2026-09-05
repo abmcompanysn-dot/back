@@ -1267,7 +1267,7 @@ func (s *server) restockProduct(ctx context.Context, productID int64, qty int) e
 // d'une commande — repli silencieux sur le taux global dans ce cas.
 func (s *server) resolveCommissionRate(ctx context.Context, vendorID int64) float64 {
 	fallback := s.defaultCommissionRate()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendor/%d", s.vendorURL, vendorID), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendors/%d", s.vendorURL, vendorID), nil)
 	if err != nil {
 		return fallback
 	}
@@ -1288,14 +1288,25 @@ func (s *server) resolveCommissionRate(ctx context.Context, vendorID int64) floa
 	return *vendor.CommissionRate
 }
 
-// resolveVendorCountry — GET /vendor/{id} (vendor-svc), lit
+// resolveVendorCountry — GET /vendors/{id} (vendor-svc), lit
 // address.country (vendorToDokanShape). Chaîne vide en repli (jamais
 // d'erreur bloquante) — quoteShippingUSD retombe alors sur l'ancien
 // calcul basé uniquement sur la destination client, comportement
 // identique à avant le correctif du 2026-09-04 si le vendeur n'a pas de
 // pays renseigné ou si vendor-svc est injoignable.
+//
+// BUG CORRIGÉ le 2026-09-05 : écrite avec /vendor/{id} (singulier) au
+// lieu de /vendors/{id} (pluriel, la vraie route enregistrée côté
+// vendor-svc) — chaque appel échouait donc en 404 SILENCIEUSEMENT
+// (repli "" déjà prévu pour vendor-svc injoignable), et le correctif du
+// 2026-09-04 sur la livraison vendeur↔client n'a en réalité JAMAIS
+// fonctionné en production malgré le test manuel qui semblait le
+// confirmer (le test passait vendor_country directement à shipping-svc
+// /quote, contournant cette fonction — jamais testé via une vraie
+// commande créée par order-svc). resolveCommissionRate (existante avant
+// ce soir) avait le même bug, découvert au même moment.
 func (s *server) resolveVendorCountry(ctx context.Context, vendorID int64) string {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendor/%d", s.vendorURL, vendorID), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/vendors/%d", s.vendorURL, vendorID), nil)
 	if err != nil {
 		return ""
 	}
