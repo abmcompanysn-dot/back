@@ -15,8 +15,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'items[] requis' }, { status: 400 })
   }
 
+  // forcedShippingUsd — ajouté le 2026-09-05 pour l'outil admin "Commande
+  // de test" (services/admin-svc/webui TestOrder.tsx). Stocké AVEC le
+  // panier côté serveur (jamais dans l'URL, contrairement à une première
+  // tentative) : MiadMarketClient.tsx retire ?cart=<id> de l'URL dès la
+  // restauration (history.replaceState), donc un paramètre porté par
+  // l'URL n'aurait jamais atteint CheckoutPage. Un vrai client ne passe
+  // jamais ce champ (le panier "partager mon panier" n'envoie que items).
+  const forcedShippingUsd = typeof body?.forcedShippingUsd === 'number' && body.forcedShippingUsd > 0
+    ? body.forcedShippingUsd
+    : undefined
+
   const id = crypto.randomUUID()
-  await catalogCacheSet(`cart-share:${id}`, items)
+  await catalogCacheSet(`cart-share:${id}`, { items, forcedShippingUsd })
 
   return NextResponse.json({ id })
 }
@@ -28,10 +39,16 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'id requis' }, { status: 400 })
   }
 
-  const cached = await catalogCacheGet<unknown[]>(`cart-share:${id}`)
+  const cached = await catalogCacheGet<unknown[] | { items: unknown[]; forcedShippingUsd?: number }>(`cart-share:${id}`)
   if (!cached) {
     return NextResponse.json({ error: 'Panier introuvable ou expiré' }, { status: 404 })
   }
 
-  return NextResponse.json({ items: cached.data })
+  // Repli sur l'ancien format (array direct) — un panier partagé juste
+  // avant ce changement (2026-09-05, nouveau format {items, forcedShippingUsd})
+  // reste lisible jusqu'à son expiration naturelle en KV.
+  if (Array.isArray(cached.data)) {
+    return NextResponse.json({ items: cached.data })
+  }
+  return NextResponse.json({ items: cached.data.items, forcedShippingUsd: cached.data.forcedShippingUsd })
 }

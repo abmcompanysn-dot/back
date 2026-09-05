@@ -1,57 +1,68 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 
 // TestOrder — page "Commande de test" du back-office (2026-09-05),
 // demande explicite du fondateur : tester le VRAI parcours de paiement de
-// bout en bout (jusqu'à un vrai paiement réel s'il le choisit) sans
-// dépendre du catalogue ni du calcul automatique de livraison — l'admin
-// saisit lui-même le nom des articles, leur prix, et le montant de
-// livraison. Choix explicite du fondateur : la commande créée est une
-// commande RÉELLE normale (pas de marquage "test", pas d'exclusion des
-// statistiques) — voir POST /admin/api/test-order (admin-svc,
-// createTestOrder) qui enchaîne création de commande + initiation du
-// paiement, exactement comme le checkout normal du site.
+// bout en bout (jusqu'à un vrai paiement réel) sans dépendre du catalogue
+// ni du calcul automatique de livraison — l'admin saisit lui-même le nom
+// des articles, leur prix (en FCFA — converti en USD automatiquement,
+// comme tout le catalogue), et le montant de livraison.
 //
-// Le client doit déjà EXISTER (résolu par email) — jamais de compte
-// fabriqué à la volée, pour ne jamais polluer la base de vrais clients.
+// Révisé le même jour, deuxième version : au lieu de créer la commande
+// directement depuis le back-office et d'initier le paiement ici,
+// construit un PANIER PARTAGÉ (même mécanisme que "partager mon panier"
+// côté client, /api/cart-share) et redirige vers le vrai checkout du
+// site public (miadmarket.ca/?cart=<id>) — le fondateur choisit ensuite
+// le moyen de paiement exactement comme un vrai client, sur la vraie
+// page de paiement, pas un flux séparé dans le back-office.
+//
+// Le vendor_id saisi est résolu en un vrai objet boutique (GET
+// /admin/api/vendors/{id}) pour construire un WooProduct cohérent —
+// jamais un objet vendeur vide/inventé, qui casserait l'affichage du
+// panier ou la répartition commission côté order-svc.
 
 interface TestLine {
   vendorId: string
   name: string
   quantity: string
-  unitPriceUsd: string
+  unitPriceFcfa: string
 }
 
 function emptyLine(): TestLine {
-  return { vendorId: '', name: '', quantity: '1', unitPriceUsd: '' }
+  return { vendorId: '', name: '', quantity: '1', unitPriceFcfa: '' }
 }
 
-interface Result {
-  order_id: number
-  customer_id: number
-  payment: {
-    redirect_url?: string
-    client_secret?: string
-    payment?: { provider_ref?: string }
-  } | null
+interface VendorInfo {
+  id: string
+  name: string
+  slug: string
+  logo?: string
+  country?: string
+  countryCode?: string
 }
 
 export function TestOrder() {
   const [customerEmail, setCustomerEmail] = useState('')
   const [lines, setLines] = useState<TestLine[]>([emptyLine()])
-  const [forcedShippingUsd, setForcedShippingUsd] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'paydunya' | 'pawapay'>('pawapay')
-
-  // Adresse minimale — suffisante pour que shipping_address soit un JSON
-  // valide côté order-svc (destCountryFrom() n'a besoin que de "country").
-  const [country, setCountry] = useState('SN')
-  const [city, setCity] = useState('Dakar')
-  const [address1, setAddress1] = useState('Adresse de test')
-  const [phone, setPhone] = useState('')
+  const [forcedShippingFcfa, setForcedShippingFcfa] = useState('')
+  const [xofRate, setXofRate] = useState<number | null>(null)
 
   const [submitting, setSubmitting] = useState(false)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
-  const [result, setResult] = useState<Result | null>(null)
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+
+  // Taux XOF (FCFA) — même source que la page Devises (shipping-svc, via
+  // admin-svc). Le catalogue MIAD Market est en USD réel — jamais de
+  // conversion codée en dur ici (voir CLAUDE.md frontend, section "Prix
+  // des produits").
+  useEffect(() => {
+    api.get<{ rates: Array<{ currency: string; rate_per_usd: number }> }>('/admin/api/exchange-rates')
+      .then((data) => {
+        const xof = data.rates?.find((r) => r.currency === 'XOF')
+        if (xof) setXofRate(xof.rate_per_usd)
+      })
+      .catch(() => { /* le formulaire affiche un message si le taux manque au moment de soumettre */ })
+  }, [])
 
   function updateLine(i: number, patch: Partial<TestLine>) {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)))
@@ -63,56 +74,102 @@ export function TestOrder() {
     setLines((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev))
   }
 
+  async function resolveVendor(vendorId: string): Promise<VendorInfo> {
+    const v = await api.get<any>(`/admin/api/vendors/${vendorId}`)
+    return {
+      id: String(v.id ?? vendorId),
+      name: v.store_name || v.name || `Boutique #${vendorId}`,
+      slug: v.slug || '',
+      logo: v.gravatar || v.logo_url || '',
+      country: v.address?.country || v.country || '',
+      countryCode: v.address?.country || v.country || '',
+    }
+  }
+
   async function submit() {
     setMsg(null)
-    setResult(null)
+    setShareUrl(null)
 
     if (!customerEmail.trim()) {
-      setMsg({ kind: 'err', text: 'Email du client obligatoire (le client doit déjà exister sur le site).' })
+      setMsg({ kind: 'err', text: 'Email du client obligatoire (pour info seulement — le panier partagé ne demande pas de connexion, le client se connecte lui-même sur le checkout).' })
+    }
+    if (xofRate === null) {
+      setMsg({ kind: 'err', text: 'Taux FCFA pas encore chargé — réessaie dans un instant.' })
       return
     }
-    const parsedLines = []
+    const parsed: Array<{ vendorId: string; name: string; quantity: number; unitPriceUsd: number }> = []
     for (const l of lines) {
-      const vendorId = parseInt(l.vendorId, 10)
       const quantity = parseInt(l.quantity, 10)
-      const unitPrice = parseFloat(l.unitPriceUsd)
-      if (!vendorId || !l.name.trim() || !(quantity >= 1) || !(unitPrice > 0)) {
-        setMsg({ kind: 'err', text: 'Chaque ligne doit avoir : boutique (ID), nom, quantité ≥ 1, prix > 0.' })
+      const priceFcfa = parseFloat(l.unitPriceFcfa)
+      if (!l.vendorId.trim() || !l.name.trim() || !(quantity >= 1) || !(priceFcfa > 0)) {
+        setMsg({ kind: 'err', text: 'Chaque ligne doit avoir : boutique (ID), nom, quantité ≥ 1, prix en FCFA > 0.' })
         return
       }
-      parsedLines.push({
-        vendor_id: vendorId,
-        product_id: 0,
-        name: l.name.trim(),
-        quantity,
-        unit_price_usd: unitPrice,
-      })
+      parsed.push({ vendorId: l.vendorId.trim(), name: l.name.trim(), quantity, unitPriceUsd: priceFcfa / xofRate })
     }
-    // Toutes les lignes doivent porter le même vendor_id — le montant de
-    // livraison forcé ne s'applique qu'à la 1ère sous-commande créée côté
-    // order-svc (voir son commentaire) : avec plusieurs boutiques dans un
-    // même test, seule une recevrait le montant forcé, ce qui prêterait à
-    // confusion. Gardé simple : un vendeur à la fois pour cet outil.
-    const distinctVendors = new Set(parsedLines.map((l) => l.vendor_id))
+    const distinctVendors = new Set(parsed.map((l) => l.vendorId))
     if (distinctVendors.size > 1) {
-      setMsg({ kind: 'err', text: 'Une seule boutique à la fois pour ce test (le montant de livraison forcé ne s’applique qu’à une commande).' })
+      setMsg({ kind: 'err', text: 'Une seule boutique à la fois pour ce test (simplifie la répartition par commission).' })
       return
     }
 
     setSubmitting(true)
     try {
-      const data = await api.post<Result>('/admin/api/test-order', {
-        customer_email: customerEmail.trim(),
-        lines: parsedLines,
-        shipping_address: { country, city, address_1: address1, phone },
-        billing_address: { country, city, address_1: address1, phone },
-        forced_shipping_usd: forcedShippingUsd ? parseFloat(forcedShippingUsd) : 0,
-        payment_method: paymentMethod,
+      const vendor = await resolveVendor(parsed[0].vendorId)
+
+      // Format WooProduct minimal mais cohérent (voir toCartProduct côté
+      // frontend public) — un "produit" fictif par ligne, id négatif pour
+      // ne jamais collisionner avec un vrai product_id du catalogue.
+      const items = parsed.map((l, i) => ({
+        product: {
+          id: -1000 - i, // jamais un vrai produit du catalogue
+          name: l.name,
+          slug: `test-${Date.now()}-${i}`,
+          price: Math.round(l.unitPriceUsd * 100) / 100,
+          regularPrice: Math.round(l.unitPriceUsd * 100) / 100,
+          currency: '$',
+          type: 'simple',
+          image: '',
+          category: '',
+          categories: [],
+          categorySlug: '',
+          vendor: { id: vendor.id, name: vendor.name, slug: vendor.slug, logo: vendor.logo, country: vendor.country, countryCode: vendor.countryCode },
+          country: vendor.country,
+          countryCode: vendor.countryCode,
+          stock: 999,
+          inStock: true,
+          description: '',
+          lang: 'fr',
+        },
+        quantity: l.quantity,
+      }))
+
+      // forcedShippingUsd transmis DANS le panier partagé (pas par l'URL) —
+      // MiadMarketClient.tsx retire ?cart=<id> de l'URL dès la
+      // restauration, un paramètre porté par l'URL n'atteindrait jamais
+      // CheckoutPage.
+      const forcedShippingUsd = forcedShippingFcfa ? parseFloat(forcedShippingFcfa) / xofRate : 0
+
+      // /api/cart-share vit sur le site public (Next.js), pas sur ce
+      // back-office (admin-svc, autre origine) — appelé en absolu.
+      const shareRes = await fetch('https://miadmarket.ca/api/cart-share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items, forcedShippingUsd: forcedShippingUsd > 0 ? forcedShippingUsd : undefined }),
       })
-      setResult(data)
-      setMsg({ kind: 'ok', text: `Commande #${data.order_id} créée et paiement initié.` })
+      if (!shareRes.ok) throw new Error('Échec de la création du panier partagé')
+      const { id } = await shareRes.json()
+
+      // v=checkout n'existe pas comme vue accessible directement par URL
+      // (voir app/page.tsx — seuls product/vendor/category le sont) : le
+      // lien restaure le panier sur l'accueil (comme "partager mon panier"
+      // pour un vrai client), puis il suffit de cliquer sur le panier pour
+      // aller au checkout.
+      const url = `https://miadmarket.ca/?cart=${id}`
+      setShareUrl(url)
+      setMsg({ kind: 'ok', text: 'Panier de test créé — ouvre le lien, le panier se restaure automatiquement, puis clique sur le panier pour aller au vrai checkout.' })
     } catch (e) {
-      setMsg({ kind: 'err', text: e instanceof ApiError ? e.message : 'Échec de la création' })
+      setMsg({ kind: 'err', text: e instanceof ApiError ? e.message : (e instanceof Error ? e.message : 'Échec de la création') })
     } finally {
       setSubmitting(false)
     }
@@ -124,11 +181,10 @@ export function TestOrder() {
         <div>
           <h2>Commande de test</h2>
           <p className="subtitle">
-            Crée une VRAIE commande (comme un vrai achat sur le site) pour un client déjà
-            existant, avec des articles et un montant de livraison que tu saisis toi-même —
-            utile pour tester le parcours de paiement de bout en bout sans dépendre du
-            catalogue. Le paiement se termine ensuite normalement (redirection, ou le client
-            reçoit le lien).
+            Prépare un panier avec des articles et un prix que tu choisis toi-même (en FCFA),
+            puis ouvre un lien qui t'amène directement sur le VRAI checkout du site — tu y
+            choisis le moyen de paiement et tu payes comme un vrai client. Utile pour tester le
+            parcours de bout en bout sans dépendre du catalogue.
           </p>
         </div>
       </div>
@@ -141,17 +197,21 @@ export function TestOrder() {
 
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div>
-          <h3 style={{ marginBottom: 8 }}>Client</h3>
+          <h3 style={{ marginBottom: 8 }}>Client (informatif)</h3>
           <input
-            placeholder="Email du client (doit déjà avoir un compte)"
+            placeholder="Email du client (pour t'y retrouver — pas transmis au panier)"
             style={{ width: 340 }}
             value={customerEmail}
             onChange={(e) => setCustomerEmail(e.target.value)}
           />
+          <p className="subtitle" style={{ fontSize: 12, marginTop: 4 }}>
+            Le lien ci-dessous mène au checkout public : la personne qui l'ouvre se connecte
+            (ou crée un compte) elle-même, comme n'importe quel client.
+          </p>
         </div>
 
         <div>
-          <h3 style={{ marginBottom: 8 }}>Articles</h3>
+          <h3 style={{ marginBottom: 8 }}>Articles (prix en FCFA)</h3>
           {lines.map((l, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
               <input
@@ -173,11 +233,16 @@ export function TestOrder() {
                 onChange={(e) => updateLine(i, { quantity: e.target.value })}
               />
               <input
-                type="number" step="0.01" min="0" placeholder="Prix (USD)"
-                style={{ width: 120 }}
-                value={l.unitPriceUsd}
-                onChange={(e) => updateLine(i, { unitPriceUsd: e.target.value })}
+                type="number" step="1" min="0" placeholder="Prix (FCFA)"
+                style={{ width: 140 }}
+                value={l.unitPriceFcfa}
+                onChange={(e) => updateLine(i, { unitPriceFcfa: e.target.value })}
               />
+              {xofRate && l.unitPriceFcfa && (
+                <span className="subtitle" style={{ fontSize: 12 }}>
+                  ≈ {(parseFloat(l.unitPriceFcfa) / xofRate).toFixed(2)} $
+                </span>
+              )}
               <button className="btn btn-sm" onClick={() => removeLine(i)} disabled={lines.length === 1}>
                 Retirer
               </button>
@@ -188,53 +253,33 @@ export function TestOrder() {
 
         <div>
           <h3 style={{ marginBottom: 8 }}>Livraison</h3>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-            <input placeholder="Pays (ex. SN)" style={{ width: 100 }} value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} maxLength={2} />
-            <input placeholder="Ville" style={{ width: 140 }} value={city} onChange={(e) => setCity(e.target.value)} />
-            <input placeholder="Adresse" style={{ width: 220 }} value={address1} onChange={(e) => setAddress1(e.target.value)} />
-            <input placeholder="Téléphone (mobile money)" style={{ width: 180 }} value={phone} onChange={(e) => setPhone(e.target.value)} />
-          </div>
           <input
-            type="number" step="0.01" min="0"
-            placeholder="Montant de livraison forcé (USD) — laisser vide pour 0"
-            style={{ width: 320 }}
-            value={forcedShippingUsd}
-            onChange={(e) => setForcedShippingUsd(e.target.value)}
+            type="number" step="1" min="0"
+            placeholder="Montant de livraison forcé (FCFA) — laisser vide pour le calcul normal"
+            style={{ width: 380 }}
+            value={forcedShippingFcfa}
+            onChange={(e) => setForcedShippingFcfa(e.target.value)}
           />
+          {xofRate && forcedShippingFcfa && (
+            <p className="subtitle" style={{ fontSize: 12, marginTop: 4 }}>
+              ≈ {(parseFloat(forcedShippingFcfa) / xofRate).toFixed(2)} $
+            </p>
+          )}
         </div>
 
         <div>
-          <h3 style={{ marginBottom: 8 }}>Paiement</h3>
-          <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as typeof paymentMethod)} style={{ width: 200 }}>
-            <option value="pawapay">Mobile Money (PawaPay)</option>
-            <option value="paydunya">Mobile Money (PayDunya)</option>
-            <option value="stripe">Carte bancaire (Stripe)</option>
-          </select>
-        </div>
-
-        <div>
-          <button className="btn btn-primary" onClick={submit} disabled={submitting}>
-            {submitting ? 'Création…' : 'Créer la commande et lancer le paiement'}
+          <button className="btn btn-primary" onClick={submit} disabled={submitting || xofRate === null}>
+            {submitting ? 'Préparation…' : 'Créer le panier de test'}
           </button>
+          {xofRate === null && <p className="subtitle" style={{ fontSize: 12 }}>Chargement du taux FCFA…</p>}
         </div>
 
-        {result && (
+        {shareUrl && (
           <div style={{ paddingTop: 12, borderTop: '1px solid var(--border, #e5e7eb)' }}>
-            <p><strong>Commande créée : #{result.order_id}</strong> (client #{result.customer_id})</p>
-            {result.payment?.redirect_url && (
-              <p>
-                Lien de paiement :{' '}
-                <a href={result.payment.redirect_url} target="_blank" rel="noreferrer">
-                  {result.payment.redirect_url}
-                </a>
-              </p>
-            )}
-            {result.payment?.client_secret && (
-              <p className="subtitle">Paiement Stripe initié (client_secret reçu) — à finaliser côté client.</p>
-            )}
-            {!result.payment?.redirect_url && !result.payment?.client_secret && (
-              <p className="subtitle">Paiement initié — voir la commande dans Commandes pour son statut.</p>
-            )}
+            <p><strong>Lien vers le vrai checkout :</strong></p>
+            <p>
+              <a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a>
+            </p>
           </div>
         )}
       </div>

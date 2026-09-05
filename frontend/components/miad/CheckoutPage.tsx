@@ -38,6 +38,13 @@ interface CheckoutPageProps {
   // comportements différents pour le même cas) ont été supprimés le
   // 2026-07-30 pour ne garder qu'un seul flux, cohérent partout sur le site.
   onSessionExpired: () => void
+  // forcedShippingUSD — ajouté le 2026-09-05 pour l'outil admin "Commande
+  // de test" (services/admin-svc/webui TestOrder.tsx), transmis via le
+  // paramètre d'URL forced_shipping_usd (voir MiadMarketClient.tsx).
+  // Remplace le calcul normal de shippingTotal quand fourni (>0) — jamais
+  // rempli pour un vrai client, ce paramètre n'existe dans aucun lien
+  // public du site.
+  forcedShippingUSD?: number
 }
 
 // Utilisation de la clé PUBLIQUE (commence par pk_)
@@ -50,7 +57,7 @@ const pageVariants = {
   exit: { x: '-20%', opacity: 0 },
 };
 
-export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, shippingRates, userCountryCode = 'sn', stripeConfirmedOrderId, onSessionExpired }: CheckoutPageProps) {
+export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, shippingRates, userCountryCode = 'sn', stripeConfirmedOrderId, onSessionExpired, forcedShippingUSD }: CheckoutPageProps) {
   const t = (translations[language] || translations['fr']) as any
   const { formatPrice: fp } = useCurrency()
   const shippingRatesConfig = useShippingRates()
@@ -309,8 +316,10 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
   // vendeur du panier, il remplace le système international par zone
   // (MIAD Standard/Express) qui n'a pas de sens pour une livraison locale.
   const shippingTotal = useMemo(() =>
-    isFreeShipping ? 0 : (domesticReady ? domesticShippingTotal : calculateShippingForMethod(shippingMethod)),
-  [calculateShippingForMethod, shippingMethod, isFreeShipping, domesticReady, domesticShippingTotal]);
+    forcedShippingUSD !== undefined
+      ? forcedShippingUSD // outil admin "Commande de test" — voir doc-comment de la prop
+      : (isFreeShipping ? 0 : (domesticReady ? domesticShippingTotal : calculateShippingForMethod(shippingMethod))),
+  [forcedShippingUSD, calculateShippingForMethod, shippingMethod, isFreeShipping, domesticReady, domesticShippingTotal]);
 
   const [couponInput,   setCouponInput]   = useState('')
   const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; discount: number; message: string } | null>(null)
@@ -445,6 +454,12 @@ export function CheckoutPage({ language = 'fr', cart, onBack, onOrderComplete, s
           payment_method: resolvedMethod,
           amount: total,
           shipping_total: shippingTotal,
+          // forced_shipping_usd — transmis tel quel jusqu'à order-svc (voir
+          // POST /api/orders) uniquement si l'outil admin "Commande de
+          // test" l'a fourni via l'URL — sinon absent, comportement
+          // inchangé pour un vrai client (order-svc recalcule lui-même via
+          // quoteShippingUSD).
+          forced_shipping_usd: forcedShippingUSD,
           shipping_method_id: domesticReady ? 'miad_domestic' : (shippingMethod === 'express' ? 'miad_express' : 'miad_standard'),
           savePaymentMethod: paymentMethod === 'stripe' && selectedPaymentMethodId === 'new' ? saveNewCard : false,
           paymentMethodId: paymentMethod === 'stripe' && selectedPaymentMethodId !== 'new' ? selectedPaymentMethodId : undefined,

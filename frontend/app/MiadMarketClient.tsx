@@ -368,6 +368,13 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   // sinon slug de catégorie → bannière + grille dédiées (voir HomeCategoryTabSection).
   const [homeTab, setHomeTab] = useState<string>('explore')
   const [cart, setCart] = useState<CartItem[]>([])
+  // forcedShippingUSD — ajouté le 2026-09-05 pour l'outil admin "Commande
+  // de test" (services/admin-svc/webui TestOrder.tsx). Rempli UNIQUEMENT
+  // par la restauration d'un panier partagé ci-dessous (jamais par l'URL :
+  // ?cart=<id> est retiré de l'URL dès la restauration, voir plus bas —
+  // un paramètre porté par l'URL n'atteindrait jamais CheckoutPage). Un
+  // vrai client (panier "partager mon panier") ne le fournit jamais.
+  const [forcedShippingUSD, setForcedShippingUSD] = useState<number | undefined>(undefined)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [userName, setUserName] = useState('')
@@ -720,6 +727,9 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       .then(data => {
         if (data?.items?.length) {
           setCart(data.items)
+          if (typeof data.forcedShippingUsd === 'number' && data.forcedShippingUsd > 0) {
+            setForcedShippingUSD(data.forcedShippingUsd)
+          }
           toast.success('Panier restauré')
         } else {
           toast.error('Ce lien de panier est introuvable ou a expiré')
@@ -2078,6 +2088,10 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
             userCountryCode={selectedCountryCode}
             stripeConfirmedOrderId={stripeConfirmedOrderId ?? undefined}
             onSessionExpired={() => handleLogout(true)}
+            // forcedShippingUSD — rempli uniquement par la restauration d'un
+            // panier partagé créé par l'outil admin "Commande de test" (voir
+            // useState ci-dessus) — jamais par l'URL.
+            forcedShippingUSD={forcedShippingUSD}
           />
         );
 
