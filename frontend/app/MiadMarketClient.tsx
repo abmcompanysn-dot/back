@@ -1037,9 +1037,19 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       // entree d'historique, sinon le retour arriere recharge toute la page.
       router.push(p.slug ? `/?v=product&slug=${p.slug}` : (window.location.pathname + window.location.search), { scroll: false })
       setSelectedProduct(p)
+      // searchQuery déjà capturé dans le snapshot ci-dessus (React batch
+      // les mises à jour d'état) — on peut le vider sans risque pour la
+      // restauration au retour arrière (voir popstate, qui relit
+      // snapshot.searchQuery, pas l'état courant). Bug corrigé le
+      // 2026-09-05 (vidéo du fondateur) : cliquer un résultat de
+      // recherche puis naviguer laissait l'ancien texte tapé affiché
+      // dans la barre de recherche indéfiniment, même sur une fiche
+      // produit ou une autre recherche sans rapport.
+      setSearchQuery('')
       window.scrollTo(0, 0)
     } else {
       setSelectedProduct(p)
+      setSearchQuery('')
       navigateTo('product', true, p.slug ? `/?v=product&slug=${p.slug}` : undefined)
     }
   }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, categoryFilters, router])
@@ -1067,10 +1077,13 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
       router.push(vendorUrl || (window.location.pathname + window.location.search), { scroll: false })
       setSelectedVendor(v)
       setVendorKey(k => k + 1)
+      // Même correctif que handleProductClick (voir son commentaire).
+      setSearchQuery('')
       window.scrollTo(0, 0)
     } else {
       setSelectedVendor(v)
       setVendorKey(k => k + 1)
+      setSearchQuery('')
       navigateTo('store', true, vendorUrl)
     }
   }, [navigateTo, currentView, selectedProduct, selectedVendor, selectedCategory, activeCountry, homeTab, searchQuery, categoryFilters, router])
@@ -1506,8 +1519,15 @@ export default function MiadMarketClient({ initialProducts, initialCategories, i
   }, [searchParams, allProducts, stores, selectedProduct, selectedVendor, activeCountry, currentView, language, router])
 
   // Récupération des résultats de recherche via l'API
+  //
+  // BUG CORRIGÉ le 2026-09-05 (vidéo du fondateur) : searchQuery n'était
+  // jamais encodé avant d'être injecté dans l'URL. Une recherche avec un
+  // espace (ex. "Sac Bogolan Bleu Jean") cassait le parsing de la query
+  // string côté serveur — seul un fragment du texte atterrissait
+  // réellement dans `search=`, d'où "RÉSULTATS POUR 'JES'" affiché pour
+  // une recherche tapée entièrement différente.
   const { data: searchResultsData, isLoading: searchLoading } = useSWR(
-    currentView === 'search' && searchQuery ? `/api/products?search=${searchQuery}&lang=${language}` : null,
+    currentView === 'search' && searchQuery ? `/api/products?search=${encodeURIComponent(searchQuery)}&lang=${language}` : null,
     publicFetcher,
     { ...swrOptions }
   )
