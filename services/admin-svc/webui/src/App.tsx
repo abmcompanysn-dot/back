@@ -9,6 +9,7 @@ import { CustomerDetail } from './pages/users/CustomerDetail'
 import { AdminRoles } from './pages/users/AdminRoles'
 import { Shipping } from './pages/Shipping'
 import { Currencies } from './pages/Currencies'
+import { TestOrder } from './pages/TestOrder'
 import { ClientErrors } from './pages/ClientErrors'
 import { Marketing } from './pages/Marketing'
 import { EmailTemplates } from './pages/EmailTemplates'
@@ -107,6 +108,7 @@ function AppRoutes() {
         <Route path="finance/gateways" element={<Gateways />} />
         <Route path="shipping" element={<Shipping />} />
         <Route path="currencies" element={<Currencies />} />
+        <Route path="test-order" element={<TestOrder />} />
         <Route path="client-errors" element={<ClientErrors />} />
         <Route path="marketing" element={<Marketing />} />
         <Route path="email-templates" element={<EmailTemplates />} />

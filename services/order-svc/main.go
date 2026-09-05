@@ -271,6 +271,15 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 		BillingAddress  json.RawMessage `json:"billing_address"`
 		CouponCode      string          `json:"coupon_code"`
 		PaymentMethod   string          `json:"payment_method"`
+		// ForcedShippingUSD — ajouté le 2026-09-05, demande du fondateur :
+		// outil admin de commande de test (voir services/admin-svc
+		// createTestOrder) pour tester un vrai paiement de bout en bout
+		// sans dépendre du calcul automatique de livraison. Optionnel,
+		// jamais exposé au checkout normal du site — remplace
+		// quoteShippingUSD si fourni (>0). S'applique seulement à la
+		// PREMIÈRE sous-commande créée si le panier a plusieurs vendeurs
+		// (un test doit rester simple : un seul vendeur à la fois).
+		ForcedShippingUSD float64 `json:"forced_shipping_usd,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		kit.Fail(w, 400, "invalid_body", err.Error())
@@ -343,6 +352,14 @@ func (s *server) createOrder(w http.ResponseWriter, r *http.Request) {
 			commissionTotal += lines[i].CommissionUSD
 		}
 		shippingUSD := s.quoteShippingUSD(ctx, destCountry, vendorCountry, itemCount)
+		// Override test admin (voir doc-comment de ForcedShippingUSD) —
+		// uniquement sur la 1ère sous-commande (seq==1) : la map byVendor
+		// n'a pas d'ordre garanti en Go, mais seq est incrémenté après
+		// chaque insertion donc toujours fiable pour cibler "la première
+		// commande créée" indépendamment de l'ordre d'itération.
+		if body.ForcedShippingUSD > 0 && seq == 1 {
+			shippingUSD = body.ForcedShippingUSD
+		}
 		total := subtotal + shippingUSD
 
 		linesJSON, _ := json.Marshal(lines)

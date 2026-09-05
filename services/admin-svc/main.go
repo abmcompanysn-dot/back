@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -598,6 +599,7 @@ func main() {
 		mux.HandleFunc("GET /admin/api/security/blocks", s.requireAdmin(s.securityBlocks))
 		mux.HandleFunc("POST /admin/api/security/unblock", s.requireAdmin(s.securityUnblock))
 		mux.HandleFunc("POST /admin/api/security/block", s.requireAdmin(s.securityBlockManual))
+		mux.HandleFunc("POST /admin/api/test-order", s.requireAdmin(s.createTestOrder))
 		// Endpoints internes (secret partagé) : les guards des AUTRES
 		// services y poussent leurs événements / blocages et y lisent la
 		// liste noire partagée. Jamais exposés via Caddy (/internal/* n'est
@@ -1766,6 +1768,120 @@ func (s *server) verifyAdminTOTP(r *http.Request, code string) error {
 		return fmt.Errorf("code incorrect")
 	}
 	return nil
+}
+
+// createTestOrder — POST /admin/api/test-order. Ajouté le 2026-09-05,
+// demande explicite du fondateur : pouvoir tester le VRAI parcours de
+// paiement de bout en bout (jusqu'à un vrai paiement réel s'il le
+// choisit) sans dépendre du catalogue ni du calcul automatique de
+// livraison — l'admin saisit lui-même le nom des articles, leur prix, et
+// le montant de livraison. Reproduit exactement la séquence du checkout
+// normal (POST order-svc /orders puis POST payment-svc /payments/init,
+// voir frontend/app/api/orders/route.ts) : la commande créée est une
+// commande réelle comme n'importe quelle autre (choix explicite du
+// fondateur — pas de marquage "test", pas d'exclusion des statistiques).
+//
+// Le client DOIT déjà exister (résolu par email via auth-svc
+// /customer-by-email) — jamais de compte fabriqué à la volée, pour ne
+// jamais polluer la base de vrais clients.
+func (s *server) createTestOrder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CustomerEmail     string          `json:"customer_email"`
+		Lines             []map[string]any `json:"lines"` // {vendor_id, name, quantity, unit_price_usd}
+		ShippingAddress   json.RawMessage `json:"shipping_address"`
+		BillingAddress    json.RawMessage `json:"billing_address"`
+		ForcedShippingUSD float64         `json:"forced_shipping_usd"`
+		PaymentMethod     string          `json:"payment_method"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		kit.Fail(w, 400, "invalid_body", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.CustomerEmail) == "" || len(body.Lines) == 0 || body.PaymentMethod == "" {
+		kit.Fail(w, 400, "missing_fields", "customer_email, lines et payment_method sont obligatoires")
+		return
+	}
+
+	// 1. Résout le client existant par email (auth-svc).
+	custReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet,
+		s.authURL+"/customer-by-email?email="+url.QueryEscape(body.CustomerEmail), nil)
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		custReq.Header.Set("Authorization", auth)
+	}
+	custResp, err := http.DefaultClient.Do(custReq)
+	if err != nil {
+		kit.Fail(w, 502, "auth_svc_unreachable", "auth-svc injoignable")
+		return
+	}
+	defer custResp.Body.Close()
+	if custResp.StatusCode != http.StatusOK {
+		kit.Fail(w, 404, "customer_not_found", fmt.Sprintf("aucun client existant avec l'email %q", body.CustomerEmail))
+		return
+	}
+	var customer struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(custResp.Body).Decode(&customer); err != nil || customer.ID == 0 {
+		kit.Fail(w, 502, "auth_svc_bad_response", "réponse auth-svc invalide")
+		return
+	}
+
+	// 2. Crée la commande (order-svc), avec le montant de livraison forcé.
+	orderPayload, _ := json.Marshal(map[string]any{
+		"customer_id":         customer.ID,
+		"lines":               body.Lines,
+		"shipping_address":    body.ShippingAddress,
+		"billing_address":     body.BillingAddress,
+		"payment_method":      body.PaymentMethod,
+		"forced_shipping_usd": body.ForcedShippingUSD,
+	})
+	orderReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, s.orderURL+"/orders", bytes.NewReader(orderPayload))
+	orderReq.Header.Set("Content-Type", "application/json")
+	orderResp, err := http.DefaultClient.Do(orderReq)
+	if err != nil {
+		kit.Fail(w, 502, "order_svc_unreachable", "order-svc injoignable")
+		return
+	}
+	defer orderResp.Body.Close()
+	orderRaw, _ := io.ReadAll(io.LimitReader(orderResp.Body, 1<<20))
+	if orderResp.StatusCode >= 300 {
+		kit.Fail(w, orderResp.StatusCode, "order_creation_failed", string(orderRaw))
+		return
+	}
+	var order struct {
+		ParentOrderID int64 `json:"parent_order_id"`
+	}
+	if err := json.Unmarshal(orderRaw, &order); err != nil || order.ParentOrderID == 0 {
+		kit.Fail(w, 502, "order_svc_bad_response", "réponse order-svc invalide: "+string(orderRaw))
+		return
+	}
+
+	// 3. Initie le paiement (payment-svc) — même appel que le checkout
+	// normal (frontend/app/api/orders/route.ts). Le client termine ensuite
+	// le paiement lui-même (redirect_url / client_secret / polling
+	// mobile money), exactement comme un vrai achat sur le site.
+	initPayload, _ := json.Marshal(map[string]any{"order_id": order.ParentOrderID})
+	initReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, s.paymentURL+"/payments/init", bytes.NewReader(initPayload))
+	initReq.Header.Set("Content-Type", "application/json")
+	initResp, err := http.DefaultClient.Do(initReq)
+	if err != nil {
+		kit.Fail(w, 502, "payment_svc_unreachable", "commande créée (id "+strconv.FormatInt(order.ParentOrderID, 10)+") mais payment-svc injoignable pour l'initier")
+		return
+	}
+	defer initResp.Body.Close()
+	initRaw, _ := io.ReadAll(io.LimitReader(initResp.Body, 1<<20))
+	if initResp.StatusCode >= 300 {
+		kit.Fail(w, initResp.StatusCode, "payment_init_failed", "commande créée (id "+strconv.FormatInt(order.ParentOrderID, 10)+") mais échec init paiement: "+string(initRaw))
+		return
+	}
+	var payment map[string]any
+	_ = json.Unmarshal(initRaw, &payment)
+
+	kit.JSON(w, 200, map[string]any{
+		"order_id": order.ParentOrderID,
+		"customer_id": customer.ID,
+		"payment":  payment,
+	})
 }
 
 // securityBlockManual — POST /admin/api/security/block {ip, minutes, reason}.

@@ -245,6 +245,7 @@ func main() {
 		mux.HandleFunc("POST /auth/admin/2fa/verify", s.verify2FASetup)
 		mux.HandleFunc("POST /auth/admin/2fa/disable", s.disable2FA)
 		mux.HandleFunc("POST /auth/admin/2fa/reverify", s.reverify2FA)
+		mux.HandleFunc("GET /customer-by-email", s.customerByEmail)                      // role admin exigé
 		mux.HandleFunc("GET /customers", s.listCustomers)                                // role admin exigé
 		mux.HandleFunc("GET /customer/{id}", s.getCustomer)                              // role admin exigé
 		mux.HandleFunc("PATCH /customer/{id}/address", s.updateCustomerAddress)          // secret interne exigé
@@ -1265,6 +1266,32 @@ func (s *server) resetPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 /* ---------- Clients ---------- */
+
+// customerByEmail — GET /customer-by-email?email=... Ajouté le 2026-09-05
+// pour l'outil admin "commande de test" (services/admin-svc
+// createTestOrder) : l'admin choisit un client EXISTANT par son email
+// plutôt que d'en fabriquer un nouveau, pour tester le vrai parcours de
+// paiement de bout en bout sans polluer la base de clients.
+func (s *server) customerByEmail(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireRole(r, "admin"); err != nil {
+		kit.Fail(w, 403, "admin_required", err.Error())
+		return
+	}
+	email := strings.TrimSpace(r.URL.Query().Get("email"))
+	if email == "" {
+		kit.Fail(w, 400, "missing_email", "paramètre email obligatoire")
+		return
+	}
+	var id int64
+	var phone, preferredLang string
+	if err := s.db.QueryRow(r.Context(),
+		"SELECT id, phone, preferred_lang FROM customers WHERE lower(email) = lower($1)", email,
+	).Scan(&id, &phone, &preferredLang); err != nil {
+		kit.Fail(w, 404, "customer_not_found", fmt.Sprintf("aucun client avec l'email %q", email))
+		return
+	}
+	kit.JSON(w, 200, map[string]any{"id": id, "email": email, "phone": phone, "preferred_lang": preferredLang})
+}
 
 // listCustomers — exigé par la console admin (JWT role=admin).
 func (s *server) listCustomers(w http.ResponseWriter, r *http.Request) {
